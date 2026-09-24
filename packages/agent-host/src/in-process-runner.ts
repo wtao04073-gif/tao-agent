@@ -85,6 +85,17 @@ class InProcessRunner implements Runner {
 	private readonly steps = new StepCounter();
 	private readonly translatorContext: TranslatorContext;
 	private closed = false;
+	/**
+	 * 最近一次运行的失败原因。
+	 *
+	 * 内核把生成阶段的失败（模型不可用、`activeToolNames` 里有未注册的工具、
+	 * provider 报错）通过 `run_end{status:"failed"}` 事件上报，**而不是**
+	 * 让 `lane.prompt()` 抛异常 —— prompt 正常 resolve。
+	 *
+	 * 不接这个事件的后果极其隐蔽：任务被报成成功，但模型一次都没被调用、
+	 * 没有任何产出。用户看到「已完成」却拿不到文件，而日志里一切正常。
+	 */
+	private runFailure: string | undefined;
 
 	readonly sessionId: string;
 	private readonly session: Session;
@@ -145,9 +156,18 @@ class InProcessRunner implements Runner {
 		);
 	}
 
+	/** 记录内核上报的运行失败。由工厂接线 `run_end` 事件时调用。 */
+	noteRunFailure(reason: string): void {
+		this.runFailure = reason;
+	}
+
 	async prompt(text: string): Promise<void> {
 		this.assertOpen();
+		this.runFailure = undefined;
 		await this.lane.prompt(text, [], BACKGROUND_CONTEXT);
+		// 内核不会因生成失败而让 prompt reject，所以这里必须显式检查。
+		// 抛出去让编排层把任务转入 FAILED —— 静默成功比报错难查得多。
+		if (this.runFailure !== undefined) throw new Error(this.runFailure);
 	}
 
 	async steer(text: string): Promise<void> {
@@ -250,6 +270,29 @@ export class InProcessRunnerFactory implements RunnerFactory {
 	async createRunner(spec: RunnerSpec): Promise<Runner> {
 		const now = this.runtime.now ?? (() => Date.now());
 
+		/**
+		 * activeTools 必须是已注册工具的子集。
+		 *
+		 * 内核对此的处理是**整个运行失败**（`configured_tools_unavailable`），
+		 * 而不是忽略未知名字。在这里提前报错，错误信息能指出是哪个工具名不对；
+		 * 放到内核里报，只能拿到一次「任务失败」且模型一次未被调用。
+		 *
+		 * 调用方若要容忍「场景卡声明了尚未实现的工具」，应先用
+		 * `activateableTools()` 取交集，而不是指望这里宽容处理 ——
+		 * 静默丢弃工具名会让「场景卡写错工具名」变成查不出的能力缺失。
+		 */
+		if (spec.activeTools !== undefined) {
+			const registered = new Set(spec.tools.map((t) => t.name));
+			const missing = [...spec.activeTools].filter((name) => !registered.has(name));
+			if (missing.length > 0) {
+				throw new Error(
+					`activeTools 含未注册的工具：${missing.join("、")}。` +
+						`已注册：${[...registered].join("、")}。` +
+						`若场景卡声明了尚未实现的工具，请先用 activateableTools() 取交集。`,
+				);
+			}
+		}
+
 		// 一人一 Session：每个 Runner 独占一个会话存储
 		const session = await this.runtime.createSession(spec.sessionId);
 
@@ -295,6 +338,24 @@ export class InProcessRunnerFactory implements RunnerFactory {
 				void runner.ingest(event);
 			}) as never);
 		}
+
+		/**
+		 * 接生成失败。
+		 *
+		 * 这条接线是必需的而非可选的：内核的生成失败（模型不可用、
+		 * activeToolNames 含未注册工具、provider 错误）只通过
+		 * `run_end{status:"failed"}` 上报，`lane.prompt()` 会正常 resolve。
+		 * 不接就会把「模型一次都没调用、零产出」报成任务成功。
+		 */
+		harness.events.on("run_end", ((event: {
+			status: "completed" | "aborted" | "failed";
+			error?: { code?: string; message?: string; data?: unknown };
+		}) => {
+			if (event.status !== "failed") return;
+			const code = event.error?.code ?? "unknown";
+			const detail = event.error?.message ?? JSON.stringify(event.error?.data ?? {});
+			runner.noteRunFailure(`内核运行失败（${code}）：${detail}`);
+		}) as never);
 
 		installGate(harness as never, spec.gate, runner, spec);
 

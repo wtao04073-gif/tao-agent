@@ -127,3 +127,22 @@ export function createPermissionGate(config: GateConfig): PermissionGate {
 		return audit({ kind: "allow" });
 	};
 }
+
+/**
+ * 按场景卡的工具白名单收窄权限策略。
+ *
+ * 场景卡的 `tools` 是**模型侧**的白名单（通过 `activeToolNames` 让工具不可见）。
+ * 但模型侧不可见不等于执行侧不可达 —— 上下文污染、越狱提示或内核缺陷都可能
+ * 让模型调用一个「看不见」的工具。所以执行侧也要按同一份白名单收窄。
+ *
+ * 这里刻意用**过滤策略表**而非在门内加一个 `allowTool` 回调：
+ * 不在策略表里的工具会走已有的默认拒绝分支，不引入第二条判断路径 ——
+ * 权限逻辑每多一个分支就多一处可能写错的地方。
+ */
+export function restrictPolicies(
+	policies: readonly ToolPolicy[],
+	allowedTools: readonly string[],
+): ToolPolicy[] {
+	const allowed = new Set(allowedTools);
+	return policies.filter((p) => allowed.has(p.tool));
+}

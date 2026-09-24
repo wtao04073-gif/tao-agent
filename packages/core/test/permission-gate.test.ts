@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { type AuditEntry, createPermissionGate } from "../src/permission-gate.ts";
+import { type AuditEntry, createPermissionGate, restrictPolicies } from "../src/permission-gate.ts";
 import type { TenantContext } from "../src/tenant.ts";
 
 const TENANT: TenantContext = { tenantId: "t1", workspaceId: "w1", userId: "u1" };
@@ -171,5 +171,53 @@ describe("权限门 · 不吞异常（fail-closed 依赖内核）", () => {
 		await expect(
 			gate({ toolName: "read_table", args: {}, tenant: TENANT, taskId: "t" }),
 		).rejects.toThrow("审计写入失败");
+	});
+});
+
+describe("权限门 · 按场景卡收窄策略", () => {
+	const policies = [
+		{ tool: "read_table", pathParams: ["path"] },
+		{ tool: "reconcile_tables", pathParams: ["leftPath", "rightPath"] },
+		{ tool: "write_document" },
+	];
+
+	it("只保留白名单内的工具策略", () => {
+		const narrowed = restrictPolicies(policies, ["read_table", "write_document"]);
+		expect(narrowed.map((p) => p.tool)).toEqual(["read_table", "write_document"]);
+	});
+
+	it("被移除的工具走默认拒绝分支", async () => {
+		// 关键：不是「加一条拒绝规则」，而是让它落进已有的默认拒绝路径。
+		// 权限判断只有一条路径，就少一处可能写错的地方。
+		const gate = createPermissionGate({
+			policies: restrictPolicies(policies, ["read_table"]),
+			workspace: "/ws",
+		});
+		const decision = await gate({
+			toolName: "reconcile_tables",
+			args: { leftPath: "/ws/a.xlsx", rightPath: "/ws/b.xlsx" },
+			tenant: { tenantId: "t", workspaceId: "w", userId: "u" },
+			taskId: "task",
+		});
+		expect(decision.kind).toBe("block");
+	});
+
+	it("白名单内的工具仍保留其路径校验规则", async () => {
+		// 收窄不能把路径策略丢掉 —— 否则「缩小范围」反而放宽了安全检查
+		const gate = createPermissionGate({
+			policies: restrictPolicies(policies, ["read_table"]),
+			workspace: "/ws",
+		});
+		const decision = await gate({
+			toolName: "read_table",
+			args: { path: "/etc/passwd" },
+			tenant: { tenantId: "t", workspaceId: "w", userId: "u" },
+			taskId: "task",
+		});
+		expect(decision.kind).toBe("block");
+	});
+
+	it("空白名单拒绝一切", () => {
+		expect(restrictPolicies(policies, [])).toEqual([]);
 	});
 });

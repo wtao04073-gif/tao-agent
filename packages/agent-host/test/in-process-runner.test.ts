@@ -407,4 +407,113 @@ describe("RunnerAdapter 适配层", () => {
 
 		await runner.close();
 	});
+	/**
+	 * 内核的生成失败不走异常，走 `run_end{status:"failed"}` 事件。
+	 *
+	 * 这一组测试的存在理由：曾经真的漏接了这个事件，后果是
+	 * **任务被报成成功、模型一次未被调用、零产出**，而日志里看不出任何异常。
+	 * 用户视角就是「显示完成但没有文件」。
+	 */
+	describe("内核运行失败必须冒泡", () => {
+		it("模型响应耗尽（provider 报错）时 prompt 抛错", async () => {
+			const { factory, faux } = createRuntime();
+			const { tool } = spyTool("work", "干活");
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-fail-1",
+				sessionId: "session-fail-1",
+				systemPrompt: "s",
+				tools: [tool],
+				gate: () => allowAll,
+			});
+
+			// 一条响应都不排 → faux 返回 "No more faux responses queued" 错误
+			faux.setResponses([]);
+
+			await expect(runner.prompt("go")).rejects.toThrow();
+			await runner.close();
+		});
+
+		it("失败信息里带上内核给的原因，便于定位", async () => {
+			const { factory, faux } = createRuntime();
+			const { tool } = spyTool("work", "干活");
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-fail-2",
+				sessionId: "session-fail-2",
+				systemPrompt: "s",
+				tools: [tool],
+				gate: () => allowAll,
+			});
+			faux.setResponses([]);
+
+			// 报错内容要能指向根因，而不是一句泛泛的「失败了」
+			await expect(runner.prompt("go")).rejects.toThrow(/内核运行失败/);
+			await runner.close();
+		});
+
+		it("上一次失败不影响下一次成功执行", async () => {
+			// 失败原因必须在每次 prompt 开始时清空，否则一次失败会让
+			// 后续所有执行都被误报为失败
+			const { factory, faux } = createRuntime();
+			const { tool } = spyTool("work", "干活");
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-fail-3",
+				sessionId: "session-fail-3",
+				systemPrompt: "s",
+				tools: [tool],
+				gate: () => allowAll,
+			});
+
+			faux.setResponses([]);
+			await expect(runner.prompt("第一次")).rejects.toThrow();
+
+			faux.setResponses([fauxAssistantMessage("这次好了")]);
+			await expect(runner.prompt("第二次")).resolves.toBeUndefined();
+
+			await runner.close();
+		});
+
+		it("activeTools 含未注册工具时在创建阶段就报错", async () => {
+			// 内核对此的处理是整个运行失败。提前报错才能给出「是哪个名字错了」
+			const { factory } = createRuntime();
+			const { tool } = spyTool("read_table", "读取表格");
+
+			await expect(
+				factory.createRunner({
+					tenant: TENANT,
+					taskId: "task-fail-4",
+					sessionId: "session-fail-4",
+					systemPrompt: "s",
+					tools: [tool],
+					gate: () => allowAll,
+					activeTools: ["read_table", "write_document"],
+				}),
+			).rejects.toThrow(/write_document/);
+		});
+
+		it("activeTools 是已注册工具的子集时正常工作", async () => {
+			const { factory, faux } = createRuntime();
+			const a = spyTool("read_table", "读取表格");
+			const b = spyTool("reconcile_tables", "核对");
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-ok",
+				sessionId: "session-ok",
+				systemPrompt: "s",
+				tools: [a.tool, b.tool],
+				gate: () => allowAll,
+				activeTools: ["read_table"],
+			});
+
+			faux.setResponses([fauxAssistantMessage("好")]);
+			await expect(runner.prompt("go")).resolves.toBeUndefined();
+			await runner.close();
+		});
+	});
 });

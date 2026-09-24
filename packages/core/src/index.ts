@@ -14,3 +14,7 @@ export * from "./permission-gate.ts";
 export * from "./reconcile.ts";
 export * from "./access.ts";
 export * from "./scenario.ts";
+export * from "./tool-catalog.ts";
+export * from "./preset-cards.ts";
+export * from "./retrieval.ts";
+export * from "./provenance.ts";
