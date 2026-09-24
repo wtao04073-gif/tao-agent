@@ -18,10 +18,7 @@
     "build:vendor": "node scripts/build-vendor.mjs",
     "verify:vendor": "node scripts/verify-vendor.mjs",
     "test:vendor": "node scripts/test-vendor.mjs",
-    "spike:1": "node --experimental-strip-types spikes/01-concurrency-isolation/run.ts",
-    "spike:2": "node --experimental-strip-types spikes/02-checkpoint-resume/run.ts",
-    "spike:3": "node --experimental-strip-types spikes/03-permission-gate/run.ts",
-    "spike:all": "node --experimental-strip-types spikes/run-all.ts"
+    "spike": "vitest --run --config vitest.spikes.config.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
