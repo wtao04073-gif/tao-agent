@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>任务列表（移动端）· 办公 Agent 平台原型</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body class="mobile">
+<p class="m-frame-note">移动端 Web · 375px 视口 · Spec 4.7</p>
+
+<div class="m-app">
+  <header class="m-topbar">
+    <a class="m-back" href="../index.html" aria-label="返回原型导航">←</a>
+    <h1>我的任务</h1>
+    <button class="m-back" data-theme-toggle type="button">☾</button>
+  </header>
+
+  <div class="m-body">
+    <!-- 任务完成通知（模拟推送） -->
+    <div id="notice"></div>
+
+    <!-- 状态筛选：横向滚动，触摸友好（≥40px 高） -->
+    <div class="m-filters" role="group" aria-label="按状态筛选任务" id="filters">
+      <button type="button" data-st="all" aria-pressed="true">全部</button>
+      <button type="button" data-st="running" aria-pressed="false">执行中</button>
+      <button type="button" data-st="waiting" aria-pressed="false">待确认</button>
+      <button type="button" data-st="queued" aria-pressed="false">排队中</button>
+      <button type="button" data-st="done" aria-pressed="false">已完成</button>
+      <button type="button" data-st="failed" aria-pressed="false">失败</button>
+    </div>
+
+    <div id="list" style="display:grid;gap:var(--sp-3)"></div>
+
+    <!-- 移动端能力边界说明 -->
+    <div class="m-desktop-hint">
+      移动端可查看进度、追问与取回产物。<br>
+      <strong>发起复杂任务与管理后台请用桌面端</strong>——场景卡的引导式要点收集涉及多份材料上传，小屏体验不佳。
+      <a href="../desktop/workbench.html">在桌面端打开工作台</a>
+    </div>
+
+    <p class="hint" style="text-align:center">
+      <button class="btn btn--sm btn--ghost" data-reset-demo type="button">重置演示数据</button>
+    </p>
+  </div>
+</div>
+
+<script src="../assets/app.js"></script>
+<script>
+/* =========================================================================
+   移动端任务列表（Spec 4.7）
+   - 任务状态列表 + 状态筛选（与桌面端共享同一份 Store 数据）
+   - 任务完成通知
+   - 不支持的复杂操作明确引导至桌面端
+   ========================================================================= */
+(function () {
+  var U = App.Util, Store = App.Store;
+  var st = 'all';
+
+  function render() {
+    var list = Store.tasks().filter(function (t) { return st === 'all' || t.status === st; })
+      .sort(function (a, b) { return b.updated - a.updated; });
+    var host = U.$('#list');
+
+    if (!list.length) {
+      host.innerHTML = '<div class="empty" style="padding:var(--sp-8) var(--sp-4)">' +
+        '<div class="empty__icon" aria-hidden="true">📭</div>' +
+        '<h3>' + (st === 'all' ? '还没有任务' : '没有此状态的任务') + '</h3>' +
+        '<p>任务从桌面端场景工作台发起；发起后可以在手机上随时查看进度、追问与取回产物。</p>' +
+        '<a class="btn btn--primary" href="../desktop/workbench.html">在桌面端发起任务</a></div>';
+      return;
+    }
+
+    host.innerHTML = list.map(function (t) {
+      var pct = Math.round(t.step / (t.stepTotal || 1) * 100);
+      var progCls = t.status === 'failed' ? ' progress--err'
+        : t.status === 'done' ? ' progress--ok'
+        : t.status === 'waiting' ? ' progress--warn' : '';
+      var ind = App.Scenes.industryMeta(t.industry);
+      var arts = t.artifacts || [];
+
+      return '<a class="m-task" href="session.html?task=' + encodeURIComponent(t.id) + '">' +
+        '<div class="m-task__top">' + App.statusTag(t.status) +
+          '<span class="ind ' + ind.cls + '">' + ind.label + '</span>' +
+          '<span style="flex:1"></span>' +
+          '<span class="m-task__meta">' + U.ago(t.updated) + '</span></div>' +
+        '<div class="m-task__title">' + U.esc(t.title) + '</div>' +
+        '<div class="progress' + progCls + '" style="margin:var(--sp-2) 0 6px" role="progressbar" ' +
+          'aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '">' +
+          '<div class="progress__fill" style="width:' + pct + '%"></div></div>' +
+        '<div class="m-task__meta">' + t.step + '/' + t.stepTotal + ' 步 · ' +
+          U.esc(t.workspace) + ' · ' + U.esc(t.owner) + '</div>' +
+        (t.status === 'running' || t.status === 'waiting' || t.status === 'queued'
+          ? '<div class="m-task__now">' + U.esc(t.now) + '</div>' : '') +
+        (t.status === 'failed'
+          ? '<div class="banner banner--err" style="margin-top:var(--sp-2);font-size:var(--fs-12)">' +
+            '<span aria-hidden="true">⚠</span><span>' + U.esc(t.reason || '') + '</span></div>' : '') +
+        (arts.length
+          ? '<div style="margin-top:var(--sp-3);display:grid;gap:6px">' +
+            arts.map(function (a) {
+              return '<div style="display:flex;align-items:center;gap:var(--sp-2)">' +
+                U.fileIcon(a.name, true) +
+                '<span style="font-size:var(--fs-12);color:var(--fg-strong);min-width:0;' +
+                'overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + U.esc(a.name) + '</span>' +
+                (a.state === 'ready' ? '<span class="tag tag--ok">可取回</span>'
+                  : '<span class="tag tag--warn">中间物</span>') + '</div>';
+            }).join('') + '</div>' : '') +
+        '</a>';
+    }).join('');
+  }
+
+  U.$$('#filters button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      U.$$('#filters button').forEach(function (x) { x.setAttribute('aria-pressed', 'false'); });
+      b.setAttribute('aria-pressed', 'true');
+      st = b.getAttribute('data-st');
+      render();
+    });
+  });
+
+  /* 任务完成通知：取最近完成的任务做一条提示 */
+  (function notice() {
+    var done = Store.tasks().filter(function (t) { return t.status === 'done'; })
+      .sort(function (a, b) { return b.updated - a.updated; })[0];
+    if (!done) return;
+    U.$('#notice').innerHTML = '<div class="banner banner--ok">' +
+      '<span aria-hidden="true">🔔</span>' +
+      '<div class="spacer"><strong>任务已完成</strong><br>' +
+      U.esc(done.title) + ' · ' + ((done.artifacts || []).length) + ' 份产物可取回</div>' +
+      '<a class="btn btn--sm" href="session.html?task=' + encodeURIComponent(done.id) + '">查看</a></div>';
+  })();
+
+  render();
+  // 与桌面端共享数据，定时刷新以反映其它标签页的进度推进
+  setInterval(render, 4000);
+})();
+</script>
+</body>
+</html>

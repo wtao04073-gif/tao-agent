@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型导航 · 行业通用 AI 办公 Agent 平台</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="proto-wrap">
+
+  <header class="proto-hero">
+    <div style="display:flex;align-items:center;gap:var(--sp-4);margin-bottom:var(--sp-4)">
+      <span class="sidenav__logo" style="width:40px;height:40px;font-size:var(--fs-18)" aria-hidden="true">章</span>
+      <div style="flex:1">
+        <span class="tag tag--brand">高保真可交互原型 · v0.9</span>
+      </div>
+      <button class="btn btn--sm" data-theme-toggle type="button">☾</button>
+    </div>
+    <h1>行业通用 AI 办公 Agent 平台</h1>
+    <p>
+      面向<strong>高校服务机构</strong>与<strong>传统制造业办公管理岗</strong>的 Agent 办公工具原型。
+      本原型对应需求 Spec 第 4 章「页面与交互」（4.1—4.7），全部交互用原生 JS 实现，
+      不引任何外部依赖，双击 HTML 即可离线打开。
+    </p>
+  </header>
+
+  <!-- 关键设计决策速览：这些是产品的灵魂，原型逐条落地 -->
+  <section class="section">
+    <div class="card"><div class="card__body">
+      <h2 style="margin-bottom:var(--sp-3);font-size:var(--fs-16)">原型体现的 6 个关键设计决策</h2>
+      <div class="grid-2" style="gap:var(--sp-3)">
+        <div>
+          <ul style="font-size:var(--fs-13);margin:0;padding-left:1.2em">
+            <li><strong>场景卡替代空白输入框</strong>：首页是场景卡网格，自由对话入口存在但不突出</li>
+            <li><strong>任务与会话分离</strong>：任务是一等公民，全局提示条常驻，任务中心独立</li>
+            <li><strong>步骤级进度可见</strong>：显示「正在做第 3 步：核对供应商对账明细」，不是转圈 loading</li>
+          </ul>
+        </div>
+        <div>
+          <ul style="font-size:var(--fs-13);margin:0;padding-left:1.2em">
+            <li><strong>产出物是原生 Office 文件</strong>：.docx / .xlsx / .pptx 图标与真实文件名</li>
+            <li><strong>引用来源标注</strong>：AI 产出带来源角标，点击展开引用了哪份知识库文档</li>
+            <li><strong>修改意见回写</strong>：提交意见后沉淀为口径资产，下次同类任务自动应用</li>
+          </ul>
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- 建议演示路径 -->
+  <section class="section">
+    <div class="card" style="border-color:var(--brand-200);background:var(--brand-50)">
+      <div class="card__body">
+        <h2 style="font-size:var(--fs-16);margin-bottom:var(--sp-2)">建议演示路径（3 分钟走通主链路）</h2>
+        <ol style="font-size:var(--fs-13);margin:0;padding-left:1.4em;line-height:1.9">
+          <li>打开 <a href="desktop/workbench.html">场景工作台</a>，点「<strong>供应商对账核查</strong>」场景卡</li>
+          <li>表单里<strong>什么都不填直接点「提交执行」</strong>——观察必填校验拦截并列出缺什么</li>
+          <li>补齐必填项（文件可用「+ 文件名」按钮一键带入），提交 → 自动跳转会话执行页</li>
+          <li>★ 在任务<strong>执行中直接在输入框打字发送</strong>，例如「差异原因也要写清楚」
+              → 消息显示「已插入，将在当前步骤完成后送达」，任务不中断</li>
+          <li>等步骤跑完，出现<strong>产出物卡片</strong>（.xlsx）→ 点「预览」看保留公式的表格</li>
+          <li>点「<strong>提出修改意见</strong>」→ 填写并提交 → 提示「已记录，下次同类任务将自动应用」</li>
+          <li>去 <a href="desktop/knowledge.html">知识资产页</a> 切到「修改意见回写」标签，看到刚提交的意见已沉淀</li>
+          <li>去 <a href="desktop/tasks.html">任务中心</a>，点状态筛选「失败」→ 进详情看失败原因 → 点「重试」</li>
+          <li>用手机尺寸打开 <a href="mobile/tasks.html">移动端任务列表</a>，进会话追问并取回产物</li>
+        </ol>
+        <p class="hint" style="margin-top:var(--sp-3)">
+          想演示<strong>高危动作确认</strong>：在工作台选「生成 8D 质量报告」，跑到第 5 步会弹出确认卡片。<br>
+          想演示<strong>失败与检查点重试</strong>：选「多系统数据核对填报」，该场景固定走失败分支。
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 桌面端页面 -->
+  <section class="section">
+    <div class="section__head">
+      <h2>桌面端（固定侧边导航 + 主内容区）</h2>
+      <span class="section__desc">1280px 以上体验最佳；窄屏会自动降级为顶部横排导航</span>
+    </div>
+    <div class="proto-grid">
+
+      <a class="proto-card" href="desktop/workbench.html">
+        <span class="proto-card__spec">Spec 4.2 · 场景工作台（首页）</span>
+        <h3>📋 场景工作台</h3>
+        <p>让用户无需构思 prompt 即可发起高质量任务。首页是场景卡网格，不是一个大输入框。</p>
+        <ul>
+          <li>12 张场景卡，按行业与职能双层分组（高校 5 个 / 制造 5 个 / 通用 2 个）</li>
+          <li>点击卡片 → 引导式要点收集表单，<strong>必填未齐备时阻止提交并列出缺什么</strong></li>
+          <li>行业筛选 + 关键词搜索；无匹配时引导使用自由对话</li>
+          <li>首次进入空态引导（推荐 3 个最快见效场景）、最近任务、最近产出</li>
+          <li>「本单位自建」标记体现租户自建场景覆盖平台预置</li>
+        </ul>
+      </a>
+
+      <a class="proto-card" href="desktop/session.html?task=T-20260924-0118"
+         style="border-color:var(--brand-400)">
+        <span class="proto-card__spec">Spec 4.3 · 会话执行页 ★ 最核心</span>
+        <h3>💬 会话执行页</h3>
+        <p>承载任务执行过程的可见化与用户追问。原型最重要的页面。</p>
+        <ul>
+          <li>★ <strong>任务执行中输入框始终可用</strong>，消息标为「已插入，将在当前步骤完成后送达」，
+              在步骤边界真正送达（对应 Pi 的 steering 语义）</li>
+          <li>步骤级进度卡：逐步点亮 + 显示具体当前动作 + 已产出中间物</li>
+          <li>产出物卡片：预览 / 下载 / 继续修改 / 提出修改意见</li>
+          <li>引用来源角标：点击展开引用了哪份知识库文档与原文片段</li>
+          <li>高危动作确认卡片、等待确认态、失败态（可读原因 + 检查点重试）</li>
+        </ul>
+      </a>
+
+      <a class="proto-card" href="desktop/tasks.html">
+        <span class="proto-card__spec">Spec 4.4 · 任务中心</span>
+        <h3>📑 任务中心</h3>
+        <p>统一管理所有异步任务，解决「任务与会话分离」后的可管理性。</p>
+        <ul>
+          <li>状态 / 场景筛选与排序<strong>真实过滤列表</strong></li>
+          <li>行内与批量取消 / 重试，真实改变行状态并回写共享数据</li>
+          <li>任务详情：执行日志、产物、消耗（三个标签页）</li>
+          <li>失败原因归类展示；并发已达上限提示含升档引导</li>
+          <li>两种空态：完全无任务 / 筛选后无结果</li>
+        </ul>
+      </a>
+
+      <a class="proto-card" href="desktop/knowledge.html">
+        <span class="proto-card__spec">Spec 4.5 · 知识资产页</span>
+        <h3>📚 知识资产</h3>
+        <p>管理机构的文档知识库、模板与口径资产——产品的核心差异化能力。</p>
+        <ul>
+          <li>文档上传演示<strong>解析中 → 已就绪 / 解析失败（含原因与重试）</strong>状态流转</li>
+          <li>权限设置弹窗体现<strong>读写分离</strong>的权限矩阵；四级资产范围</li>
+          <li>权限不足提示区分「完全不可见」与「可见但不可编辑」</li>
+          <li>模板库（含同名模板被高优先级覆盖）、字段口径定义表</li>
+          <li>修改意见回写列表（会合并你在会话页刚提交的意见）、版本与变更记录</li>
+        </ul>
+      </a>
+
+      <a class="proto-card" href="desktop/admin.html">
+        <span class="proto-card__spec">Spec 4.6 · 管理后台</span>
+        <h3>⚙️ 管理后台</h3>
+        <p>租户管理员的组织、权限、技能、用量与模型配置入口。</p>
+        <ul>
+          <li>用量与产出看板：<strong>纯 CSS 堆叠柱状图 + 内联 SVG 折线图</strong>，不引任何图表库</li>
+          <li>成员角色表（角色下拉可改，即时生效并写审计）、单用户熔断与解除</li>
+          <li>技能包管理（三级命名空间、启停即时生效）、场景卡管理、工作区管理</li>
+          <li>模型分层路由与热替换、回归评测门禁（可点击运行）</li>
+          <li>配额与并发（升档引导）、可检索的审计日志</li>
+        </ul>
+      </a>
+
+    </div>
+  </section>
+
+  <!-- 移动端页面 -->
+  <section class="section">
+    <div class="section__head">
+      <h2>移动端 Web</h2>
+      <span class="section__desc">375px 基准，触摸友好；不支持的复杂操作明确引导至桌面端</span>
+    </div>
+    <div class="proto-grid">
+
+      <a class="proto-card" href="mobile/tasks.html">
+        <span class="proto-card__spec">Spec 4.7 · 移动端任务列表</span>
+        <h3>📱 任务列表（移动端）</h3>
+        <p>移动场景下的查看与取回入口。</p>
+        <ul>
+          <li>与桌面端<strong>共享同一份任务数据</strong>（浏览器本地存储）</li>
+          <li>横向滚动的状态筛选条，点击区 ≥ 40px 高</li>
+          <li>任务完成通知；产物可取回标记</li>
+          <li>明确标注「发起复杂任务与管理后台请用桌面端」</li>
+        </ul>
+      </a>
+
+      <a class="proto-card" href="mobile/session.html?task=T-20260924-0118">
+        <span class="proto-card__spec">Spec 4.7 · 移动端会话追问</span>
+        <h3>📱 会话追问（移动端）</h3>
+        <p>小屏下的进度查看、追问与产物取回分享。</p>
+        <ul>
+          <li>进度压缩为「当前动作 + 进度条 + 可展开的步骤列表」</li>
+          <li>执行中同样可追问，排队送达语义与桌面端一致</li>
+          <li>产物取回 / 分享链接 / 转发；编辑与口径回写引导至桌面端</li>
+          <li>高危动作确认、失败重试在移动端同样可完成</li>
+        </ul>
+      </a>
+
+    </div>
+  </section>
+
+  <!-- 说明 -->
+  <section class="section">
+    <div class="card"><div class="card__body">
+      <h2 style="font-size:var(--fs-16);margin-bottom:var(--sp-3)">原型说明</h2>
+      <dl style="margin:0">
+        <div class="kv"><dt>技术栈</dt><dd>纯静态 HTML + CSS + 原生 JS，零外部依赖，可离线打开</dd></div>
+        <div class="kv"><dt>主题</dt><dd>浅色 / 深色双主题，跟随系统偏好，右上角按钮可手动切换</dd></div>
+        <div class="kv"><dt>数据</dt><dd>演示数据存于浏览器 localStorage，桌面端与移动端共享同一份</dd></div>
+        <div class="kv"><dt>内容</dt><dd>全部使用两个目标行业的真实业务叫法，无占位假文</dd></div>
+        <div class="kv"><dt>可访问性</dt><dd>语义化标签、focus 可见、aria 状态、跳转主内容链接、尊重减少动效偏好</dd></div>
+      </dl>
+      <p class="hint" style="margin-top:var(--sp-4)">
+        演示数据被改乱了？
+        <button class="btn btn--sm" data-reset-demo type="button">重置演示数据</button>
+      </p>
+    </div></div>
+  </section>
+
+  <footer style="text-align:center;color:var(--fg-muted);font-size:var(--fs-12);padding:var(--sp-6) 0">
+    原型对应需求 Spec：<code>README.md</code> 第 4 章 · 详细说明见 <code>prototype/README.md</code>
+  </footer>
+</div>
+
+<script src="assets/app.js"></script>
+</body>
+</html>

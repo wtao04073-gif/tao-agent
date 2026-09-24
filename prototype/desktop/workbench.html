@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>场景工作台 · 办公 Agent 平台原型</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主内容</a>
+
+<div class="app">
+  <!-- 侧边导航由 assets/app.js 统一渲染，避免多页重复 -->
+  <div data-sidenav="workbench"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>场景工作台</h1>
+      <span class="topbar__sub">Spec 4.2 · 首页枢纽</span>
+      <span class="topbar__spacer"></span>
+      <input type="search" id="sceneSearch" placeholder="搜索场景，如「8D」「台账」" style="width:220px"
+             aria-label="搜索场景卡">
+      <button class="iconbtn" data-theme-toggle type="button">☾</button>
+    </header>
+
+    <main class="page" id="main">
+
+      <!-- 全局：进行中任务常驻提示条（任务与会话分离的可见性载体） -->
+      <div class="section" data-taskbar></div>
+
+      <!-- 首次进入的空态引导：推荐 3 个最快见效的场景 -->
+      <section class="section" id="onboard">
+        <div class="card" style="border-color:var(--brand-200);background:var(--brand-50)">
+          <div class="card__body" style="display:flex;gap:var(--sp-4);align-items:flex-start;flex-wrap:wrap">
+            <span style="font-size:26px" aria-hidden="true">👋</span>
+            <div style="flex:1;min-width:260px">
+              <h3>第一次使用？先从这 3 个最快见效的场景开始</h3>
+              <p style="font-size:var(--fs-13);color:var(--fg-muted)">
+                不需要会写提示词。选一张卡片，按引导填写要点、带上材料，剩下的交给平台。
+                首份交付物通常在 3—10 分钟内产出。
+              </p>
+              <div class="btn-row">
+                <button class="btn btn--primary btn--sm" data-scene-quick="edu-notice">起草校内通知公文</button>
+                <button class="btn btn--sm" data-scene-quick="mfg-8d">生成 8D 质量报告</button>
+                <button class="btn btn--sm" data-scene-quick="gen-report">数据统计与图表</button>
+              </div>
+            </div>
+            <button class="iconbtn" type="button" id="onboardClose" aria-label="关闭新手引导">×</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 场景卡网格：按行业与职能分组。刻意不做大输入框（Spec 3.1） -->
+      <section class="section">
+        <div class="section__head">
+          <h2>选择场景发起任务</h2>
+          <span class="section__desc">卡片按行业与职能分组；「本单位自建」可覆盖同名平台预置场景</span>
+          <span class="spacer"></span>
+          <div class="segmented" role="group" aria-label="按行业筛选场景">
+            <button type="button" data-ind="all" aria-pressed="true">全部</button>
+            <button type="button" data-ind="edu" aria-pressed="false">高校服务机构</button>
+            <button type="button" data-ind="mfg" aria-pressed="false">传统制造业</button>
+            <button type="button" data-ind="gen" aria-pressed="false">通用办公</button>
+          </div>
+        </div>
+        <div id="sceneGroups"></div>
+
+        <!-- 搜索无匹配时的空态：引导使用自由对话 -->
+        <div class="empty" id="sceneEmpty" hidden>
+          <div class="empty__icon" aria-hidden="true">🔎</div>
+          <h3>没有匹配的场景卡</h3>
+          <p>可以用自由对话直接描述需求，平台会尝试拆解为可执行任务；也可以联系本单位管理员新建场景卡。</p>
+          <div class="btn-row" style="justify-content:center">
+            <button class="btn btn--primary" data-free-chat type="button">用自由对话描述需求</button>
+            <a class="btn" href="admin.html#scenes">申请新建场景卡</a>
+          </div>
+        </div>
+      </section>
+
+      <!-- 自由对话入口：存在但不突出（Spec 3.1 业务规则第 3 条） -->
+      <section class="section">
+        <button class="free-chat" data-free-chat type="button">
+          <span aria-hidden="true">💬</span>
+          <span class="spacer">场景外的临时问题，可以直接自由对话（不推荐用于复杂材料生成）</span>
+          <span aria-hidden="true">→</span>
+        </button>
+      </section>
+
+      <div class="grid-2">
+        <!-- 最近任务 -->
+        <section class="section">
+          <div class="section__head">
+            <h2>最近任务</h2><span class="spacer"></span>
+            <a href="tasks.html" style="font-size:var(--fs-12)">全部任务 →</a>
+          </div>
+          <div class="card"><div class="card__body" style="padding:var(--sp-2)">
+            <ul class="side-list" id="recentTasks" style="gap:0"></ul>
+          </div></div>
+        </section>
+
+        <!-- 最近产出 -->
+        <section class="section">
+          <div class="section__head">
+            <h2>最近产出</h2><span class="spacer"></span>
+            <span class="section__desc">原生 Office 文件，可直接下载编辑</span>
+          </div>
+          <div class="card"><div class="card__body" style="display:grid;gap:var(--sp-2)">
+            <div id="recentArtifacts"></div>
+          </div></div>
+        </section>
+      </div>
+
+      <p class="hint" style="margin-top:var(--sp-6)">
+        原型演示数据保存在浏览器本地。<button class="btn btn--sm btn--ghost" data-reset-demo type="button">重置演示数据</button>
+      </p>
+    </main>
+  </div>
+</div>
+
+<!-- ===== 引导式要点收集表单（点击场景卡后弹出） ===== -->
+<div class="modal-backdrop" id="sceneModal" aria-hidden="true">
+  <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="sceneModalTitle">
+    <div class="modal__head">
+      <span id="sceneModalIcon" style="font-size:24px" aria-hidden="true">📋</span>
+      <div>
+        <h2 id="sceneModalTitle">场景标题</h2>
+        <p id="sceneModalDesc">场景说明</p>
+      </div>
+      <span class="spacer"></span>
+      <button class="iconbtn" type="button" data-modal-close="sceneModal" aria-label="关闭">×</button>
+    </div>
+    <div class="modal__body">
+      <div class="banner banner--info" style="margin-bottom:var(--sp-5)">
+        <span aria-hidden="true">ℹ</span>
+        <span>按下面的要点逐项填写即可，<strong>不需要自己写提示词</strong>。带 <span class="req">*</span> 的为必填，未填完无法提交。</span>
+      </div>
+      <!-- 校验失败时的汇总提示：明确告知缺什么（验收标准第 3 条） -->
+      <div class="banner banner--err" id="sceneMissing" hidden style="margin-bottom:var(--sp-5)">
+        <span aria-hidden="true">⚠</span>
+        <div><strong>还有必填要点未填完，无法提交：</strong><ul id="sceneMissingList" style="margin:var(--sp-2) 0 0"></ul></div>
+      </div>
+      <form id="sceneForm" novalidate></form>
+    </div>
+    <div class="modal__foot">
+      <span class="hint" id="sceneCost">预计消耗：1 次任务额度 · 约 3—8 分钟</span>
+      <span class="spacer"></span>
+      <button class="btn" type="button" data-modal-close="sceneModal">取消</button>
+      <button class="btn btn--primary" type="button" id="sceneSubmit">提交执行</button>
+    </div>
+  </div>
+</div>
+
+<script src="../assets/app.js"></script>
+<script>
+/* =========================================================================
+   场景工作台页面逻辑
+   - 渲染分组场景卡网格
+   - 行业筛选 + 关键词搜索（无匹配时给出自由对话空态）
+   - 点击卡片 → 引导式要点收集表单 → 必填校验 → 写入 pending → 跳转会话页
+   ========================================================================= */
+(function () {
+  var U = App.Util, S = App.Scenes;
+  var curInd = 'all', curKw = '';
+
+  /* ---------- 场景卡网格（按行业 → 职能双层分组） ---------- */
+  function render() {
+    var host = U.$('#sceneGroups'), empty = U.$('#sceneEmpty');
+    var list = S.all.filter(function (s) {
+      if (curInd !== 'all' && s.industry !== curInd) return false;
+      if (!curKw) return true;
+      var hay = (s.title + s.desc + s.group).toLowerCase();
+      return hay.indexOf(curKw.toLowerCase()) >= 0;
+    });
+
+    if (!list.length) { host.innerHTML = ''; empty.hidden = false; return; }
+    empty.hidden = true;
+
+    // 分组键：行业 + 职能
+    var order = [], buckets = {};
+    list.forEach(function (s) {
+      var k = s.industry + '||' + s.group;
+      if (!buckets[k]) { buckets[k] = []; order.push(k); }
+      buckets[k].push(s);
+    });
+
+    host.innerHTML = order.map(function (k) {
+      var parts = k.split('||');
+      var ind = S.industryMeta(parts[0]);
+      return '<div style="margin-bottom:var(--sp-6)">' +
+        '<div class="section__head" style="margin-bottom:var(--sp-3)">' +
+          '<span class="ind ' + ind.cls + '">' + ind.label + '</span>' +
+          '<h3 style="font-size:var(--fs-14)">' + U.esc(parts[1]) + '</h3>' +
+          '<span class="section__desc">' + buckets[k].length + ' 个场景</span>' +
+        '</div>' +
+        '<div class="scene-grid">' + buckets[k].map(S.card).join('') + '</div>' +
+        '</div>';
+    }).join('');
+  }
+
+  /* ---------- 最近任务 / 最近产出 ---------- */
+  function renderRecent() {
+    var tasks = App.Store.tasks().slice(0, 5);
+    U.$('#recentTasks').innerHTML = tasks.map(function (t) {
+      return '<li style="padding:var(--sp-3);border-bottom:1px solid var(--line)">' +
+        '<a href="session.html?task=' + encodeURIComponent(t.id) + '" style="color:inherit">' +
+        '<b>' + U.esc(t.title) + '</b></a>' +
+        '<span style="display:flex;gap:var(--sp-2);align-items:center;margin-top:4px">' +
+        App.statusTag(t.status) +
+        '<span style="font-size:var(--fs-11);color:var(--fg-faint)">' + U.esc(t.workspace) +
+        ' · ' + U.ago(t.updated) + '</span></span></li>';
+    }).join('');
+
+    var arts = [];
+    App.Store.tasks().forEach(function (t) {
+      (t.artifacts || []).forEach(function (a) {
+        if (a.state === 'ready') arts.push({ a: a, t: t });
+      });
+    });
+    var host = U.$('#recentArtifacts');
+    if (!arts.length) {
+      host.innerHTML = '<div class="empty" style="padding:var(--sp-6)">' +
+        '<div class="empty__icon" aria-hidden="true">📁</div><h3>还没有交付物</h3>' +
+        '<p>完成第一个任务后，产出的 Word / Excel / PPT 会出现在这里。</p></div>';
+      return;
+    }
+    host.innerHTML = arts.slice(0, 5).map(function (x) {
+      return '<div class="artifact">' + U.fileIcon(x.a.name) +
+        '<div class="artifact__info"><div class="artifact__name">' + U.esc(x.a.name) + '</div>' +
+        '<div class="artifact__meta">' + U.esc(x.a.size) + ' · 来自任务 ' + U.esc(x.t.id) +
+        ' · ' + U.ago(x.t.updated) + '</div></div>' +
+        '<div class="artifact__acts"><a class="btn btn--sm" href="session.html?task=' +
+        encodeURIComponent(x.t.id) + '">查看</a></div></div>';
+    }).join('');
+  }
+
+  /* ---------- 引导式要点收集 ---------- */
+  var activeScene = null;
+  function openScene(id) {
+    var s = S.get(id);
+    if (!s) return;
+    activeScene = s;
+    U.$('#sceneModalIcon').textContent = s.icon;
+    U.$('#sceneModalTitle').textContent = s.title;
+    U.$('#sceneModalDesc').textContent = s.desc +
+      '（产出格式：.' + s.out + '；本单位已执行 ' + s.runs + ' 次）';
+    U.$('#sceneMissing').hidden = true;
+    var form = U.$('#sceneForm');
+    form.innerHTML = S.formHTML(s);
+    App.Modal.open('sceneModal');
+  }
+
+  U.$('#sceneGroups').addEventListener('click', function (e) {
+    var c = e.target.closest('[data-scene]');
+    if (c) openScene(c.getAttribute('data-scene'));
+  });
+  U.$$('[data-scene-quick]').forEach(function (b) {
+    b.addEventListener('click', function () { openScene(b.getAttribute('data-scene-quick')); });
+  });
+  S.bindFiles(U.$('#sceneForm'));
+
+  /* ---------- 提交：必填校验 → 建任务 → 跳会话页 ---------- */
+  U.$('#sceneSubmit').addEventListener('click', function () {
+    var res = S.collect(U.$('#sceneForm'));
+    var box = U.$('#sceneMissing');
+    if (!res.ok) {
+      U.$('#sceneMissingList').innerHTML = res.missing.map(function (m) {
+        return '<li>' + U.esc(m) + '</li>';
+      }).join('');
+      box.hidden = false;
+      box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      App.Toast.show('无法提交', '还有 ' + res.missing.length + ' 项必填要点未填写', 'err');
+      // 焦点移到第一个未通过校验的字段，便于键盘用户定位
+      var bad = U.$('#sceneForm [data-invalid] input, #sceneForm [data-invalid] select, ' +
+                    '#sceneForm [data-invalid] textarea, #sceneForm [data-invalid] .dropzone');
+      if (bad) bad.focus();
+      return;
+    }
+    box.hidden = true;
+
+    // 并发上限检查：体现「档位限制 + 升档引导」（Spec 3.3 / 4.4）
+    var runningCount = App.Store.tasks().filter(function (t) { return t.status === 'running'; }).length;
+    var title = deriveTitle(activeScene, res.values);
+    var id = 'T-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' +
+             String(Math.floor(Math.random() * 900) + 100);
+
+    var task = {
+      id: id, scene: activeScene.id, title: title, industry: activeScene.industry,
+      status: runningCount >= 2 ? 'queued' : 'running',
+      step: 0, stepTotal: 7,
+      now: runningCount >= 2
+        ? '排队中：当前档位并发 2/2，等待前序任务释放'
+        : '准备执行环境与知识库检索范围',
+      owner: '刘敏', workspace: '教务处',
+      created: Date.now(), updated: Date.now(),
+      tokens: 0, cost: 0, sessionId: 'S-' + (4480 + Math.floor(Math.random() * 20)),
+      artifacts: [], inputs: res.values, fresh: true
+    };
+    App.Store.addTask(task);
+    App.Store.setPending(id);
+    App.Modal.close('sceneModal');
+    if (task.status === 'queued') {
+      App.Toast.show('任务已排队', '当前档位并发已满（2/2），任务将在前序任务完成后自动开始', 'info');
+    }
+    location.href = 'session.html?task=' + encodeURIComponent(id);
+  });
+
+  /** 由场景与表单值推导可读的任务标题（用行业真实叫法） */
+  function deriveTitle(s, v) {
+    switch (s.id) {
+      case 'edu-audit-report': return (v.round || '审核评估') + ' 自评报告';
+      case 'edu-ledger':       return '评估整改台账（' + (v.src || '专家反馈') + '）';
+      case 'edu-crosscheck':   return '多系统数据核对填报：' + (v.target || '');
+      case 'edu-notice':       return '起草《关于' + (v.subject || '') + '的' + (v.kind || '通知') + '》';
+      case 'edu-research':     return '科研申报材料汇总：' + (v.program || '');
+      case 'mfg-8d':           return '8D报告-' + (v.issue || '').slice(0, 18) + '（' + (v.supplier || '') + '）';
+      case 'mfg-iso-diff':     return '体系文件比对（' + (v.audit || '') + '）';
+      case 'mfg-recon':        return (v.period || '') + '供应商对账核查';
+      case 'mfg-asset':        return '设备台账整理：' + (v.scope || '');
+      case 'mfg-sop':          return '编制《' + (v.process || '') + '作业指导书》SOP';
+      case 'gen-report':       return '数据统计：' + (v.goal || '');
+      case 'gen-ppt':          return '汇报材料：' + (v.topic || '');
+      default:                 return s.title;
+    }
+  }
+
+  /* ---------- 筛选与搜索 ---------- */
+  U.$$('[data-ind]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      U.$$('[data-ind]').forEach(function (x) { x.setAttribute('aria-pressed', 'false'); });
+      b.setAttribute('aria-pressed', 'true');
+      curInd = b.getAttribute('data-ind');
+      render();
+    });
+  });
+  U.$('#sceneSearch').addEventListener('input', function (e) {
+    curKw = e.target.value.trim();
+    render();
+  });
+
+  /* ---------- 自由对话入口 ---------- */
+  U.$$('[data-free-chat]').forEach(function (b) {
+    b.addEventListener('click', function () { location.href = 'session.html?mode=free'; });
+  });
+
+  /* ---------- 新手引导可关闭 ---------- */
+  U.$('#onboardClose').addEventListener('click', function () {
+    U.$('#onboard').remove();
+  });
+
+  render();
+  renderRecent();
+})();
+</script>
+</body>
+</html>

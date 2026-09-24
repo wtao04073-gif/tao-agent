@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>会话追问（移动端）· 办公 Agent 平台原型</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body class="mobile">
+<p class="m-frame-note">移动端 Web · 375px 视口 · Spec 4.7</p>
+
+<div class="m-app">
+  <header class="m-topbar">
+    <a class="m-back" href="tasks.html" aria-label="返回任务列表">←</a>
+    <h1 id="mTitle">会话</h1>
+    <button class="m-back" data-theme-toggle type="button">☾</button>
+  </header>
+
+  <div class="m-body m-body--stream" id="mStream" aria-live="polite"></div>
+
+  <!-- 输入区：执行中同样可用，追问排队送达 -->
+  <div class="m-composer">
+    <div class="row">
+      <label class="sr-only" for="mInput">输入追问</label>
+      <textarea id="mInput" rows="1" placeholder="追问或要求调整…"></textarea>
+      <button class="btn btn--primary" type="button" id="mSend">发送</button>
+    </div>
+    <p class="hint" id="mHint" style="margin-top:6px">输入框始终可用</p>
+  </div>
+</div>
+
+<!-- 产物预览 / 分享 -->
+<div class="modal-backdrop" id="mShare" aria-hidden="true">
+  <div class="modal modal--narrow" role="dialog" aria-modal="true" aria-labelledby="mShareTitle">
+    <div class="modal__head">
+      <div><h2 id="mShareTitle">取回与分享</h2><p id="mShareName"></p></div>
+      <span class="spacer"></span>
+      <button class="iconbtn" type="button" data-modal-close="mShare" aria-label="关闭">×</button>
+    </div>
+    <div class="modal__body">
+      <div class="btn-row" style="flex-direction:column">
+        <button class="btn btn--block" type="button" data-act="下载到手机">下载到手机</button>
+        <button class="btn btn--block" type="button" data-act="复制分享链接">复制分享链接（7 天有效）</button>
+        <button class="btn btn--block" type="button" data-act="转发给同事">转发给同事</button>
+      </div>
+      <div class="m-desktop-hint" style="margin-top:var(--sp-4)">
+        在线编辑与套版调整需要桌面端。<a href="../desktop/session.html">在桌面端打开</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="../assets/app.js"></script>
+<script>
+/* =========================================================================
+   移动端会话追问（Spec 4.7）
+   - 小屏适配的步骤级进度展示（折叠为「当前动作 + 进度条 + 已完成步数」）
+   - 执行中仍可追问，消息标记「已插入，将在当前步骤完成后送达」
+   - 产物预览 / 分享；不支持的操作引导至桌面端
+   ========================================================================= */
+(function () {
+  var U = App.Util, Store = App.Store;
+  var id = U.param('task');
+  var task = id ? Store.task(id) : null;
+  var stream = U.$('#mStream');
+  var queue = [];
+  var timer = null;
+
+  /* 小屏下只展示压缩后的步骤脚本 */
+  var STEPS = {
+    'edu-audit-report': ['解析上传材料', '检索本校知识库', '核对师生比口径',
+      '分章节并行撰写', '统一行文口径', '套版生成 docx', '双端打开校验'],
+    'mfg-8d': ['解析检验记录', 'D1—D2 问题描述', 'D3 临时措施', 'D4 根本原因分析',
+      'D5—D6 永久措施', 'D7 预防措施', '生成 8D 报告', '双端打开校验'],
+    'mfg-recon': ['解析对账单与 ERP 数据', '按供应商与物料号对齐',
+      '核对供应商对账明细', '差异归类', '生成差异明细表', '双端打开校验'],
+    'edu-ledger': ['解析反馈意见', '拆解整改事项', '匹配责任部门',
+      '与上轮台账去重', '生成台账 xlsx', '双端打开校验'],
+    'edu-crosscheck': ['解析各系统导出表', '按主键对齐', '定位口径冲突',
+      '按策略裁决', '生成填报表', '双端打开校验'],
+    'mfg-iso-diff': ['解析体系文件', '建立双标准映射', '逐条比对差异',
+      '生成差异清单', '双端打开校验'],
+    'mfg-sop': ['解析工艺参数', '拆解操作步骤', '标注关键控制点',
+      '生成 SOP docx', '双端打开校验'],
+    'edu-notice': ['检索公文规范', '组织正文结构', '套用红头版式', '生成 docx 并校验']
+  };
+
+  if (!task) {
+    U.$('#mTitle').textContent = '会话';
+    stream.innerHTML = '<div class="empty" style="padding:var(--sp-8) var(--sp-4)">' +
+      '<div class="empty__icon" aria-hidden="true">💬</div><h3>没有指定任务</h3>' +
+      '<p>请从任务列表进入某个任务的会话。</p>' +
+      '<a class="btn btn--primary" href="tasks.html">回到任务列表</a></div>';
+    U.$('#mInput').disabled = true;
+    U.$('#mSend').disabled = true;
+    return;
+  }
+
+  var steps = STEPS[task.scene] ||
+    Array.apply(null, Array(task.stepTotal || 6)).map(function (_, i) { return '第 ' + (i + 1) + ' 步'; });
+  if (task.stepTotal !== steps.length) Store.update(task.id, { stepTotal: steps.length });
+
+  U.$('#mTitle').textContent = task.title;
+
+  function push(html) {
+    var w = document.createElement('div');
+    w.innerHTML = html;
+    var n = w.firstElementChild;
+    stream.appendChild(n);
+    stream.scrollTop = stream.scrollHeight;
+    return n;
+  }
+
+  function msgUser(text, queued) {
+    return push('<div class="msg msg--user' + (queued ? ' msg--queued' : '') + '">' +
+      '<span class="msg__avatar" aria-hidden="true">刘</span>' +
+      '<div class="msg__body" style="font-size:var(--fs-13)">' + U.esc(text) +
+      (queued ? '<div class="queued-flag"><i class="dot dot--pulse" aria-hidden="true"></i>' +
+        '已插入，当前步骤完成后送达</div>'
+              : '<div class="msg__meta">' + U.clock() + '</div>') +
+      '</div></div>');
+  }
+  function msgAgent(html) {
+    return push('<div class="msg msg--agent"><span class="msg__avatar" aria-hidden="true">AI</span>' +
+      '<div class="msg__body" style="font-size:var(--fs-13)">' + html + '</div></div>');
+  }
+  function msgSystem(text) {
+    return push('<div class="msg msg--system"><div class="msg__body">' + U.esc(text) + '</div></div>');
+  }
+
+  /* -------- 进度卡（小屏压缩版：当前动作 + 进度条 + 折叠步骤列表） -------- */
+  function cardHTML(t) {
+    var pct = Math.round(t.step / steps.length * 100);
+    var cls = t.status === 'done' ? ' taskcard--done'
+      : t.status === 'failed' ? ' taskcard--err'
+      : t.status === 'waiting' ? ' taskcard--wait' : '';
+    return '<div class="taskcard' + cls + '" id="mCard">' +
+      '<div class="taskcard__head">' + App.statusTag(t.status) +
+        '<span class="spacer"></span>' +
+        '<span class="taskcard__id">' + U.esc(t.id) + '</span></div>' +
+      '<div class="taskcard__body" style="padding:var(--sp-3)">' +
+        '<div class="taskcard__now" style="font-size:var(--fs-12)" id="mNow">' +
+          (t.status === 'running' ? '<span class="spinner" aria-hidden="true"></span>' : '') +
+          '<span id="mNowText">' + U.esc(t.now) + '</span></div>' +
+        '<div class="progress" style="margin-bottom:6px" role="progressbar" id="mBar" ' +
+          'aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '">' +
+          '<div class="progress__fill" style="width:' + pct + '%"></div></div>' +
+        '<div style="font-size:var(--fs-11);color:var(--fg-muted);margin-bottom:var(--sp-2)" id="mCount">' +
+          '已完成 ' + t.step + '/' + steps.length + ' 步</div>' +
+        '<details><summary style="font-size:var(--fs-12);color:var(--brand-600);cursor:pointer">' +
+          '展开全部步骤</summary>' +
+          '<ol class="steps" id="mSteps" style="margin-top:var(--sp-2)">' +
+          steps.map(function (s, i) {
+            return '<li data-state="todo"><span class="step__mark">' + (i + 1) + '</span>' +
+              '<span class="step__text"><b style="font-size:var(--fs-12)">' + U.esc(s) + '</b></span></li>';
+          }).join('') + '</ol></details>' +
+      '</div></div>';
+  }
+
+  /* ---------------------------- 启动 ---------------------------- */
+  msgSystem('移动端会话 · 可查看进度、追问与取回产物');
+  msgUser('（任务由桌面端场景卡「' +
+    ((App.Scenes.get(task.scene) || {}).title || '自由对话') + '」发起）');
+  msgAgent('任务在后台异步执行，<strong>你随时可以追问</strong>，不会打断它。');
+
+  var card = push(cardHTML(task));
+  paintSteps();
+
+  if (task.status === 'running') startRun();
+  else if (task.status === 'done') renderDone();
+  else if (task.status === 'failed') renderFailed();
+  else if (task.status === 'waiting') renderWaiting();
+  else if (task.status === 'queued') msgSystem('当前档位并发已满，任务排队中');
+  else if (task.status === 'cancelled') msgSystem('该任务已取消，已产出的中间物保留');
+
+  function paintSteps() {
+    var lis = U.$$('#mSteps li');
+    for (var i = 0; i < lis.length; i++) {
+      lis[i].setAttribute('data-state',
+        i < task.step ? 'done'
+        : (i === task.step && task.status === 'running') ? 'active'
+        : (i === task.step && task.status === 'failed') ? 'error' : 'todo');
+    }
+    var pct = Math.round(task.step / steps.length * 100);
+    var bar = U.$('#mBar');
+    if (bar) {
+      bar.setAttribute('aria-valuenow', String(pct));
+      U.$('.progress__fill', bar).style.width = pct + '%';
+    }
+    var c = U.$('#mCount');
+    if (c) c.textContent = '已完成 ' + task.step + '/' + steps.length + ' 步';
+    var n = U.$('#mNowText');
+    if (n) n.textContent = task.now;
+  }
+
+  function startRun() {
+    if (timer) clearInterval(timer);
+    timer = setInterval(function () {
+      flushQueue();
+      if (task.step >= steps.length) {
+        clearInterval(timer); timer = null;
+        var outs = [{ name: outName(), size: '182 KB', state: 'ready' }];
+        Store.update(task.id, { status: 'done', step: steps.length, now: '已完成', artifacts: outs });
+        task = Store.task(task.id);
+        card.classList.add('taskcard--done');
+        U.$('#mNow').innerHTML = '<span aria-hidden="true">✓</span>' +
+          '<span id="mNowText">全部步骤已完成</span>';
+        paintSteps();
+        renderDone();
+        App.Toast.show('任务已完成', task.title, 'ok', 5000);
+        updateHint();
+        return;
+      }
+      Store.update(task.id, {
+        step: task.step + 1,
+        now: '正在做第 ' + (task.step + 1) + ' 步：' + steps[task.step]
+      });
+      task = Store.task(task.id);
+      paintSteps();
+    }, 3000);
+  }
+
+  function outName() {
+    var map = {
+      'edu-audit-report': '2026年本科教育教学审核评估自评报告.docx',
+      'edu-ledger': '本科教学审核评估整改台账.xlsx',
+      'edu-crosscheck': '教师基本情况填报表.xlsx',
+      'edu-notice': '关于开展2026年秋季学期期中教学检查的通知.docx',
+      'mfg-8d': '8D报告-来料尺寸超差.docx',
+      'mfg-iso-diff': '体系文件条款比对与差异清单.xlsx',
+      'mfg-recon': '供应商对账差异明细表.xlsx',
+      'mfg-sop': '注塑机换模作业指导书.docx'
+    };
+    return map[task.scene] || '任务产出物.docx';
+  }
+
+  function renderDone() {
+    var arts = task.artifacts || [];
+    var html = '<div class="msg msg--agent"><span class="msg__avatar" aria-hidden="true">AI</span>' +
+      '<div class="msg__body" style="font-size:var(--fs-13)"><strong>交付物已就绪</strong>' +
+      '<p class="hint" style="margin:4px 0 var(--sp-3)">原生 Office 文件，已通过 Office / WPS 双端打开校验。</p>';
+    arts.forEach(function (a) {
+      html += '<div style="display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) 0;' +
+        'border-top:1px solid var(--line)">' + U.fileIcon(a.name, true) +
+        '<span style="flex:1;min-width:0;font-size:var(--fs-12);color:var(--fg-strong);' +
+        'word-break:break-all">' + U.esc(a.name) + '</span></div>' +
+        '<div class="btn-row" style="margin-bottom:var(--sp-2)">' +
+        '<button class="btn btn--sm" type="button" data-pv="' + U.esc(a.name) + '">预览</button>' +
+        '<button class="btn btn--sm btn--primary" type="button" data-share="' + U.esc(a.name) + '">取回 / 分享</button>' +
+        '</div>';
+    });
+    html += '<div class="m-desktop-hint">提出修改意见与口径回写建议在桌面端操作，' +
+      '可选择生效范围。<a href="../desktop/session.html?task=' + encodeURIComponent(task.id) +
+      '">在桌面端打开</a></div></div></div>';
+    push(html);
+  }
+
+  function renderFailed() {
+    push('<div class="msg msg--agent"><span class="msg__avatar" aria-hidden="true">AI</span>' +
+      '<div class="msg__body" style="font-size:var(--fs-13)">' +
+      '<div class="banner banner--err" style="font-size:var(--fs-12)"><span aria-hidden="true">⚠</span>' +
+      '<div><strong>执行失败</strong><br>' + U.esc(task.reason || '') + '</div></div>' +
+      '<p class="hint" style="margin-top:var(--sp-2)">中间物已保留，重试时从检查点接力。</p>' +
+      '<div class="btn-row" style="margin-top:var(--sp-2)">' +
+      '<button class="btn btn--sm btn--primary" type="button" id="mRetry">重试</button></div>' +
+      '</div></div>');
+    var r = U.$('#mRetry');
+    if (r) r.addEventListener('click', function () {
+      Store.update(task.id, { status: 'running', reason: '',
+        now: '从检查点第 ' + task.step + ' 步续跑' });
+      task = Store.task(task.id);
+      card.classList.remove('taskcard--err');
+      U.$('#mNow').innerHTML = '<span class="spinner" aria-hidden="true"></span>' +
+        '<span id="mNowText">' + U.esc(task.now) + '</span>';
+      paintSteps();
+      msgSystem('已从检查点接力，前序步骤不重复消耗');
+      r.closest('.msg').remove();
+      startRun();
+      updateHint();
+    });
+  }
+
+  function renderWaiting() {
+    push('<div class="msg msg--agent"><span class="msg__avatar" aria-hidden="true">AI</span>' +
+      '<div class="msg__body" style="font-size:var(--fs-13)">' +
+      '<div class="banner banner--warn" style="font-size:var(--fs-12)"><span aria-hidden="true">⚠</span>' +
+      '<div><strong>需要你确认</strong><br>' + U.esc(task.now) + '</div></div>' +
+      '<div class="btn-row" style="margin-top:var(--sp-2)">' +
+      '<button class="btn btn--sm btn--primary" type="button" id="mOk">确认执行</button>' +
+      '<button class="btn btn--sm" type="button" id="mSkip">跳过此步</button></div>' +
+      '<p class="hint" style="margin-top:var(--sp-2)">高危动作不会静默执行。</p>' +
+      '</div></div>');
+    function go(msg) {
+      Store.update(task.id, { status: 'running', reason: '', now: msg });
+      task = Store.task(task.id);
+      card.classList.remove('taskcard--wait');
+      U.$('#mNow').innerHTML = '<span class="spinner" aria-hidden="true"></span>' +
+        '<span id="mNowText">' + U.esc(msg) + '</span>';
+      paintSteps();
+      startRun();
+      updateHint();
+    }
+    U.$('#mOk').addEventListener('click', function () {
+      msgUser('已确认执行');
+      msgSystem('高危动作已确认并记入审计日志');
+      U.$('#mOk').closest('.msg').remove();
+      go('继续执行后续步骤');
+    });
+    U.$('#mSkip').addEventListener('click', function () {
+      msgSystem('已跳过该步骤，报告仍会正常生成');
+      U.$('#mSkip').closest('.msg').remove();
+      go('跳过高危步骤，继续生成');
+    });
+  }
+
+  /* ------------------------ 追问：执行中也可输入 ------------------------ */
+  function busy() {
+    var t = Store.task(task.id);
+    return t && (t.status === 'running' || t.status === 'queued' || t.status === 'waiting');
+  }
+  function updateHint() {
+    var h = U.$('#mHint');
+    if (queue.length) h.innerHTML = '<b style="color:var(--warn-fg)">' + queue.length +
+      ' 条追问排队中</b>，当前步骤完成后送达';
+    else if (busy()) h.textContent = '任务执行中，你仍可输入（不打断任务）';
+    else h.textContent = '输入框始终可用';
+  }
+  function flushQueue() {
+    if (!queue.length) return;
+    queue.splice(0, queue.length).forEach(function (it) {
+      it.node.classList.remove('msg--queued');
+      var f = U.$('.queued-flag', it.node);
+      if (f) f.outerHTML = '<div class="msg__meta">' + U.clock() + ' · 已送达，原任务未中断</div>';
+      msgAgent(reply(it.text));
+    });
+    updateHint();
+  }
+  function reply(text) {
+    if (/多久|什么时候|进度/.test(text)) {
+      return '当前在第 ' + Math.min(task.step + 1, steps.length) + ' 步，预计还需 2—4 分钟。完成后会推送提示。';
+    }
+    if (/加|补充|也要|附/.test(text)) {
+      return '已作为约束追加到后续步骤，不影响已完成部分，也不重复消耗。';
+    }
+    if (/口径|统计|怎么算/.test(text)) {
+      return '已按本单位口径资产处理。如需临时改口径，会作为本任务的一次性约束，不写入长期资产。';
+    }
+    return '已记录你的追问，会在后续步骤中一并考虑。';
+  }
+
+  function send() {
+    var box = U.$('#mInput');
+    var text = box.value.trim();
+    if (!text) return;
+    box.value = '';
+    if (busy()) {
+      var node = msgUser(text, true);
+      queue.push({ text: text, node: node });
+      updateHint();
+      App.Toast.show('已插入待送达队列', '当前步骤完成后送达，任务不中断', 'info', 3000);
+      if (Store.task(task.id).status !== 'running') {
+        setTimeout(flushQueue, 900);   // 排队/待确认态没有 tick，主动送达
+      }
+      return;
+    }
+    msgUser(text);
+    setTimeout(function () { msgAgent(reply(text)); }, 500);
+  }
+  U.$('#mSend').addEventListener('click', send);
+  U.$('#mInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }
+  });
+
+  /* ------------------------ 产物预览 / 分享 ------------------------ */
+  stream.addEventListener('click', function (e) {
+    var pv = e.target.closest('[data-pv]');
+    if (pv) {
+      App.Toast.show('产物预览', pv.getAttribute('data-pv') +
+        '（移动端提供只读预览，编辑请用桌面端）', 'info', 4500);
+      return;
+    }
+    var sh = e.target.closest('[data-share]');
+    if (sh) {
+      U.$('#mShareName').textContent = sh.getAttribute('data-share');
+      App.Modal.open('mShare');
+    }
+  });
+  U.$$('#mShare [data-act]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      App.Modal.close('mShare');
+      App.Toast.show(b.getAttribute('data-act') + '已完成',
+        U.$('#mShareName').textContent, 'ok', 4000);
+    });
+  });
+
+  updateHint();
+})();
+</script>
+</body>
+</html>

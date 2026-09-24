@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知识资产 · 办公 Agent 平台原型</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主内容</a>
+
+<div class="app">
+  <div data-sidenav="knowledge"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>知识资产</h1>
+      <span class="topbar__sub">Spec 4.5 · 核心差异化能力</span>
+      <span class="topbar__spacer"></span>
+      <button class="iconbtn" data-theme-toggle type="button">☾</button>
+    </header>
+
+    <main class="page" id="main">
+      <div class="section" data-taskbar></div>
+
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true"  data-tab="kb">文档知识库</button>
+        <button role="tab" aria-selected="false" data-tab="tpl">模板库</button>
+        <button role="tab" aria-selected="false" data-tab="field">字段口径定义</button>
+        <button role="tab" aria-selected="false" data-tab="fb">修改意见回写</button>
+        <button role="tab" aria-selected="false" data-tab="ver">版本与变更记录</button>
+      </div>
+
+      <!-- ================= 文档知识库 ================= -->
+      <section data-pane="kb">
+        <div class="grid-2" style="grid-template-columns:260px minmax(0,1fr);align-items:start">
+          <!-- 知识库列表 -->
+          <div class="card">
+            <div class="card__head"><h3>知识库</h3><span class="spacer"></span>
+              <button class="btn btn--sm" type="button" id="newKb">+ 新建</button></div>
+            <div class="card__body" style="padding:var(--sp-2)">
+              <ul class="side-list" id="kbList" style="gap:0"></ul>
+            </div>
+          </div>
+
+          <!-- 当前知识库详情 -->
+          <div>
+            <!-- 权限不足提示（区分不可见与不可编辑） -->
+            <div id="permNotice" class="section" style="margin-bottom:var(--sp-4)"></div>
+
+            <!-- 上传区 -->
+            <div class="card" style="margin-bottom:var(--sp-4)">
+              <div class="card__head">
+                <h3 id="kbTitle">评估材料知识库</h3>
+                <span class="spacer"></span>
+                <span id="kbScope" class="tag tag--brand">租户共享</span>
+                <button class="btn btn--sm" type="button" id="permBtn">权限设置</button>
+              </div>
+              <div class="card__body">
+                <div class="dropzone" id="drop" tabindex="0" role="button"
+                     aria-label="上传文档到当前知识库">
+                  <strong>上传文档到当前知识库</strong>
+                  支持 docx / xlsx / pptx / pdf / md，单文件 ≤ 200MB。上传后进入解析队列。
+                </div>
+                <p class="hint">演示：点击下列文件名模拟上传，可观察「解析中 → 已就绪」与失败态。</p>
+                <div class="btn-row" id="uploadDemo"></div>
+              </div>
+            </div>
+
+            <!-- 文档列表 + 解析状态 -->
+            <div class="card">
+              <div class="card__head">
+                <h3>文档与解析状态</h3>
+                <span class="spacer"></span>
+                <span class="hint" id="docCount"></span>
+              </div>
+              <div id="docHost"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 模板库 ================= -->
+      <section data-pane="tpl" hidden>
+        <div class="section__head">
+          <h2>模板与套版资产</h2>
+          <span class="section__desc">四级优先级合并生效：平台通用 &lt; 租户共享 &lt; 工作区专属 &lt; 个人私有</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>模板名称</th><th>适用场景</th><th>生效范围</th>
+              <th>优先级</th><th>版本</th><th>最近更新</th><th>操作</th></tr></thead>
+            <tbody id="tplBody"></tbody>
+          </table>
+        </div>
+        <div class="banner banner--info" style="margin-top:var(--sp-4)">
+          <span aria-hidden="true">ℹ</span>
+          <span>同名模板按优先级覆盖：个人私有 &gt; 工作区专属 &gt; 租户共享 &gt; 平台通用。
+            例如「自评报告模板」平台与租户各有一份时，任务实际套用租户版。</span>
+        </div>
+      </section>
+
+      <!-- ================= 字段口径 ================= -->
+      <section data-pane="field" hidden>
+        <div class="section__head">
+          <h2>字段口径定义表</h2>
+          <span class="section__desc">解决「同一指标各部门算法不同」——口径一旦定义，所有任务强制遵循</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>指标 / 字段</th><th>本单位口径</th><th>数据来源</th>
+              <th>生效范围</th><th>来源</th></tr></thead>
+            <tbody id="fieldBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ================= 修改意见回写 ================= -->
+      <section data-pane="fb" hidden>
+        <div class="section__head">
+          <h2>修改意见回写</h2>
+          <span class="section__desc">用户对 AI 产出的修改与审核意见结构化留存，下次同类任务自动作为约束应用</span>
+        </div>
+        <div id="fbHost"></div>
+      </section>
+
+      <!-- ================= 版本与变更记录 ================= -->
+      <section data-pane="ver" hidden>
+        <div class="section__head">
+          <h2>版本与变更记录</h2>
+          <span class="section__desc">可回溯「是谁、什么时候改的」</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>时间</th><th>资产</th><th>动作</th><th>版本</th><th>操作人</th><th>生效范围</th></tr></thead>
+            <tbody id="verBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- ===== 权限设置：读写分离 ===== -->
+<div class="modal-backdrop" id="permModal" aria-hidden="true">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="permTitle">
+    <div class="modal__head">
+      <div><h2 id="permTitle">知识库权限设置</h2>
+      <p>读写分离：可查看不等于可编辑或删除。检索始终强制携带租户与权限过滤。</p></div>
+      <span class="spacer"></span>
+      <button class="iconbtn" type="button" data-modal-close="permModal" aria-label="关闭">×</button>
+    </div>
+    <div class="modal__body">
+      <div class="field">
+        <label class="field__label" for="permScope">生效范围（资产分级）</label>
+        <select id="permScope">
+          <option>平台通用（所有租户可见）</option>
+          <option selected>租户共享（本租户所有工作区）</option>
+          <option>工作区专属（仅教务处）</option>
+          <option>个人私有（仅我）</option>
+        </select>
+        <p class="hint">范围决定「谁能看到」；下面的权限矩阵决定「看到的人能做什么」。</p>
+      </div>
+      <div class="table-wrap">
+        <table class="data perm-matrix">
+          <thead><tr><th>角色</th><th>查看</th><th>检索引用</th><th>上传</th><th>编辑</th><th>删除</th></tr></thead>
+          <tbody id="permBody"></tbody>
+        </table>
+      </div>
+      <div class="banner banner--warn" style="margin-top:var(--sp-4)">
+        <span aria-hidden="true">🔒</span>
+        <span>普通成员默认仅「查看 + 检索引用」。取消勾选「查看」后，该角色在检索结果中完全看不到本库内容
+          （不可见 ≠ 可见但不可编辑，两者提示文案不同）。</span>
+      </div>
+    </div>
+    <div class="modal__foot">
+      <span class="hint">变更即时生效并写入审计</span>
+      <span class="spacer"></span>
+      <button class="btn" type="button" data-modal-close="permModal">取消</button>
+      <button class="btn btn--primary" type="button" id="permSave">保存权限</button>
+    </div>
+  </div>
+</div>
+
+<script src="../assets/app.js"></script>
+<script>
+/* =========================================================================
+   知识资产页（Spec 4.5 / 3.4）
+   演示：文档上传的解析中 → 已就绪 / 解析失败（可重试）状态流转；
+         读写分离的权限矩阵；四级资产范围；修改意见回写；版本与审计记录。
+   ========================================================================= */
+(function () {
+  var U = App.Util;
+
+  /* ---------------- 演示数据 ---------------- */
+  var KBS = [
+    { id: 'kb-edu-eval', name: '评估材料知识库', scope: '租户共享', role: 'edu',
+      desc: '审核评估相关规章、上轮反馈、历史自评报告' },
+    { id: 'kb-edu-doc', name: '公文与制度库', scope: '租户共享', role: 'edu',
+      desc: '公文格式规范、校内规章制度' },
+    { id: 'kb-mfg-qms', name: '质量体系文件库', scope: '租户共享', role: 'mfg',
+      desc: '质量手册、程序文件、体系标准条款' },
+    { id: 'kb-mfg-sup', name: '供应商与采购库', scope: '工作区专属', role: 'mfg',
+      desc: '供应商准入资料、对账规则、价格协议' },
+    { id: 'kb-personal', name: '我的草稿库', scope: '个人私有', role: 'edu',
+      desc: '个人临时材料，不参与共享检索' },
+    { id: 'kb-locked', name: '人事薪酬资料库', scope: '租户共享', role: 'edu',
+      desc: '受限库：当前账号无查看权限', locked: true },
+    { id: 'kb-empty', name: '2027 迎新专项库', scope: '工作区专属', role: 'edu',
+      desc: '新建库，尚未上传任何文档', empty: true }
+  ];
+
+  var DOCS = {
+    'kb-edu-eval': [
+      { name: '2026年本科教育教学审核评估实施方案.pdf', size: '2.4 MB', state: 'ready',
+        chunks: 318, cited: 27, by: '刘敏', at: '09-12' },
+      { name: '审核评估专家组反馈意见（2026-09）.docx', size: '186 KB', state: 'ready',
+        chunks: 42, cited: 19, by: '刘敏', at: '09-18' },
+      { name: '上一轮本科教学工作合格评估自评报告.docx', size: '3.1 MB', state: 'ready',
+        chunks: 512, cited: 34, by: '王建华', at: '08-30' },
+      { name: '教务系统-课程与学时统计-2025学年.xlsx', size: '742 KB', state: 'parsing',
+        progress: 62, by: '刘敏', at: '刚刚' },
+      { name: '高等教育质量监测数据平台填报说明.pdf', size: '1.2 MB', state: 'failed',
+        reason: 'PDF 为扫描件且未嵌入文字层，无法提取文本。建议先做 OCR 后重新上传，或改上传可复制文字的版本。',
+        by: '黄志远', at: '09-20' },
+      { name: '江城理工大学本科教学工作规程（2024修订）.docx', size: '264 KB', state: 'ready',
+        chunks: 96, cited: 41, by: '王建华', at: '06-11' }
+    ],
+    'kb-edu-doc': [
+      { name: '党政机关公文格式（GB∕T 9704-2012）.pdf', size: '820 KB', state: 'ready',
+        chunks: 74, cited: 58, by: '办公室', at: '03-04' },
+      { name: '江城理工大学公文处理办法.docx', size: '148 KB', state: 'ready',
+        chunks: 52, cited: 63, by: '办公室', at: '05-22' }
+    ],
+    'kb-mfg-qms': [
+      { name: '质量手册-QM-2026-RevC.docx', size: '1.6 MB', state: 'ready',
+        chunks: 246, cited: 88, by: '陈国栋', at: '07-15' },
+      { name: '程序文件汇编-QP全套.docx', size: '4.2 MB', state: 'ready',
+        chunks: 684, cited: 112, by: '陈国栋', at: '07-15' },
+      { name: 'IATF16949条款对照表.xlsx', size: '196 KB', state: 'ready',
+        chunks: 118, cited: 74, by: '质量部', at: '02-08' },
+      { name: '客户特殊要求汇总（CSR）.xlsx', size: '312 KB', state: 'parsing',
+        progress: 28, by: '陈国栋', at: '刚刚' }
+    ],
+    'kb-mfg-sup': [
+      { name: '供应商准入评审资料-宏昌精密.pdf', size: '5.8 MB', state: 'ready',
+        chunks: 204, cited: 12, by: '周雅琴', at: '04-19' },
+      { name: '年度价格协议汇总-2026.xlsx', size: '424 KB', state: 'ready',
+        chunks: 156, cited: 31, by: '周雅琴', at: '01-10' }
+    ],
+    'kb-personal': [
+      { name: '评估汇报提纲草稿.docx', size: '36 KB', state: 'ready',
+        chunks: 12, cited: 0, by: '刘敏', at: '09-22' }
+    ],
+    'kb-locked': [],
+    'kb-empty': []
+  };
+
+  var UPLOAD_DEMO = {
+    edu: ['人事处-专任教师结构表.xlsx', '各学院整改落实情况汇总.docx', '学生满意度调查原始数据.xlsx'],
+    mfg: ['来料检验记录-PN44827B.xlsx', '内审检查表-2026年度.docx', '设备点检记录汇总.xlsx']
+  };
+
+  var TEMPLATES = [
+    ['自评报告模板（2026版）', '生成审核评估自评报告', '租户共享', 2, 'v7', '09-14 刘敏'],
+    ['自评报告参考模板', '生成审核评估自评报告', '平台通用', 1, 'v3', '05-02 平台'],
+    ['整改台账模板', '整理评估整改台账', '工作区专属（教务处）', 3, 'v4', '09-18 刘敏'],
+    ['红头公文模板（通知）', '起草校内通知公文', '租户共享', 2, 'v11', '06-20 办公室'],
+    ['8D 报告模板', '生成 8D 质量报告', '租户共享', 2, 'v4', '07-28 陈国栋'],
+    ['8D 报告模板（客户指定版）', '生成 8D 质量报告', '个人私有（陈国栋）', 4, 'v2', '09-21 陈国栋'],
+    ['对账差异明细表模板', '供应商对账核查', '工作区专属（采购部）', 3, 'v6', '08-30 周雅琴'],
+    ['作业指导书模板', '编制作业指导书 SOP', '租户共享', 2, 'v9', '03-12 李伟明']
+  ];
+
+  var FIELDS = [
+    ['师生比', '专任教师数 ÷ 折合在校生数；折合数按本科 1.0、硕士 1.5 折算；不计入在职攻读研究生',
+      '人事系统（教师）+ 教务系统（学生）', '租户共享', '修改意见回写（2026-09-18）'],
+    ['生均教学科研仪器设备值', '设备原值合计 ÷ 折合在校生数；仅计单价 ≥ 800 元的教学科研设备',
+      '资产管理系统', '租户共享', '手工定义'],
+    ['本科课程教授主讲率', '教授/副教授主讲本科课程门次 ÷ 本科课程总门次；重复开课按门次计',
+      '教务系统排课表', '工作区专属（教务处）', '手工定义'],
+    ['不良品率（PPM）', '不合格品数 ÷ 检验总数 × 10⁶；返修后合格仍计入不合格',
+      'ERP 质检模块', '租户共享', '修改意见回写（2026-08-04）'],
+    ['一次通过率 FTT', '首次检验合格数 ÷ 投入数；不含返工后合格',
+      'MES 导出 + 手工台账', '工作区专属（质量部）', '手工定义'],
+    ['对账差异容差', '单笔金额差异绝对值 ≤ 50 元视为一致，不列入差异明细',
+      '—', '工作区专属（采购部）', '修改意见回写（2026-07-22）']
+  ];
+
+  var FEEDBACKS = [
+    { kind: '字段口径不符（统计方式）', scope: '租户共享', at: '2026-09-18 16:22', by: '刘敏',
+      text: '师生比一律按折合在校生数计算，不计入在职攻读研究生。',
+      applied: 6, target: '2026年本科教育教学审核评估自评报告.docx' },
+    { kind: '用词与行文规范', scope: '租户共享', at: '2026-09-15 10:41', by: '王建华',
+      text: '正文一律使用「本校」，不使用「我校」；章节标题用「一、（一）1.」三级序号。',
+      applied: 11, target: '关于开展2026年秋季学期期中教学检查的通知.docx' },
+    { kind: '结构与章节顺序', scope: '租户共享', at: '2026-08-04 09:03', by: '陈国栋',
+      text: '8D 报告中 D4 根本原因分析必须同时给出鱼骨图与 5Why 两条路径，不可只给其一。',
+      applied: 9, target: '8D报告-来料尺寸超差.docx' },
+    { kind: '格式与版式问题', scope: '工作区（采购部）', at: '2026-07-22 14:55', by: '周雅琴',
+      text: '差异明细表金额列统一保留两位小数并使用会计专用格式，合计行加粗且保留 SUM 公式。',
+      applied: 4, target: '供应商对账差异明细表.xlsx' }
+  ];
+
+  var VERSIONS = [
+    ['2026-09-18 16:22', '字段口径 · 师生比', '更新口径定义（来自修改意见回写）', 'v12 → v13', '刘敏', '租户共享'],
+    ['2026-09-18 15:04', '评估材料知识库', '上传《审核评估专家组反馈意见（2026-09）.docx》', '—', '刘敏', '租户共享'],
+    ['2026-09-14 11:37', '模板 · 自评报告模板（2026版）', '替换封面与目录样式', 'v6 → v7', '刘敏', '租户共享'],
+    ['2026-09-12 09:15', '评估材料知识库', '权限变更：普通成员取消「删除」权限', '—', '王建华', '租户共享'],
+    ['2026-08-04 09:03', '模板 · 8D 报告模板', '新增 D4 双路径分析要求', 'v3 → v4', '陈国栋', '租户共享'],
+    ['2026-07-22 14:55', '模板 · 对账差异明细表模板', '金额列格式与合计公式约束', 'v5 → v6', '周雅琴', '工作区（采购部）']
+  ];
+
+  var PERM_ROLES = [
+    ['平台管理员',   [1, 1, 1, 1, 1]],
+    ['租户管理员',   [1, 1, 1, 1, 1]],
+    ['工作区管理员', [1, 1, 1, 1, 0]],
+    ['普通成员',     [1, 1, 0, 0, 0]],
+    ['外部协作者',   [0, 0, 0, 0, 0]]
+  ];
+
+  /* ---------------- 标签页切换 ---------------- */
+  U.$$('[data-tab]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      U.$$('[data-tab]').forEach(function (x) { x.setAttribute('aria-selected', 'false'); });
+      b.setAttribute('aria-selected', 'true');
+      var k = b.getAttribute('data-tab');
+      U.$$('[data-pane]').forEach(function (p) {
+        p.hidden = p.getAttribute('data-pane') !== k;
+      });
+    });
+  });
+
+  /* ---------------- 知识库列表 ---------------- */
+  var curKb = KBS[0];
+
+  function renderKbList() {
+    U.$('#kbList').innerHTML = KBS.map(function (k) {
+      var active = k.id === curKb.id;
+      return '<li><button type="button" data-kb="' + k.id + '" ' +
+        'style="width:100%;text-align:left;padding:var(--sp-3);border:0;cursor:pointer;' +
+        'font-family:inherit;border-radius:var(--r-md);background:' +
+        (active ? 'var(--brand-50)' : 'transparent') + '">' +
+        '<b style="color:' + (active ? 'var(--brand-600)' : 'var(--fg-strong)') + '">' +
+        U.esc(k.name) + (k.locked ? ' 🔒' : '') + '</b>' +
+        '<span style="font-size:var(--fs-11);color:var(--fg-muted)">' + U.esc(k.scope) +
+        ' · ' + ((DOCS[k.id] || []).length) + ' 篇</span>' +
+        '</button></li>';
+    }).join('');
+  }
+
+  U.$('#kbList').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-kb]');
+    if (!b) return;
+    var id = b.getAttribute('data-kb');
+    curKb = KBS.filter(function (k) { return k.id === id; })[0] || curKb;
+    renderKbList();
+    renderKb();
+  });
+
+  U.$('#newKb').addEventListener('click', function () {
+    var id = 'kb-new-' + Date.now();
+    KBS.push({ id: id, name: '新建知识库', scope: '工作区专属', role: 'edu',
+      desc: '刚创建，尚未上传文档', empty: true });
+    DOCS[id] = [];
+    curKb = KBS[KBS.length - 1];
+    renderKbList(); renderKb();
+    App.Toast.show('知识库已创建', '接下来上传文档并设置可见范围与读写权限', 'ok');
+  });
+
+  /* ---------------- 知识库详情 ---------------- */
+  function renderKb() {
+    U.$('#kbTitle').textContent = curKb.name;
+    U.$('#kbScope').textContent = curKb.scope;
+
+    // 权限不足提示：区分「不可见」与「可见但不可编辑」
+    var notice = U.$('#permNotice');
+    if (curKb.locked) {
+      notice.innerHTML = '<div class="banner banner--err"><span aria-hidden="true">🚫</span>' +
+        '<div><strong>你没有本知识库的查看权限</strong><br>' +
+        '该库内容对你完全不可见，检索时也不会召回其中任何片段。' +
+        '如需访问，请联系租户管理员（人事处 · 王建华）授权。</div></div>';
+    } else if (curKb.scope === '租户共享' && curKb.id === 'kb-edu-doc') {
+      notice.innerHTML = '<div class="banner banner--warn"><span aria-hidden="true">👁</span>' +
+        '<div><strong>你对本知识库只有查看与检索引用权限</strong><br>' +
+        '可以在任务中引用其中内容，但不能上传、编辑或删除文档（读写分离）。</div></div>';
+    } else {
+      notice.innerHTML = '';
+    }
+
+    // 上传区在只读 / 无权限时禁用
+    var readOnly = curKb.locked || curKb.id === 'kb-edu-doc';
+    var drop = U.$('#drop');
+    drop.style.opacity = readOnly ? '.45' : '';
+    drop.style.pointerEvents = readOnly ? 'none' : '';
+    drop.setAttribute('aria-disabled', String(readOnly));
+
+    // 演示上传按钮
+    U.$('#uploadDemo').innerHTML = readOnly ? '' :
+      (UPLOAD_DEMO[curKb.role] || UPLOAD_DEMO.edu).map(function (n) {
+        return '<button class="btn btn--sm" type="button" data-up="' + U.esc(n) + '">+ ' + U.esc(n) + '</button>';
+      }).join('') +
+      '<button class="btn btn--sm btn--danger" type="button" data-up-fail="扫描版-整改通知（图片PDF）.pdf">' +
+      '+ 上传一个会解析失败的文件</button>';
+
+    renderDocs();
+  }
+
+  function renderDocs() {
+    var docs = DOCS[curKb.id] || [];
+    var host = U.$('#docHost');
+    U.$('#docCount').textContent = docs.length ? docs.length + ' 篇文档' : '';
+
+    if (curKb.locked) {
+      host.innerHTML = '<div class="empty"><div class="empty__icon" aria-hidden="true">🔒</div>' +
+        '<h3>无权访问</h3><p>本知识库的文档列表对你不可见。</p></div>';
+      return;
+    }
+    if (!docs.length) {
+      host.innerHTML = '<div class="empty"><div class="empty__icon" aria-hidden="true">📚</div>' +
+        '<h3>这个知识库还没有文档</h3>' +
+        '<p>上传本单位的规章制度、历史材料、标准条款或产品工艺资料。' +
+        '上传后会自动切片建索引，任务执行时可被检索引用并在产出中标注来源。</p></div>';
+      return;
+    }
+
+    host.innerHTML = '<div class="table-wrap" style="border:0;border-radius:0">' +
+      '<table class="data"><thead><tr>' +
+      '<th>文档</th><th style="width:150px">解析状态</th><th style="width:88px" class="num">切片</th>' +
+      '<th style="width:88px" class="num">被引用</th><th style="width:120px">上传</th>' +
+      '<th style="width:150px">操作</th></tr></thead><tbody>' +
+      docs.map(function (d, i) {
+        var st;
+        if (d.state === 'ready') st = '<span class="tag tag--ok"><i class="dot"></i>已就绪</span>';
+        else if (d.state === 'parsing') st = '<span class="tag tag--run"><i class="dot dot--pulse"></i>解析中 ' +
+          (d.progress || 0) + '%</span>' +
+          '<div class="progress" style="margin-top:5px"><div class="progress__fill" style="width:' +
+          (d.progress || 0) + '%"></div></div>';
+        else st = '<span class="tag tag--err"><i class="dot"></i>解析失败</span>';
+
+        var acts = d.state === 'failed'
+          ? '<button class="btn btn--sm btn--primary" type="button" data-reparse="' + i + '">重新解析</button>'
+          : d.state === 'ready'
+            ? '<button class="btn btn--sm" type="button" data-doc-prev="' + i + '">查看切片</button>'
+            : '<button class="btn btn--sm" type="button" disabled>解析中…</button>';
+        acts += '<button class="btn btn--sm btn--ghost" type="button" data-doc-del="' + i + '">删除</button>';
+
+        return '<tr><td>' +
+          '<div style="display:flex;align-items:center;gap:var(--sp-3)">' + U.fileIcon(d.name, true) +
+          '<div><div class="cell-main" style="word-break:break-all">' + U.esc(d.name) + '</div>' +
+          '<div class="cell-sub">' + U.esc(d.size) + '</div></div></div>' +
+          (d.state === 'failed'
+            ? '<div class="banner banner--err" style="margin-top:var(--sp-2);font-size:var(--fs-12)">' +
+              '<span aria-hidden="true">⚠</span><span>' + U.esc(d.reason) + '</span></div>' : '') +
+          '</td>' +
+          '<td>' + st + '</td>' +
+          '<td class="num">' + (d.chunks != null ? d.chunks : '—') + '</td>' +
+          '<td class="num">' + (d.cited != null ? d.cited : '—') + '</td>' +
+          '<td class="cell-sub">' + U.esc(d.by) + '<br>' + U.esc(d.at) + '</td>' +
+          '<td><div class="btn-row">' + acts + '</div></td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  /* ---------------- 上传：解析中 → 已就绪 的状态流转 ---------------- */
+  U.$('#uploadDemo').addEventListener('click', function (e) {
+    var ok = e.target.closest('[data-up]');
+    if (ok) { simulateUpload(ok.getAttribute('data-up'), false); ok.disabled = true; return; }
+    var bad = e.target.closest('[data-up-fail]');
+    if (bad) { simulateUpload(bad.getAttribute('data-up-fail'), true); bad.disabled = true; }
+  });
+  U.$('#drop').addEventListener('click', function () {
+    App.Toast.show('原型说明', '请使用下方演示按钮模拟上传文件', 'info', 3000);
+  });
+
+  function simulateUpload(name, willFail) {
+    var doc = { name: name, size: (Math.random() * 3 + 0.2).toFixed(1) + ' MB',
+      state: 'parsing', progress: 0, by: '刘敏', at: '刚刚' };
+    DOCS[curKb.id] = DOCS[curKb.id] || [];
+    DOCS[curKb.id].unshift(doc);
+    curKb.empty = false;
+    renderKbList();
+    renderDocs();
+    App.Toast.show('已上传，进入解析队列', name, 'info', 3000);
+
+    var iv = setInterval(function () {
+      doc.progress += 12 + Math.floor(Math.random() * 14);
+      if (doc.progress >= 100) {
+        clearInterval(iv);
+        if (willFail) {
+          doc.state = 'failed';
+          doc.reason = 'PDF 为扫描件且未嵌入文字层，无法提取文本。' +
+            '建议先做 OCR 后重新上传，或改上传可复制文字的版本。';
+          App.Toast.show('解析失败', name + ' · 原因已在列表中说明，可重试', 'err', 6000);
+        } else {
+          doc.state = 'ready';
+          doc.chunks = 40 + Math.floor(Math.random() * 400);
+          doc.cited = 0;
+          App.Toast.show('解析完成，已可被任务检索引用', name, 'ok', 4000);
+        }
+      }
+      renderDocs();
+    }, 700);
+  }
+
+  /* ---------------- 文档行操作 ---------------- */
+  U.$('#docHost').addEventListener('click', function (e) {
+    var rp = e.target.closest('[data-reparse]');
+    if (rp) {
+      var d = DOCS[curKb.id][+rp.getAttribute('data-reparse')];
+      d.state = 'parsing'; d.progress = 0; d.reason = '';
+      renderDocs();
+      var iv = setInterval(function () {
+        d.progress += 18;
+        if (d.progress >= 100) {
+          clearInterval(iv);
+          d.state = 'ready'; d.chunks = 128; d.cited = 0;
+          App.Toast.show('重新解析成功', d.name + ' · 已完成 OCR 并建索引', 'ok');
+        }
+        renderDocs();
+      }, 600);
+      return;
+    }
+    var del = e.target.closest('[data-doc-del]');
+    if (del) {
+      var i = +del.getAttribute('data-doc-del');
+      // 读写分离：只读库不允许删除
+      if (curKb.id === 'kb-edu-doc') {
+        App.Toast.show('无法删除', '你对本知识库只有查看与检索引用权限（读写分离）', 'err');
+        return;
+      }
+      var removed = DOCS[curKb.id].splice(i, 1)[0];
+      renderKbList(); renderDocs();
+      App.Toast.show('已删除文档', removed.name + ' · 操作已写入审计日志', 'info');
+      return;
+    }
+    var pv = e.target.closest('[data-doc-prev]');
+    if (pv) {
+      var doc = DOCS[curKb.id][+pv.getAttribute('data-doc-prev')];
+      App.Toast.show('切片信息', doc.name + '：' + doc.chunks + ' 个片段，已被任务引用 ' +
+        doc.cited + ' 次', 'info', 4500);
+    }
+  });
+
+  /* ---------------- 权限设置：读写分离矩阵 ---------------- */
+  U.$('#permBody').innerHTML = PERM_ROLES.map(function (r) {
+    return '<tr><td class="cell-main">' + r[0] + '</td>' +
+      r[1].map(function (v, i) {
+        var fixed = r[0] === '平台管理员' || r[0] === '租户管理员';
+        return '<td><input type="checkbox"' + (v ? ' checked' : '') +
+          (fixed ? ' disabled' : '') + ' aria-label="' + r[0] + ' 权限 ' + (i + 1) + '"></td>';
+      }).join('') + '</tr>';
+  }).join('');
+
+  U.$('#permBtn').addEventListener('click', function () {
+    if (curKb.locked) {
+      App.Toast.show('无权操作', '你没有本知识库的管理权限', 'err');
+      return;
+    }
+    App.Modal.open('permModal');
+  });
+  U.$('#permSave').addEventListener('click', function () {
+    var scope = U.$('#permScope').value.replace(/（.*/, '');
+    curKb.scope = scope;
+    App.Modal.close('permModal');
+    renderKbList(); renderKb();
+    App.Toast.show('权限已保存并即时生效',
+      '生效范围：' + scope + ' · 变更已写入审计日志（操作人 刘敏）', 'ok', 5000);
+  });
+
+  /* ---------------- 其他标签页内容 ---------------- */
+  var PRIO = ['', '平台通用', '租户共享', '工作区专属', '个人私有'];
+  U.$('#tplBody').innerHTML = TEMPLATES.map(function (t) {
+    var overridden = t[0] === '自评报告参考模板' || t[0] === '8D 报告模板';
+    return '<tr' + (overridden ? ' style="opacity:.6"' : '') + '>' +
+      '<td class="cell-main">' + U.esc(t[0]) +
+      (overridden ? ' <span class="tag">被高优先级同名模板覆盖</span>' : '') + '</td>' +
+      '<td class="cell-sub">' + U.esc(t[1]) + '</td>' +
+      '<td>' + U.esc(t[2]) + '</td>' +
+      '<td><span class="tag tag--brand">P' + t[3] + ' ' + PRIO[t[3]] + '</span></td>' +
+      '<td class="mono">' + t[4] + '</td>' +
+      '<td class="cell-sub">' + U.esc(t[5]) + '</td>' +
+      '<td><div class="btn-row"><button class="btn btn--sm" type="button">查看</button>' +
+      '<button class="btn btn--sm btn--ghost" type="button">新版本</button></div></td></tr>';
+  }).join('');
+
+  U.$('#fieldBody').innerHTML = FIELDS.map(function (f) {
+    return '<tr><td class="cell-main">' + U.esc(f[0]) + '</td>' +
+      '<td style="max-width:360px">' + U.esc(f[1]) + '</td>' +
+      '<td class="cell-sub">' + U.esc(f[2]) + '</td>' +
+      '<td>' + U.esc(f[3]) + '</td>' +
+      '<td>' + (/回写/.test(f[4])
+        ? '<span class="tag tag--ok">' + U.esc(f[4]) + '</span>'
+        : '<span class="tag">' + U.esc(f[4]) + '</span>') + '</td></tr>';
+  }).join('');
+
+  function renderFeedback() {
+    // 把会话页刚提交的修改意见并入展示，体现回写链路闭环
+    var live = App.Store.load().feedback.map(function (x) {
+      return { kind: x.kind, scope: x.scope, at: '刚刚', by: '刘敏',
+        text: x.text, applied: 0, target: x.target, fresh: true };
+    });
+    var all = live.concat(FEEDBACKS);
+    U.$('#fbHost').innerHTML = all.length
+      ? all.map(function (f) {
+          return '<div class="card" style="margin-bottom:var(--sp-3)"><div class="card__body">' +
+            '<div style="display:flex;gap:var(--sp-2);align-items:center;flex-wrap:wrap;margin-bottom:var(--sp-2)">' +
+            '<span class="tag tag--brand">' + U.esc(f.kind) + '</span>' +
+            '<span class="tag">生效范围：' + U.esc(f.scope) + '</span>' +
+            (f.fresh ? '<span class="tag tag--ok">本次会话新增</span>' : '') +
+            '<span class="spacer" style="flex:1"></span>' +
+            '<span class="cell-sub">' + U.esc(f.at) + ' · ' + U.esc(f.by) + '</span></div>' +
+            '<p style="font-size:var(--fs-14);color:var(--fg-strong)">' + U.esc(f.text) + '</p>' +
+            '<p class="hint">来源产物：' + U.esc(f.target || '—') + ' · ' +
+            (f.applied ? '已在后续 <strong>' + f.applied + '</strong> 个同类任务中自动应用'
+                       : '将在下次同类任务中自动应用') + '</p>' +
+            '</div></div>';
+        }).join('')
+      : '<div class="card"><div class="empty"><div class="empty__icon" aria-hidden="true">✍️</div>' +
+        '<h3>还没有沉淀任何修改意见</h3>' +
+        '<p>在会话页的产出物卡片上点「提出修改意见」，意见会结构化留存并在下次同类任务自动应用。</p></div></div>';
+  }
+  renderFeedback();
+
+  U.$('#verBody').innerHTML = VERSIONS.map(function (v) {
+    return '<tr><td class="cell-sub mono">' + U.esc(v[0]) + '</td>' +
+      '<td class="cell-main">' + U.esc(v[1]) + '</td>' +
+      '<td>' + U.esc(v[2]) + '</td>' +
+      '<td class="mono">' + U.esc(v[3]) + '</td>' +
+      '<td>' + U.esc(v[4]) + '</td>' +
+      '<td class="cell-sub">' + U.esc(v[5]) + '</td></tr>';
+  }).join('');
+
+  renderKbList();
+  renderKb();
+})();
+</script>
+</body>
+</html>

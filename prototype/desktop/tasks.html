@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>任务中心 · 办公 Agent 平台原型</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主内容</a>
+
+<div class="app">
+  <div data-sidenav="tasks"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>任务中心</h1>
+      <span class="topbar__sub">Spec 4.4 · 任务与会话分离后的统一管理</span>
+      <span class="topbar__spacer"></span>
+      <input type="search" id="kw" placeholder="搜索任务标题或任务号" style="width:220px" aria-label="搜索任务">
+      <button class="iconbtn" data-theme-toggle type="button">☾</button>
+    </header>
+
+    <main class="page" id="main">
+
+      <!-- 并发占用提示（含升档引导） -->
+      <div class="section" id="concurrency"></div>
+
+      <!-- 筛选器：状态 / 场景 / 排序 -->
+      <section class="section">
+        <div class="card">
+          <div class="card__body" style="display:flex;gap:var(--sp-4);flex-wrap:wrap;align-items:center">
+            <div>
+              <div class="field__label" style="margin-bottom:6px">按状态筛选</div>
+              <div class="segmented" role="group" aria-label="按状态筛选任务" id="statusFilter">
+                <button type="button" data-st="all" aria-pressed="true">全部</button>
+                <button type="button" data-st="running" aria-pressed="false">执行中</button>
+                <button type="button" data-st="queued" aria-pressed="false">排队中</button>
+                <button type="button" data-st="waiting" aria-pressed="false">等待确认</button>
+                <button type="button" data-st="done" aria-pressed="false">已完成</button>
+                <button type="button" data-st="failed" aria-pressed="false">失败</button>
+                <button type="button" data-st="cancelled" aria-pressed="false">已取消</button>
+              </div>
+            </div>
+            <div style="min-width:180px">
+              <label class="field__label" for="sceneFilter" style="margin-bottom:6px">按场景筛选</label>
+              <select id="sceneFilter"><option value="all">全部场景</option></select>
+            </div>
+            <div style="min-width:150px">
+              <label class="field__label" for="sortBy" style="margin-bottom:6px">排序</label>
+              <select id="sortBy">
+                <option value="updated">最近更新优先</option>
+                <option value="created">创建时间倒序</option>
+                <option value="status">按状态分组</option>
+              </select>
+            </div>
+            <span style="flex:1"></span>
+            <div>
+              <div class="field__label" style="margin-bottom:6px">批量操作</div>
+              <div class="btn-row">
+                <button class="btn btn--sm" type="button" id="bulkRetry" disabled>重试所选</button>
+                <button class="btn btn--sm btn--danger" type="button" id="bulkCancel" disabled>取消所选</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 任务列表 -->
+      <section class="section">
+        <div class="section__head">
+          <h2>任务列表</h2>
+          <span class="section__desc" id="countHint"></span>
+        </div>
+        <div id="listHost"></div>
+      </section>
+
+      <p class="hint">
+        额度以<strong>产物与任务</strong>为单位呈现，不以会话次数计。
+        <button class="btn btn--sm btn--ghost" data-reset-demo type="button">重置演示数据</button>
+      </p>
+    </main>
+  </div>
+</div>
+
+<!-- ===== 任务详情（执行日志 / 产物 / 消耗） ===== -->
+<div class="modal-backdrop" id="detailModal" aria-hidden="true">
+  <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="dtTitle">
+    <div class="modal__head">
+      <div>
+        <h2 id="dtTitle">任务详情</h2>
+        <p id="dtMeta"></p>
+      </div>
+      <span class="spacer"></span>
+      <button class="iconbtn" type="button" data-modal-close="detailModal" aria-label="关闭">×</button>
+    </div>
+    <div class="modal__body">
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true"  data-tab="log">执行日志</button>
+        <button role="tab" aria-selected="false" data-tab="out">产物</button>
+        <button role="tab" aria-selected="false" data-tab="use">消耗</button>
+      </div>
+      <div id="dtBody"></div>
+    </div>
+    <div class="modal__foot">
+      <span class="hint" id="dtFootHint"></span>
+      <span class="spacer"></span>
+      <a class="btn" id="dtGoSession" href="#">跳回来源会话</a>
+      <button class="btn" type="button" data-modal-close="detailModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script src="../assets/app.js"></script>
+<script>
+/* =========================================================================
+   任务中心（Spec 4.4）
+   - 状态 / 场景筛选与排序真实过滤列表
+   - 取消 / 重试真实改变行状态并回写 Store（与会话页、移动端共享）
+   - 失败原因归类展示；空态；并发上限提示与升档引导
+   ========================================================================= */
+(function () {
+  var U = App.Util, Store = App.Store, S = App.Scenes;
+  var f = { st: 'all', scene: 'all', sort: 'updated', kw: '' };
+  var selected = {};
+
+  /* 场景筛选下拉：只列出实际出现过的场景 */
+  (function fillScenes() {
+    var used = {}, opts = [];
+    Store.tasks().forEach(function (t) {
+      if (!used[t.scene]) { used[t.scene] = true; opts.push(t.scene); }
+    });
+    var sel = U.$('#sceneFilter');
+    opts.forEach(function (id) {
+      var s = S.get(id);
+      var o = document.createElement('option');
+      o.value = id;
+      o.textContent = s ? s.title : id;
+      sel.appendChild(o);
+    });
+  })();
+
+  /* 失败原因归类（Spec 4.4 状态与反馈） */
+  function failCategory(reason) {
+    if (!reason) return '未分类';
+    if (/合并单元格|表头|解析/.test(reason)) return '数据源格式问题';
+    if (/超时|时长|步数/.test(reason)) return '执行超限';
+    if (/权限|无权|拒绝/.test(reason)) return '权限不足';
+    if (/额度|配额|熔断/.test(reason)) return '额度不足';
+    return '其他';
+  }
+
+  function filtered() {
+    var list = Store.tasks().slice();
+    if (f.st !== 'all')    list = list.filter(function (t) { return t.status === f.st; });
+    if (f.scene !== 'all') list = list.filter(function (t) { return t.scene === f.scene; });
+    if (f.kw) {
+      var k = f.kw.toLowerCase();
+      list = list.filter(function (t) {
+        return (t.title + ' ' + t.id).toLowerCase().indexOf(k) >= 0;
+      });
+    }
+    var ORDER = ['running', 'waiting', 'queued', 'failed', 'done', 'cancelled'];
+    if (f.sort === 'created') list.sort(function (a, b) { return b.created - a.created; });
+    else if (f.sort === 'status') list.sort(function (a, b) {
+      return ORDER.indexOf(a.status) - ORDER.indexOf(b.status) || b.updated - a.updated;
+    });
+    else list.sort(function (a, b) { return b.updated - a.updated; });
+    return list;
+  }
+
+  function render() {
+    var list = filtered();
+    var host = U.$('#listHost');
+    U.$('#countHint').textContent = '共 ' + list.length + ' 个任务' +
+      (f.st === 'all' ? '' : '（已按「' + (App.STATUS[f.st] || {}).label + '」筛选）');
+
+    /* --- 空态（区分「完全没有任务」与「筛选后无结果」） --- */
+    if (!list.length) {
+      var none = Store.tasks().length === 0;
+      host.innerHTML = '<div class="card"><div class="empty">' +
+        '<div class="empty__icon" aria-hidden="true">' + (none ? '📭' : '🔎') + '</div>' +
+        '<h3>' + (none ? '还没有任何任务' : '当前筛选条件下没有任务') + '</h3>' +
+        '<p>' + (none
+          ? '任务从场景工作台发起。选一张场景卡、按引导填写要点，提交后任务会异步执行，进度会在这里汇总。'
+          : '试试切换状态筛选，或清空搜索关键词。') + '</p>' +
+        '<div class="btn-row" style="justify-content:center">' +
+        (none ? '<a class="btn btn--primary" href="workbench.html">去场景工作台</a>'
+              : '<button class="btn" type="button" id="clearFilter">清除全部筛选</button>') +
+        '</div></div></div>';
+      var cf = U.$('#clearFilter');
+      if (cf) cf.addEventListener('click', function () {
+        f = { st: 'all', scene: 'all', sort: f.sort, kw: '' };
+        U.$('#kw').value = '';
+        U.$('#sceneFilter').value = 'all';
+        U.$$('#statusFilter button').forEach(function (b) {
+          b.setAttribute('aria-pressed', String(b.getAttribute('data-st') === 'all'));
+        });
+        render();
+      });
+      return;
+    }
+
+    host.innerHTML = '<div class="table-wrap"><table class="data">' +
+      '<thead><tr>' +
+        '<th style="width:32px"><span class="sr-only">选择</span></th>' +
+        '<th>任务</th><th style="width:108px">状态</th><th style="width:210px">进度与当前动作</th>' +
+        '<th style="width:96px">创建人</th><th style="width:92px">更新</th>' +
+        '<th style="width:60px" class="num">产物</th><th style="width:200px">操作</th>' +
+      '</tr></thead><tbody>' +
+      list.map(row).join('') + '</tbody></table></div>';
+    paintBulk();
+  }
+
+  function row(t) {
+    var s = S.get(t.scene);
+    var ind = S.industryMeta(t.industry);
+    var pct = Math.round(t.step / (t.stepTotal || 1) * 100);
+    var progCls = t.status === 'failed' ? ' progress--err'
+      : t.status === 'done' ? ' progress--ok'
+      : t.status === 'waiting' ? ' progress--warn' : '';
+
+    var acts = '<a class="btn btn--sm" href="session.html?task=' + encodeURIComponent(t.id) + '">会话</a>' +
+      '<button class="btn btn--sm" type="button" data-detail="' + t.id + '">详情</button>';
+    if (t.status === 'running' || t.status === 'queued' || t.status === 'waiting') {
+      acts += '<button class="btn btn--sm btn--danger" type="button" data-cancel="' + t.id + '">取消</button>';
+    }
+    if (t.status === 'failed' || t.status === 'cancelled') {
+      acts += '<button class="btn btn--sm btn--primary" type="button" data-retry="' + t.id + '">重试</button>';
+    }
+
+    var selectable = t.status !== 'done';
+    return '<tr data-row="' + t.id + '">' +
+      '<td>' + (selectable
+        ? '<input type="checkbox" data-sel="' + t.id + '"' + (selected[t.id] ? ' checked' : '') +
+          ' aria-label="选择任务 ' + U.esc(t.title) + '">'
+        : '') + '</td>' +
+      '<td><div class="cell-main">' + U.esc(t.title) + '</div>' +
+        '<div class="cell-sub"><span class="mono">' + U.esc(t.id) + '</span> · ' +
+        '<span class="ind ' + ind.cls + '">' + ind.label + '</span> ' +
+        U.esc(s ? s.title : '自由对话') + '</div></td>' +
+      '<td>' + App.statusTag(t.status) +
+        (t.status === 'failed'
+          ? '<div class="cell-sub" style="margin-top:4px"><span class="tag tag--err">' +
+            failCategory(t.reason) + '</span></div>' : '') + '</td>' +
+      '<td><div class="progress' + progCls + '" style="margin-bottom:5px" role="progressbar" ' +
+        'aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '">' +
+        '<div class="progress__fill" style="width:' + pct + '%"></div></div>' +
+        '<div class="cell-sub">' + t.step + '/' + t.stepTotal + ' 步 · ' + U.esc(t.now) + '</div></td>' +
+      '<td><div class="cell-sub">' + U.esc(t.owner) + '<br>' + U.esc(t.workspace) + '</div></td>' +
+      '<td><div class="cell-sub">' + U.ago(t.updated) + '</div></td>' +
+      '<td class="num">' + ((t.artifacts || []).length || '—') + '</td>' +
+      '<td><div class="btn-row">' + acts + '</div></td>' +
+      '</tr>';
+  }
+
+  /* ---------------- 并发占用提示 + 升档引导 ---------------- */
+  function renderConcurrency() {
+    var running = Store.tasks().filter(function (t) { return t.status === 'running'; }).length;
+    var queued  = Store.tasks().filter(function (t) { return t.status === 'queued'; }).length;
+    var LIMIT = 2;
+    var host = U.$('#concurrency');
+    if (running >= LIMIT) {
+      host.innerHTML = '<div class="banner banner--warn"><span aria-hidden="true">⚠</span>' +
+        '<div class="spacer"><strong>并发已达上限（' + running + '/' + LIMIT + '）</strong><br>' +
+        '当前为「基础档」，同时执行上限 2 个任务；已有 ' + queued + ' 个任务排队等待。' +
+        '升级到「专业档」可放开至 8 个并发。</div>' +
+        '<a class="btn btn--sm btn--primary" href="admin.html#quota">查看升档方案</a></div>';
+    } else {
+      host.innerHTML = '<div class="banner"><span aria-hidden="true">⚡</span>' +
+        '<span class="spacer">并发占用 ' + running + '/' + LIMIT + '（基础档）' +
+        (queued ? ' · ' + queued + ' 个排队中' : '') + '</span>' +
+        '<a href="admin.html#quota" style="font-size:var(--fs-12)">配额与用量</a></div>';
+    }
+  }
+
+  /* ---------------- 行内操作：取消 / 重试 / 详情 ---------------- */
+  U.$('#listHost').addEventListener('click', function (e) {
+    var c = e.target.closest('[data-cancel]');
+    if (c) { doCancel(c.getAttribute('data-cancel')); return; }
+    var r = e.target.closest('[data-retry]');
+    if (r) { doRetry(r.getAttribute('data-retry')); return; }
+    var d = e.target.closest('[data-detail]');
+    if (d) { openDetail(d.getAttribute('data-detail')); return; }
+  });
+  U.$('#listHost').addEventListener('change', function (e) {
+    var cb = e.target.closest('[data-sel]');
+    if (!cb) return;
+    var id = cb.getAttribute('data-sel');
+    if (cb.checked) selected[id] = true; else delete selected[id];
+    paintBulk();
+  });
+
+  function doCancel(id) {
+    var t = Store.task(id);
+    if (!t) return;
+    Store.update(id, { status: 'cancelled', now: '已由 刘敏 取消（中间物保留）' });
+    App.Toast.show('任务已取消', t.title + ' · 已产出的中间物保留', 'info');
+    delete selected[id];
+    refresh();
+  }
+  function doRetry(id) {
+    var t = Store.task(id);
+    if (!t) return;
+    // 从检查点续跑：保留已完成步骤，不重复消耗
+    var from = Math.max(0, Math.min(t.step, (t.stepTotal || 1) - 1));
+    Store.update(id, {
+      status: 'running', reason: '', retried: true, step: from,
+      now: '从检查点第 ' + from + ' 步续跑（已完成步骤不重复消耗）'
+    });
+    App.Toast.show('已重试', '从检查点第 ' + from + ' 步接力，前序步骤不重复消耗模型调用', 'ok');
+    delete selected[id];
+    refresh();
+  }
+
+  /* ---------------- 批量操作 ---------------- */
+  function paintBulk() {
+    var ids = Object.keys(selected);
+    var canRetry = ids.filter(function (id) {
+      var t = Store.task(id);
+      return t && (t.status === 'failed' || t.status === 'cancelled');
+    });
+    var canCancel = ids.filter(function (id) {
+      var t = Store.task(id);
+      return t && (t.status === 'running' || t.status === 'queued' || t.status === 'waiting');
+    });
+    var rb = U.$('#bulkRetry'), cb = U.$('#bulkCancel');
+    rb.disabled = canRetry.length === 0;
+    cb.disabled = canCancel.length === 0;
+    rb.textContent = '重试所选' + (canRetry.length ? '（' + canRetry.length + '）' : '');
+    cb.textContent = '取消所选' + (canCancel.length ? '（' + canCancel.length + '）' : '');
+  }
+  U.$('#bulkRetry').addEventListener('click', function () {
+    Object.keys(selected).forEach(function (id) {
+      var t = Store.task(id);
+      if (t && (t.status === 'failed' || t.status === 'cancelled')) doRetry(id);
+    });
+  });
+  U.$('#bulkCancel').addEventListener('click', function () {
+    Object.keys(selected).forEach(function (id) {
+      var t = Store.task(id);
+      if (t && (t.status === 'running' || t.status === 'queued' || t.status === 'waiting')) doCancel(id);
+    });
+  });
+
+  /* ---------------- 任务详情 ---------------- */
+  var dtTask = null, dtTab = 'log';
+  function openDetail(id) {
+    dtTask = Store.task(id);
+    if (!dtTask) return;
+    var s = S.get(dtTask.scene);
+    U.$('#dtTitle').textContent = dtTask.title;
+    U.$('#dtMeta').textContent = dtTask.id + ' · ' + (s ? s.title : '自由对话') +
+      ' · ' + dtTask.owner + '（' + dtTask.workspace + '）';
+    U.$('#dtGoSession').href = 'session.html?task=' + encodeURIComponent(dtTask.id);
+    U.$('#dtFootHint').textContent = dtTask.status === 'failed'
+      ? '失败原因归类：' + failCategory(dtTask.reason) : '';
+    dtTab = 'log';
+    U.$$('#detailModal [data-tab]').forEach(function (b) {
+      b.setAttribute('aria-selected', String(b.getAttribute('data-tab') === 'log'));
+    });
+    paintDetail();
+    App.Modal.open('detailModal');
+  }
+
+  function paintDetail() {
+    var t = dtTask, host = U.$('#dtBody');
+    if (!t) return;
+    if (dtTab === 'log') {
+      var logs = [];
+      var base = t.created;
+      for (var i = 0; i < t.step; i++) {
+        logs.push([base + i * 62000, 'INFO', '第 ' + (i + 1) + ' 步完成']);
+      }
+      if (t.status === 'running') logs.push([t.updated, 'INFO', t.now]);
+      if (t.status === 'waiting') logs.push([t.updated, 'WARN', t.now]);
+      if (t.status === 'failed')  logs.push([t.updated, 'ERROR', t.reason || '未知错误']);
+      if (t.status === 'done')    logs.push([t.updated, 'INFO', '交付物已生成并通过 Office/WPS 打开校验']);
+      if (t.status === 'cancelled') logs.push([t.updated, 'WARN', t.now]);
+      logs.unshift([base, 'INFO', '任务已创建，租户上下文与权限过滤已注入']);
+
+      host.innerHTML = '<div class="table-wrap" style="max-height:44vh;overflow:auto">' +
+        '<table class="data"><thead><tr><th style="width:92px">时间</th>' +
+        '<th style="width:74px">级别</th><th>事件</th></tr></thead><tbody>' +
+        logs.map(function (l) {
+          var cls = l[1] === 'ERROR' ? 'tag--err' : l[1] === 'WARN' ? 'tag--warn' : '';
+          return '<tr><td class="mono cell-sub">' + U.clock(l[0]) + '</td>' +
+            '<td><span class="tag ' + cls + '">' + l[1] + '</span></td>' +
+            '<td>' + U.esc(l[2]) + '</td></tr>';
+        }).join('') + '</tbody></table></div>' +
+        (t.status === 'failed'
+          ? '<div class="banner banner--err" style="margin-top:var(--sp-4)"><span aria-hidden="true">⚠</span>' +
+            '<div><strong>失败原因（' + failCategory(t.reason) + '）</strong><br>' + U.esc(t.reason) +
+            '</div></div>' : '') +
+        '<p class="hint" style="margin-top:var(--sp-3)">执行节点异常重启后从检查点接力，' +
+        '已完成步骤不重复消耗模型调用。</p>';
+    } else if (dtTab === 'out') {
+      var arts = t.artifacts || [];
+      host.innerHTML = arts.length
+        ? arts.map(function (a) {
+            return '<div class="artifact" style="margin-bottom:var(--sp-2)">' + U.fileIcon(a.name) +
+              '<div class="artifact__info"><div class="artifact__name">' + U.esc(a.name) + '</div>' +
+              '<div class="artifact__meta">' + U.esc(a.size) + ' · ' +
+              (a.state === 'ready' ? '已就绪，可下载编辑'
+                : a.state === 'partial' ? '中间产物（任务未完成，已保留）' : '草稿，待确认后定稿') +
+              '</div></div>' +
+              '<div class="artifact__acts">' +
+              '<a class="btn btn--sm" href="session.html?task=' + encodeURIComponent(t.id) + '">在会话中查看</a>' +
+              '</div></div>';
+          }).join('')
+        : '<div class="empty" style="padding:var(--sp-8)">' +
+          '<div class="empty__icon" aria-hidden="true">📄</div><h3>暂无产物</h3>' +
+          '<p>任务尚未产出文件。执行到生成阶段后，交付物会出现在这里。</p></div>';
+    } else {
+      host.innerHTML =
+        '<dl style="margin:0">' +
+        '<div class="kv"><dt>模型 tokens</dt><dd>' + t.tokens.toLocaleString() + '</dd></div>' +
+        '<div class="kv"><dt>折算成本</dt><dd>￥' + t.cost.toFixed(2) + '</dd></div>' +
+        '<div class="kv"><dt>沙箱执行时长</dt><dd>' + (t.step * 24) + ' 秒</dd></div>' +
+        '<div class="kv"><dt>检索请求</dt><dd>' + (t.step * 3) + ' 次</dd></div>' +
+        '<div class="kv"><dt>额度计量单位</dt><dd>1 个任务 + ' + ((t.artifacts || []).length) + ' 份产物</dd></div>' +
+        '<div class="kv"><dt>上下文缓存命中</dt><dd>71%</dd></div>' +
+        '</dl>' +
+        '<p class="hint" style="margin-top:var(--sp-4)">' +
+        '计量埋点在 SaaS 与私有化两种形态下完全一致；私有化形态只上报不扣费，' +
+        '配额转为并发与速率硬限制。</p>';
+    }
+  }
+  U.$$('#detailModal [data-tab]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      U.$$('#detailModal [data-tab]').forEach(function (x) { x.setAttribute('aria-selected', 'false'); });
+      b.setAttribute('aria-selected', 'true');
+      dtTab = b.getAttribute('data-tab');
+      paintDetail();
+    });
+  });
+
+  /* ---------------- 筛选器绑定 ---------------- */
+  U.$$('#statusFilter button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      U.$$('#statusFilter button').forEach(function (x) { x.setAttribute('aria-pressed', 'false'); });
+      b.setAttribute('aria-pressed', 'true');
+      f.st = b.getAttribute('data-st');
+      render();
+    });
+  });
+  U.$('#sceneFilter').addEventListener('change', function (e) { f.scene = e.target.value; render(); });
+  U.$('#sortBy').addEventListener('change', function (e) { f.sort = e.target.value; render(); });
+  U.$('#kw').addEventListener('input', function (e) { f.kw = e.target.value.trim(); render(); });
+
+  function refresh() {
+    render();
+    renderConcurrency();
+    App.paintNavBadges();
+  }
+  refresh();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+# 依赖
+node_modules/
+.pnp
+.pnp.js
+
+# 构建产物
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# 环境与凭据
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Pi 运行时状态（会话与凭据不入库）
+.pi/
+sessions/
+*.jsonl
+
+# 日志
+*.log
+npm-debug.log*
+logs/
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 测试与缓存
+coverage/
+.nyc_output/
+.cache/
+*.tmp
+
+# Python（脚本工具用）
+__pycache__/
+*.py[cod]
+.venv/
+venv/
