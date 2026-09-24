@@ -28,16 +28,67 @@
 |---|---|---|---|
 | `agent/` | `packages/agent` | Agent Loop、状态管理、会话原语 | **可改** —— 子 Agent 并行、检查点续跑需要 |
 | `ai/` | `packages/ai` | 多提供方模型接入（15+ 提供方） | **承诺不改** —— 这是最想白拿上游更新的部分（新模型支持），不改则升级为无痛覆盖 |
-| `coding-agent/src/core/tools/` | 同路径 | `bash`/`read`/`write`/`edit` 等工具实现 | **可改** —— bash 无默认超时等问题需要处理 |
+| `chord/` | `packages/chord` | `agent` 的内部依赖 | 不改 |
+| `telemetry/` | `packages/telemetry` | `agent` 与 `ai` 的内部依赖 | 不改 |
+| `coding-agent/src/core/tools/` | 同路径 | `bash`/`read`/`write`/`edit` 等工具实现 | **可改** —— 工具行为需按安全策略调整 |
 | `coding-agent/src/core/extensions/` | 同路径 | 40 个生命周期钩子的实现 | **可改** —— 权限门依赖此处 |
+| `tsconfig.base.json` | 仓库根 | 各包构建配置的共享基础 | 不改 |
 
 **刻意未纳入**（约 6.7 万行，本产品用不到）：
 
 - `packages/tui`（终端字符界面）—— 本产品前端是 Web，不需要在终端画界面
 - `packages/coding-agent` 的其余部分（TUI 集成、斜杠命令、终端渲染器、交互模式）
-- `packages/chord`、`durable`、`evals`、`server`、`telemetry`、`protocol`、`client`
+- `packages/durable`、`evals`、`server`、`protocol`、`client`
 
 > 若后续需要上述任一部分，按同样流程从锁定 tag 补充拷入，并在本文件登记。
+
+## ⚠️ vendor 时必须一并纳入的三项（实际踩坑记录）
+
+**这三项在首次 vendor 时全部遗漏，导致无法编译。** 记录在此以免重犯，也供将来升级时核对。
+
+### 1. 内部依赖包 `chord` 与 `telemetry`
+
+`agent` 依赖 `@earendil-works/chord`、`@earendil-works/pi-ai`、`@earendil-works/pi-telemetry`；`ai` 依赖 `@earendil-works/pi-telemetry`。只拷 `agent` 与 `ai` 会缺两个内部包（合计约 8600 行）。二者自身无内部依赖，补入即闭环。
+
+### 2. 共享构建配置 `tsconfig.base.json`
+
+各包的 `tsconfig.build.json` 均 `extends "../../tsconfig.base.json"`。缺失时编译器回退默认选项，会产生大量 TS5097（`allowImportingTsExtensions` 未开）等报错，且**仍会产出内容不正确的 dist**，极易误判为成功。已置于 `vendor/tsconfig.base.json`。
+
+### 3. 模型清单数据 `ai/src/providers/data/`（最隐蔽）
+
+**上游 `.gitignore` 排除了该目录** —— 它由 `npm run generate-models` 从 `models.dev` 等外部服务**联网拉取后生成**，正式构建流程是 `generate-models && build:offline`。
+
+**后果**：仅 clone 上游仓库，在离线环境下 `ai` 包编译不出完整产物 —— 这与本产品「私有化交付不依赖外网」的要求直接冲突。
+
+**解法**：从已发布的 npm 包 `@earendil-works/pi-ai@0.87.1` 的 `dist/providers/data/` 取出内容，纳入 vendor 源码树。该来源是离线可复现的固定快照，优于联网生成。
+
+**共 42 个文件 = 41 个提供方清单 + 1 个隐藏的 `.manifest.json`**：
+
+- `.manifest.json` 记录了每个文件的 sha256 与 `structureHash`，**是完整性校验的依据，不可遗漏**
+- 它是**隐藏文件**，`ls`、`cp *` 等常规操作都会跳过它 —— 拷贝时务必确认
+- 本仓库的 `.gitignore` 已显式取反使其入库；改动忽略规则后应复核：
+  ```bash
+  # 应输出 42
+  git ls-files -o --exclude-standard vendor/pi/ai/src/providers/data/ | wc -l
+  ```
+
+> ⚠️ 上游用 `npm run check:model-data` 校验该目录，但那个脚本位于 `ai/scripts/` 下、**未纳入 vendor**。本仓库在 `scripts/build-vendor.mjs` 中实现了等价校验（按 manifest 逐文件比对 sha256），构建时自动执行，已用「篡改内容 / 删除文件 / 删除 manifest」三种情况反向验证确实能拦住。
+
+> 💡 **升级时注意**：新版本的模型清单需重新从对应版本的发布包提取，不要沿用旧数据（会缺新模型），`.manifest.json` 也要一并更新。
+
+## 构建
+
+**依赖顺序**：`telemetry` / `chord`（无依赖）→ `ai` → `agent`
+
+```bash
+# 首次构建或升级后执行
+node scripts/build-vendor.mjs
+
+# 验证 vendor 自包含且可用
+node scripts/verify-vendor.mjs
+```
+
+> ⚠️ `ai` 包编译后需额外把 `src/providers/data` 拷入 `dist/providers/data` —— 编译器不搬运 JSON 文件。构建脚本已处理。
 
 ## 为什么必须能改内核
 

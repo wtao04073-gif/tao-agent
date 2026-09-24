@@ -52,3 +52,14 @@ venv/
 # ─────────────────────────────────────────────────────────────
 !vendor/
 !vendor/**
+
+# 但 vendor 下的依赖与构建产物仍然不入库（上面的 !vendor/** 会把它们也解除忽略）
+vendor/**/node_modules/
+vendor/**/dist/
+vendor/**/*.tsbuildinfo
+
+# 例外：模型清单数据必须入库。
+# 上游 .gitignore 排除了它（由 generate-models 联网生成），
+# 我们从发布包提取后纳入源码树，以保证离线可编译。详见 vendor/pi/README.md
+!vendor/pi/ai/src/providers/data/
+!vendor/pi/ai/src/providers/data/**

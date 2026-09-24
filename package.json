@@ -1,0 +1,30 @@
+{
+  "name": "tao-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "面向高校服务机构与传统制造业的通用 AI 办公 Agent 平台",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "workspaces": [
+    "vendor/pi/agent",
+    "vendor/pi/ai",
+    "vendor/pi/chord",
+    "vendor/pi/telemetry",
+    "packages/*"
+  ],
+  "scripts": {
+    "build:vendor": "node scripts/build-vendor.mjs",
+    "verify:vendor": "node scripts/verify-vendor.mjs",
+    "spike:1": "node --experimental-strip-types spikes/01-concurrency-isolation/run.ts",
+    "spike:2": "node --experimental-strip-types spikes/02-checkpoint-resume/run.ts",
+    "spike:3": "node --experimental-strip-types spikes/03-permission-gate/run.ts",
+    "spike:all": "node --experimental-strip-types spikes/run-all.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
+    "shx": "^0.4.0"
+  }
+}
