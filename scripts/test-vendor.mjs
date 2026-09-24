@@ -75,12 +75,18 @@ for (const pkg of targets) {
   const env = { ...process.env, NODE_OPTIONS: "--max-old-space-size=2048" };
   for (const name of credentialVarNames(cwd)) env[name] = "";
 
+  // 每个 vendor 包都有自己的 vitest 配置（telemetry 与 chord 的由我们补上，
+  // 见各包 vitest.config.ts 的 TAO-PATCH 说明）。显式指定以免继承仓库根配置。
+  const args = ["--run", `--maxWorkers=${MAX_WORKERS}`, "--config", "vitest.config.ts"];
+
   try {
-    const out = execFileSync(
-      join(ROOT, "node_modules", ".bin", "vitest"),
-      ["--run", `--maxWorkers=${MAX_WORKERS}`],
-      { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 },
-    );
+    const out = execFileSync(join(ROOT, "node_modules", ".bin", "vitest"), args, {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 64 * 1024 * 1024,
+    });
     const line = out.split("\n").find((l) => l.includes("Tests ")) ?? "";
     console.log(`    ${line.trim()}`);
     summary.push({ pkg, ok: true, line: line.trim() });

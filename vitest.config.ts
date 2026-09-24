@@ -8,7 +8,7 @@ const v = (p: string) => fileURLToPath(new URL(`./vendor/pi/${p}`, import.meta.u
 export default defineConfig({
 	test: {
 		environment: "node",
-		include: ["packages/*/test/**/*.test.ts"],
+		include: ["packages/*/test/**/*.test.ts", "e2e/**/*.test.ts"],
 		testTimeout: 30000,
 	},
 	resolve: {
@@ -20,6 +20,7 @@ export default defineConfig({
 			{ find: /^@earendil-works\/pi-agent-core$/, replacement: v("agent/src/index.ts") },
 			{ find: /^@earendil-works\/pi-ai$/, replacement: v("ai/src/index.ts") },
 			{ find: /^@earendil-works\/pi-ai\/compat$/, replacement: v("ai/src/compat.ts") },
+			{ find: /^@tao\/agent-host$/, replacement: fileURLToPath(new URL("./packages/agent-host/src/index.ts", import.meta.url)) },
 			{ find: /^@tao\/orchestrator$/, replacement: fileURLToPath(new URL("./packages/orchestrator/src/index.ts", import.meta.url)) },
 			{ find: /^@tao\/office$/, replacement: fileURLToPath(new URL("./packages/office/src/index.ts", import.meta.url)) },
 			{ find: /^@tao\/core$/, replacement: fileURLToPath(new URL("./packages/core/src/index.ts", import.meta.url)) },
