@@ -8,9 +8,9 @@
 
 ## 当前状态
 
-**暂无改动。** vendor 初始状态与上游 v0.87.1 完全一致。
+**暂无改动，且 M0 验证后确认「预计要改的三处全部不需要改」。** vendor 与上游 v0.87.1 逐字节一致（唯一差异是补入上游 gitignore 掉的 `ai/src/providers/data/`）。
 
-这是有意的：先在不改内核的前提下跑通 M0 三个 spike，用真实结果确认哪些问题**确实**绕不过去，再动手改。避免过早改动带来不必要的升级负担。
+这个结果比预期好得多，直接影响升级成本 —— 没有补丁就没有冲突，季度升级基本是覆盖即可。
 
 ## 登记格式
 
@@ -37,32 +37,48 @@
 
 ---
 
-## 已知的候选改动点（尚未实施）
+## 候选改动点的最终判定（M0 已验证，全部无需改动）
 
-以下是[接口审计](../../docs/pi-interface-audit.md)识别出的、**预计**需要改动的位置。**在 M0 spike 验证之前不要动手**——先确认问题真实存在且无法绕过。
+审计阶段基于**不完整的信息**识别出三处「预计需要改内核」的位置。M0 spike 实读源码后，三处全部推翻。这一节保留判定过程，供将来重新评估时参照。
 
 ### ~~候选 1 · bash 工具缺少默认超时~~（已失效）
 
-- **位置**：`coding-agent/src/core/tools/bash.ts`（约 408 行）
-- **问题**：`timeout` 参数由模型提供且可选，无默认值。失控命令可无限运行。
-- **状态**：**已随[安全策略决策 4](../../docs/security-policy.md) 失效** —— `bash` 工具默认不激活，所有能力改为结构化工具，故无需改动此文件
-- **若二期开放 bash 则重新生效**：届时优先用 `tool_call` 钩子注入默认 `timeout`，仍不改源码
+- **判定：无需改动。** 随[安全策略决策 4](../../docs/security-policy.md) 失效 —— `bash` 工具默认不激活，所有能力改为结构化工具。
+- **M0 补充证据**：内置工具全部是**工厂函数**（`createBashTool` 等），全量 grep 确认源码里**没有任何地方自动调用它们**。不放进 `tools: [...]` 就不存在 bash。见 [Spike 3 · B1](../../spikes/03-permission-gate/permission.spike.ts)。
+- **若二期开放 bash 则重新生效**：届时优先用 `before_tool` 钩子注入默认 `timeout`，仍不改源码。注意该钩子返回的 `args` 会**重新做 schema 校验**，注入后必须仍满足 schema。
 
-### 候选 2 · SessionManager 存储层不可替换
+### ~~候选 2 · SessionManager 存储层不可替换~~（判定：与我们无关，无需改动）
 
-- **位置**：`coding-agent/src/core/session-manager.ts`（约 2010 行，**当前未 vendor**）
-- **问题**：私有构造函数、硬依赖 `node:fs`、以具体类而非接口暴露
-- **优先尝试**：`SessionManager.inMemory()` 注水 + 监听 `entry_appended` 事件镜像到数据库
-- **兜底方案**：vendor 该文件并重写存储层
-- **判定时机**：M0 Spike 2（检查点续跑）
-- **注意**：该文件目前未纳入 vendor。若确需改动，须先从锁定 tag 补充拷入并在 README 登记
+- **原判断**：「私有构造函数、硬依赖 `node:fs`、以具体类而非接口暴露」，预计需 vendor 该文件并重写存储层。
+- **判定：审计描述的问题都真实存在，但那是另一套实现，我们用的不是它。**
 
-### 候选 3 · session 文件无并发保护
+上游有**两套并行的会话实现**，这是审计阶段未区分清楚的关键事实：
 
-- **位置**：同上
-- **问题**：零加锁、无 fsync、迁移时用截断模式打开、首写用 `wx` 标志会抛 EEXIST
-- **优先尝试**：外层分布式租约保证单写者，**不改源码**
-- **判定时机**：M0 Spike 1（并发隔离）
+| 实现 | 位置 | 状况 | 我们的取舍 |
+|---|---|---|---|
+| `SessionManager` | `coding-agent/src/core/session-manager.ts`（2010 行） | 私有构造（`:1000`）、`static inMemory()`（`:1801`）、零加锁、`list()` 为 O(所有字节) —— 审计所述问题**均属实** | **未 vendor，不使用** |
+| `SessionRepo` + `Storage` | `agent/src/harness/session/` | 为可替换而设计的两层接口 | **产品采用** |
+
+我们采用的那套，三项关键证据：
+
+1. **生产代码零 node builtin 依赖** —— 文件系统是注入的 `FileSystem` 能力（`harness/types.ts:275`），`grep -rn "node:" src/harness/session/` 只命中 `testing/conformance/` 下的 `node:assert`。
+2. **`SessionRepo` 与 `Storage` 都是接口**（`session/types.ts:592` / `:455`），`JsonlSessionRepo`、`MemorySessionRepo` 均为**公开构造函数**；`StorageBackedSession` 只吃 `Storage` 接口（`session/session.ts:235`）。
+3. **上游导出了整套 conformance 测试套件**（`./harness/session/testing` 子路径，`createStorageConformance` / `createSessionRepoConformance`），专供第三方后端自检合规 —— 上游自己也把 SQLite 后端拆成了独立包。这是「存储层可替换」最强的工程证据。
+
+**结论**：换数据库后端只需实现自己的 `Storage`，用上游 conformance 套件验证合规，**完全不改内核**。原设计里「`inMemory()` 注水 + 事件镜像」的绕行复杂度可直接删掉。
+
+### ~~候选 3 · session 文件无并发保护~~（不适用，无需改动）
+
+- **原判断**：「零加锁、无 fsync、迁移时用截断模式打开、首写用 `wx` 标志会抛 EEXIST」。
+- **判定：不需要改内核，但需在架构上避免多写者。**
+
+M0 发现的相关事实：
+
+- **坏尾自愈已内建**：`JsonlStorage` 打开时若最后一行缺 `\n`，丢弃该行并原子重写（`jsonl/storage.ts:94-112`）—— 这正是「进程被 kill」的场景，上游有专门的 `describe("JsonlStorage torn tail")` 测试覆盖三种残损形态。
+- **会话创建是原子发布**：先写临时文件再 rename（上游测试 `atomically publishes a branchless session header`）。
+- **写入是纯 append，一事务一行**（`jsonl/io.ts:184`），且执行进度（`pi.op.state`）与消息历史在**同一次提交**里落盘。
+
+**结论**：单写者前提下持久化是安全的。我们的架构本就是「一会话一进程」，天然满足单写者；SaaS 多副本场景用外层租约保证同一会话只有一个 Runner 持有，**这是编排层的责任，不是内核缺陷**。若将来换成数据库后端（见候选 2），该问题自然消失。
 
 ---
 
@@ -77,4 +93,5 @@
    - **上游未改动此处** → 直接保留补丁
    - **上游改动了附近但不冲突** → 手动合并，重新验证
    - **上游重构了此处** → 重新评估：补丁是否仍必要？上游是否已原生解决？
-4. 更新本表的「日期」列与适用性说明
+4. 跑 `npm run test:vendor`（上游自带 2338 个测试）与 `npm run spike`（我们的 M0 断言），两者都绿才算升级完成
+5. 更新本表的「日期」列与适用性说明

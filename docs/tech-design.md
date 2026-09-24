@@ -17,25 +17,43 @@ pi_version_pinned: "0.87.1"
 
 ## 0. 三条决定全局的约束
 
-在展开架构之前，先把接口审计中最硬的三个发现摆在前面——它们不是实现细节，而是架构的地基。
+在展开架构之前，先把最硬的三个发现摆在前面——它们不是实现细节，而是架构的地基。
 
-### 约束 A：Pi 无法在单进程内承载多租户
+> 🔄 **M0 验证后，约束 A 与 C 的事实判断被推翻，但架构决策全部保持不变**（理由从「被迫」变成「主动选择」）。修正过程完整保留，因为它记录了「审计针对的是 `coding-agent` 包、我们实际用的是 `agent` 包」这一关键区分 —— 这个区分影响后续每一次接口查阅。
 
-Pi 有 4 个进程级全局单例：模块导入时设置的默认 stream 函数、替换 `globalThis.fetch` 的 undici 全局 dispatcher、猴补 `process.stdout.write` 的 stdout 接管、按单一路径键的凭据与模型缓存。官方既无并发 session 契约，仓库内也无任何测试覆盖两个并发活跃 session。
+### 约束 A（已修正）：隔离单元仍是进程，但不是被迫的
 
-**→ 隔离单元必须是操作系统进程。一会话一进程，不存在折中方案。**
+> 原判断为「Pi 有 4 个进程级全局单例，无法在单进程内承载多租户」。**[Spike 1](../spikes/README.md) 确认这 4 个单例全部位于 `coding-agent` 包**（`sdk.ts`、`core/http-dispatcher.ts`、`core/output-guard.ts`、`core/auth-storage.ts`），我们 vendor 的 `agent` 包里 `takeOverStdout` / `undici` / `setGlobalDispatcher` **零命中**。
 
-### 约束 B：Pi 无任何执行隔离
+实测（10/10 通过）：`agent` 包内消息历史 100% 挂在实例上，进程级可变状态只有一处 —— `src/stream-fn.ts:3` 的 `defaultStreamFn`，且只是个函数引用、不持有会话状态。底层 `Agent` 与 `Harness + Session` 两层，消息历史、模型侧 transcript、事件流三者均不串台。
+
+**→ 架构决策不变：一会话一进程。** 但理由变了 —— 不是「内核不支持」，而是**沙箱隔离需求独立存在**（安全策略要求执行环境相互不可见）且进程级隔离额外提供故障域隔离。单进程多会话成为开发调试与轻量私有化部署的安全后备形态。
+
+**→ 两条派生的硬约束**：多用户必须一人一 Session（同 Session 的多 lane 在 mutation line 上串行）；`RunnerAdapter` 必须显式传 `streamFn`（否则落到那处进程级全局）。
+
+### 约束 B（成立）：Pi 无任何执行隔离
 
 仓库 README 原话：Pi 不含用于限制文件系统、进程、网络或凭据访问的内置权限系统，默认以启动它的用户与进程的权限运行。`bash` 工具**无默认超时**。官方对隔离的唯一回答是容器化整个进程。
 
+> ✅ **[Spike 3](../spikes/README.md) 的补充（7/7 通过）**：内核虽无权限系统，但提供了可用于自建权限门的钩子。`before_tool` 返回 `{ block: { reason } }` 能让工具的 `execute` **零次**被调用，且 **handler 抛异常时 fail-closed**（权限逻辑有 bug 时行为是拒绝而非放行）。被拒调用连执行意图都不落盘，崩溃恢复不会重放它。
+>
+> 另：内置工具全是工厂函数，**源码里没有任何自动注册** —— 不调 `createBashTool()` 就没有 bash，所以「无默认超时」这条在我们的配置下不生效（[安全策略决策 4](./security-policy.md) 的前提由此成立）。
+
 **→ 沙箱是本产品必须自建的第一等工程，不是配置项。**
 
-### 约束 C：Pi 的 session 存储不可替换，且零并发保护
+### 约束 C（已被 M0 推翻）：session 存储**是可替换的**
 
-`SessionManager` 硬依赖 `node:fs`、私有构造函数、以具体类而非接口暴露。零加锁：裸 `appendFileSync` 无栅栏、迁移时用截断模式打开文件、首条消息写入用 `wx` 标志会抛 EEXIST、全程无 fsync、读取时还会追加换行。`list()` 的复杂度是 O(所有 session 的所有字节)。
+> 🔄 原判断为「不可替换，且零并发保护」，依据是 `coding-agent` 的 `SessionManager`（私有构造、硬依赖 `node:fs`、零加锁、`list()` 为 O(所有字节)）。**[Spike 2](../spikes/README.md) 确认那是另一套实现，我们不使用它。**
 
-**→ 会话状态的权威副本必须在我们自己的数据库里；Pi 的 JSONL 降级为「单进程内的运行时工作副本」。**
+我们采用的 `agent/src/harness/session/` 是**为可替换而设计的两层接口**：
+
+- `SessionRepo`（`types.ts:592`）与 `Storage`（`types.ts:455`）都是接口，`JsonlSessionRepo` / `MemorySessionRepo` 均为**公开构造函数**
+- 生产代码**零 node builtin 依赖** —— 文件系统是注入的 `FileSystem` 能力
+- 上游导出 conformance 测试套件（`./harness/session/testing`）专供第三方后端自检合规，自己也把 SQLite 后端拆成了独立包
+
+并发保护方面：JSONL 后端确实零加锁，但**坏尾自愈已内建**（打开时若末行缺 `\n` 则丢弃并原子重写，上游有专门的 torn tail 测试），会话创建是**原子发布**（临时文件 + rename），写入是纯 append 且一事务一行。
+
+**→ 直接实现自己的 `Storage` 后端即可，不改内核、无需「JSONL 落盘 + 事件镜像」双写。单写者由编排层的分布式租约保证；换数据库后端后由数据库事务承担。**
 
 ---
 
@@ -133,8 +151,8 @@ vendor 后可直接改内核，因此下列原本为绕开内核限制而设计�
 
 | 原设计（为绕开内核） | vendor 后的可选简化 | 判定时机 |
 |---|---|---|
-| `inMemory()` 注水 + 事件镜像实现持久化 | 直接重写 `SessionManager` 存储层为数据库后端 | M0 Spike 2 |
-| 外层分布式租约保证单写者 | 在内核补锁与 fsync | M0 Spike 1 |
+| `inMemory()` 注水 + 事件镜像实现持久化 | **已无必要** —— 存储层本就是接口（`Storage`），生产代码零 node builtin 依赖，实现自己的后端即可，无需改内核 | M0 Spike 2 ✅ |
+| 外层分布式租约保证单写者 | 待定：需验证 JSONL 后端的并发写行为 | M0 Spike 2 |
 
 > ⚠️ 原「给 bash 设默认超时」一项已随[安全策略决策 4](./security-policy.md) 失效 —— `bash` 工具默认不激活，改为结构化工具，故无需改动 `bash.ts`。若二期开放 bash，该项重新生效。
 
@@ -225,10 +243,10 @@ SUCCEEDED     FAILED      CANCELLED    EXCEEDED
 
 Pi 自身不提供任务级检查点（它只有 session 树）。设计如下：
 
-- 检查点单元 = **一个已完成的 turn**（`turn_end` 事件边界），此时 Pi 的 session 状态是自洽的
-- 每个 `turn_end` 时，宿主把「session 增量 entry + 已产出中间物引用 + 当前步骤游标」写入数据库，构成检查点
-- Runner 异常退出后，编排器按最后检查点重建：用 `SessionManager.inMemory(cwd, options, entries)` 从数据库**注水**已完成的 entry（审计 §4 确认该逃生口存在），跳过已完成步骤，从下一 turn 继续
-- 由此满足验收项「执行节点强制重启后从检查点续跑，已完成步骤不重复消耗模型调用」
+- 检查点单元 = **耐久 `OperationState` 的离散叶子**（13 个 family-neutral 状态），执行进度与消息历史在**同一次提交**里原子落盘
+- Runner 异常退出后，编排器重新打开会话：`AgentHarness.create()` 内部调 `restoreSession()` 自动重建，并返回 `open: OpenOperation[]`（上次未跑完的操作清单）；对其调 `lane.resume()` 接力
+- **不重复消耗的机制**（Spike 2 实读落盘文件确认）：任务完成时 `delete` 掉 `pi.op.meta` 与 `pi.op.state`，恢复时得到 `operation: null`，`resume()` 返回 `NothingToResume`，零模型调用。若崩溃在等模型响应时（`assistant.effect_pending`），恢复走 `recoverAssistantGeneration` —— 用已落盘的 `pi.pending.assistant_frame` 流式增量帧重建部分响应，**同样不重新调模型**
+- 由此满足验收项「执行节点强制重启后从检查点续跑，已完成步骤不重复消耗模型调用」 —— [Spike 2](../spikes/02-checkpoint-resume/) 已用真实 JSONL 文件后端验证（5/5）
 
 > ⚠️ 注水路径的 `persist = false`，不回写文件。故权威副本在数据库，Pi 的 JSONL 仅作运行时工作副本——这与约束 C 的结论一致。
 
@@ -277,11 +295,11 @@ Pi 刻意不内置（审计 §3）。官方示例的真实做法是 spawn 子 `p
 
 理由见约束 C。具体做法：
 
-- 每个 Runner 用独立 `--session-dir`（租户隔离 + 避免文件争用）
-- 宿主订阅 `entry_appended` 事件，把每条 entry 镜像写入数据库（保留 Pi 的 `id` / `parentId` 树结构，8 位十六进制 id）
-- 会话列表、搜索、分页全部走数据库索引 —— **绝不调用 `SessionManager.list()`**（O(所有字节)，审计 §4）
-- 恢复走 `inMemory()` 注水
-- **分布式租约**：每个 session 同时只允许一个可写 Runner，用 Redis 租约 + 心跳实现。Pi 零加锁，两个 worker 碰同一文件会静默截断或抛 EEXIST，宿主必须自己保证独占
+- 每个 Runner 用独立的 `sessionsRoot`（租户隔离 + 避免文件争用）
+- **持久化直接用 `Storage` 接口自建后端**，不做「JSONL 落盘 + 事件镜像到数据库」的双写。`SessionRepo` / `Storage` 都是接口，生产代码零 node builtin 依赖，上游还导出 conformance 套件（`createStorageConformance`）供第三方后端自检合规 —— 实现自己的后端即可，不改内核（Spike 2 判定，详见 [PATCHES.md 候选 2](../vendor/pi/PATCHES.md)）
+- 会话列表、搜索、分页全部走数据库索引 —— 一期若暂用 JSONL 后端，`JsonlSessionRepo.list()` 只读每个文件首行 header，可接受；但产品级列表仍走自建索引
+- 恢复走 `AgentHarness.create()` → `restoreSession()`，返回的 `open` 数组即待续跑操作
+- **分布式租约**：每个 session 同时只允许一个可写 Runner，用 Redis 租约 + 心跳实现。JSONL 后端零加锁（坏尾能自愈但并发写不保证），宿主必须自己保证独占；换数据库后端后该约束由数据库事务承担
 
 **明确不做**（一期）：不 fork `session-manager.ts`（约 2000 行），不押注实验性的格式 4 `Storage`/`SessionRepo`（其文档自称 shapes 可能无迁移地原地变更）。
 
@@ -410,7 +428,7 @@ Pi 的 `pi-ai` 已提供多提供方统一接入与会话中途换模型（审�
 
 | 里程碑 | 交付内容 | 验证标准 |
 |---|---|---|
-| **M0 · 技术验证**（最高优先级） | 三个 spike：① 双并发 Runner 无串台 ② 检查点续跑不重复消耗 ③ 权限门默认拒绝生效 | 三项全部通过才进 M1 |
+| **M0 · 技术验证**（最高优先级） | 三个 spike：① 双并发 Runner 无串台 ② 检查点续跑不重复消耗 ③ 权限门默认拒绝生效 | **✅ 已完成，22/22 通过，M1 门禁已开**（[spikes/](../spikes/)，`npm run spike` 复跑） |
 | **M1 · 最小闭环** | 单租户单场景打通：上传 Excel → Agent 核对 → 产出 xlsx。含 Agent Host、权限门、一个自定义工具、任务状态机、事件流 | 端到端跑通一个真实制造业对账场景 |
 | **M2 · 多租户与场景化** | 租户三层模型、场景工作台、场景卡定义与表单校验、知识库检索、产物溯源 | 两行业各 5 个场景可用 |
 | **M3 · 差异化能力** | 修改意见回写链路、模板口径资产、子 Agent 并行、技能三级命名空间 | 同类任务第二次产出不再犯上次被改的错 |
@@ -418,18 +436,61 @@ Pi 的 `pi-ai` 已提供多提供方统一接入与会话中途换模型（审�
 
 ### 5.3 M0 的三个 spike（写代码前必须做）
 
-接口审计列出的关键未知，必须用实验而非推理来消解：
+接口审计列出的关键未知，必须用实验而非推理来消解。代码在 [spikes/](../spikes/)，`npm run spike` 可复跑。
 
-**Spike 1 · 并发隔离验证**
-目标：证伪或确认「进程内多 session 不可行」。做法：同进程起两个 `AgentSession`，用不同凭据与不同模型，并发跑，断言无串台、无 stdout 争用。
-预期结果：失败（有 4 个全局单例）。**若失败即锁定一会话一进程架构；若意外成功，也不改架构——因为沙箱隔离需求独立成立。**
+约定：**每个 spike 必须含反向验证用例** —— 断言若在任何情况下都通过，它就只是装饰。这条规则在 Spike 1b 上立刻见效，反向用例失败暴露了 `findEntries` 的用法错误，否则三个「不含对方内容」的断言会因读到空数据而假通过。
 
-**Spike 2 · 检查点续跑**
-目标：验证 `SessionManager.inMemory()` 注水路径能否支撑续跑。做法：跑一个多 turn 任务，在第 3 个 `turn_end` 后杀进程，从数据库注水重建，断言不重复调用模型、产出一致。
-这是 Spec 验收项「强制重启后从检查点续跑」的唯一验证方式。
+**Spike 1 · 并发隔离验证 —— ✅ 已完成，10/10 通过**
 
-**Spike 3 · 权限门与沙箱**
-目标：验证 `tool_call` 默认拒绝 + 白名单 + 抛异常阻断的实际行为，以及沙箱内 skill 路径可读性。做法：构造越权工具调用，断言被拦截并记审计；在断网沙箱内触发一次 skill 加载，断言 `read` 能打开技能路径。
+目标：证伪或确认「进程内多 session 不可行」。
+
+**实测结论与审计阶段的推测相反：隔离是成立的。** 审计当时预判「有 4 个全局单例，预期失败」，实际全量扫描 `src/` 后确认——消息历史 100% 挂在实例上，进程级可变状态只有一处（`stream-fn.ts:3` 的 `defaultStreamFn`，仅一个函数引用，不持有会话状态）。底层 `Agent` 与 `Harness + Session` 两层各自并发执行，消息历史、模型侧 transcript、事件流三者均不串台；6 个会话并发同样隔离。
+
+验证手段上做了两件关键设计：让 A 慢 B 快产生**真实时间交错**（共享状态最容易在交错时暴露）；检查**模型侧收到的 transcript** 而非仅本地历史——上下文若混入对方内容，说明泄漏已发生在出网请求里。
+
+由此确立两条 M1 硬约束：
+
+1. **多用户必须一人一 Session。** 同一 Session 下的多个 lane 在 Session 的 mutation line 上**串行**执行，「一租户一 Session、每用户一 lane」会让用户互相排队。
+2. **`RunnerAdapter` 必须显式传 `streamFn`。** 省略即落到那处进程级全局，多会话共用同一模型入口。它在**构造期**解析，缺省时启动即崩（而非运行中崩），这一点反而有利于尽早发现配置错误。
+
+> 架构决策不变：**仍走一会话一进程**。隔离虽成立，但沙箱隔离需求独立存在（安全策略要求执行环境相互不可见），且进程级隔离额外提供故障域隔离。本 spike 的价值在于：确认了「单进程内多会话」在开发调试与轻量私有化部署下是安全可用的后备形态。
+
+**Spike 2 · 检查点续跑 —— ✅ 已完成，5/5 通过**
+
+目标：验证持久化路径能否支撑续跑，且已完成步骤不重复消耗模型调用。
+
+**两处对最初假设的修正**（都来自实读源码）：
+
+1. **审计描述的 `SessionManager` 属于另一套实现，我们用的不是它。** 上游存在**两套并行的会话实现**：
+
+   | 实现 | 位置 | 特征 | 我们的取舍 |
+   |---|---|---|---|
+   | `SessionManager` | `coding-agent/src/core/session-manager.ts`（2010 行） | 私有构造、硬依赖 `node:fs`、零加锁、`list()` 为 O(所有字节) —— 审计描述的问题**均真实存在** | **未 vendor，不使用** |
+   | `SessionRepo` + `Storage` | `agent/src/harness/session/` | 两层接口、生产代码**零 node builtin 依赖**（文件系统是注入的 `FileSystem` 能力）、上游导出 conformance 套件供第三方后端自检 | **产品采用** |
+
+   因此「换数据库后端需 fork 2000 行文件」对我们不成立 —— 实现自己的 `Storage` 即可，**不改内核**。原设计里「`inMemory()` 注水 + 事件镜像」的绕行复杂度可直接删除。
+2. **「不重复消耗」只在 harness 层成立，底层 agent-loop 不成立。** `runAgentLoop` 被调一次就必然发起至少一次模型请求；`Agent.continue()` 在历史尾部是 assistant 时**抛错**而非幂等跳过。产品必须走 harness 层。
+
+**幂等性的根源**（实读落盘 JSONL 确认）：任务完成时 `delete` 掉 `pi.op.meta` 与 `pi.op.state`，恢复时 `restoreLaneState` 得到 `operation: null`，`resume()` 返回 `NothingToResume`。另有 `pi.pending.assistant_frame` 机制 —— 崩溃在等模型响应时，靠已落盘的流式增量帧重建部分响应，不重新调模型。
+
+> 本 spike 用**真实 JSONL 文件后端**验证，因为上游 harness 层的 resume 测试全部跑在 `MemoryStorage` 上 —— 「真进程重启」这条端到端路径是上游测试的空白，而它恰是我们的验收标准。
+
+**Spike 3 · 权限门与工具注册 —— ✅ 已完成，7/7 通过**
+
+目标：验证默认拒绝 + 白名单能否真正拦住执行，以及能否用结构化工具替代自由 shell。
+
+钩子机制位于 agent 包内（`src/harness/hooks.ts`，11 个钩子），权限门用 `before_tool` 返回 `{ block: { reason } }`。四条经验证的关键性质：
+
+| 性质 | 对安全模型的意义 |
+|---|---|
+| 被拒调用的 `execute` **零次**被调用 | 不是「返回错误」，是真的没执行 |
+| handler 抛异常 → **fail-closed** | 权限逻辑有 bug 时行为是拒绝而非放行 |
+| 被拒调用**不写执行意图** | 崩溃恢复不会重放曾被拒绝的高危调用 |
+| 内置工具是工厂函数，**源码无任何自动注册** | 不调 `createBashTool()` 就没有 bash —— [安全策略决策 4](./security-policy.md) 的前提成立 |
+
+**生产形态**：`activeToolNames`（模型侧不可见）+ `before_tool`（执行侧兜底，防历史 transcript 里的旧工具名被重放）两层叠加，并订阅 `handler_error` 监控权限代码自身异常。
+
+> 注意 `before_tool` 返回 `{ args }` 会**重新做 schema 校验**（legacy `beforeToolCall` 不校验）。若在钩子里注入默认值，注入后须仍满足 schema。
 
 ---
 

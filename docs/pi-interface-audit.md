@@ -77,6 +77,8 @@ await loader.reload();
 
 ### ⛔ 并发：进程内多租户不可行
 
+> 🔄 **本节结论已被 [M0 Spike 1](../spikes/README.md) 修正（10/10 通过）。** 下表的 4 个全局单例**全部位于 `coding-agent` 包**（`sdk.ts`、`core/http-dispatcher.ts`、`core/output-guard.ts`、`core/auth-storage.ts` 等）——已实测确认，我们 vendor 的 `agent` 包里 `takeOverStdout` / `undici` / `setGlobalDispatcher` **零命中**。在我们实际使用的 `agent` 包上，进程内多会话隔离**成立**。原文保留以记录判断过程。
+
 多个 `AgentSession` 对象可构造（各自持有 `Agent`/`SessionManager`/`ResourceLoader`），但有 **4 个进程级全局单例**破坏隔离：
 
 | # | 全局状态 | 源码位置 | 后果 |
@@ -91,6 +93,12 @@ await loader.reload();
 **官方无任何并发 session 契约说明，仓库内无任何测试覆盖两个并发活跃 session。**
 
 > **工程判断**：进程内多租户技术上勉强可行（每租户独立 `ModelRuntime`/`SettingsManager`/`SessionManager`/`ResourceLoader`、绝不调 `takeOverStdout`、接受共享 fetch 与共享凭据缓存），但**不是受支持的配置**。任一租户的 `registerProvider()` 或扩展会改动共享注册表。**真隔离只能一会话一进程。**
+
+> ✅ **Spike 1 的实测结论**：`agent` 包全量扫描后，进程级可变状态只有一处 —— `src/stream-fn.ts:3` 的 `defaultStreamFn`，且它只是个函数引用、不持有会话状态（对应上表第 1 项，但在 `agent` 包里**不会在导入时自动设置**，需显式调用）。消息历史 100% 挂在实例上。
+>
+> 「仓库内无任何测试覆盖两个并发活跃 session」这一条仍然成立 —— 这正是 [Spike 1](../spikes/01-concurrency-isolation/) 填补的空白。
+>
+> **架构决策不变：仍走一会话一进程。** 沙箱隔离需求独立存在，且进程级隔离额外提供故障域隔离。本节修正的意义在于：单进程多会话可作为开发调试与轻量私有化部署的安全后备形态。
 
 ---
 
@@ -192,11 +200,17 @@ const proc = spawn(invocation.command, invocation.args, {
 
 ### ⛔ 自定义存储后端：出货路径上不可行
 
+> 🔄 **本节结论已被 [M0 Spike 2](../spikes/README.md) 修正。** 下方分析针对 `coding-agent` 的 CLI 装配路径，在那条路径上结论仍然成立；但**我们的产品不走那条路径**，而是直接使用 `agent` 包的 `SessionRepo`/`Storage` 接口，该用法已验证可行（22/22 通过）。判定详见 [PATCHES.md 候选 2](../vendor/pi/PATCHES.md)。原文保留以记录判断过程。
+
 `SessionManager` 硬 import `node:fs`（`appendFileSync`、`openSync`、`writeFileSync`、`readSync`…），**私有构造函数**，且对 SDK 暴露的是**具体类而非接口**：`sessionManager?: SessionManager`。没有可注入的文件系统或存储策略。换 Postgres 需要 fork 这个 2000 行文件。
 
 **部分逃生口**：`SessionManager.inMemory(cwd, options, entries?)` 接受预加载的 `FileEntry[]`——可以从数据库**注水**，但 `persist = false` 意味着不回写。需自行监听 `entry_appended` 事件镜像写入。
 
 **确实存在一套可插拔的 `Storage`/`SessionRepo` 接口**（`packages/agent/src/harness/session/`，格式 4，异步，3 个后端 Memory/JSONL/SQLite，有共享一致性测试套件，SQLite schema 已按 `session_id` 分片）。**但它只接进了 `src/experimental/`**，后端在两个 `new JsonlSessionRepo(...)` 调用点硬编码，**无任何配置/环境变量/flag 开关**，`SqliteSessionRepo` **零消费者**，Postgres 只作为"仅供参考、无规范性约束"的设计注记存在。`harness.md:0.9` 明确列为稳定化前状态：*"shapes may change in place without migrations."*
+
+> ✅ **Spike 2 的实测补充**：上面这段描述的是「coding-agent 的 CLI 有没有开关让用户换后端」—— 答案是没有。但**我们不是 CLI 的用户，而是直接调用方**：`new JsonlSessionRepo({ fileSystem, sessionsRoot })` 是公开构造函数，`AgentHarness.create({ session, models, model })` 直接吃 `Session` 对象。「硬编码调用点」对我们不构成限制，因为那个调用点就是我们自己写的。
+>
+> 至于 `harness.md` 的稳定性警告：这是真实风险，但 vendor 锁版已经消解了它 —— 上游原地变更不会影响我们，升级时由 `npm run spike` 与 `npm run test:vendor` 把关。
 
 **恢复**：`--continue`/`-c`（按 mtime 取最近且头部 cwd 匹配的）、`--resume`/`-r`（选择器）、`--session <path|id>`、`--session-id <id>`、`--fork <path|id>`、`--no-session`。编程等价物是 8 个 `SessionManager` 静态方法：`create`、`open`、`continueRecent`、`inMemory`、`forkFrom`、`findById`、`list`、`listAll`。
 
