@@ -1,0 +1,11 @@
+/**
+ * @tao/core —— 平台共享词汇表
+ *
+ * 零运行时依赖，可被任意层引用。**不得 import vendor/pi 的任何类型** ——
+ * 否则内核细节会顺着这里泄漏到全平台。
+ */
+
+export * from "./task-status.ts";
+export * from "./tenant.ts";
+export * from "./events.ts";
+export * from "./runner.ts";

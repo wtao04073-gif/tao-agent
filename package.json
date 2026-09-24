@@ -15,10 +15,14 @@
     "packages/*"
   ],
   "scripts": {
+    "build": "node scripts/build-packages.mjs",
     "build:vendor": "node scripts/build-vendor.mjs",
-    "verify:vendor": "node scripts/verify-vendor.mjs",
+    "test": "vitest --run",
     "test:vendor": "node scripts/test-vendor.mjs",
-    "spike": "vitest --run --config vitest.spikes.config.ts"
+    "spike": "vitest --run --config vitest.spikes.config.ts",
+    "verify:vendor": "node scripts/verify-vendor.mjs",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+    "verify": "npm run check:boundaries && npm run test && npm run spike"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
