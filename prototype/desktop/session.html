@@ -333,17 +333,22 @@
 
   var stream = U.$('#stream');
 
-  if (mode === 'free') {
-    U.$('#sessTitle').textContent = '自由对话';
-    U.$('#sessMeta').textContent = 'Spec 3.1 · 场景外任务入口';
-    bootFreeChat();
-  } else if (task) {
-    U.$('#sessTitle').textContent = task.title;
-    U.$('#sessMeta').textContent = '任务 ' + task.id + ' · 来源场景：' +
-      ((App.Scenes.get(task.scene) || {}).title || '自由对话');
-    bootTask(task, pending === task.id);
-  } else {
-    bootNoTask();
+  /* 注意：真正的启动分发放在文件末尾的 boot()，
+     必须等所有 var（cardEl / STEP_MS 等）初始化完成后再跑，
+     否则 var 提升会让 STEP_MS 为 undefined、cardEl 被后置的 null 覆盖。 */
+  function boot() {
+    if (mode === 'free') {
+      U.$('#sessTitle').textContent = '自由对话';
+      U.$('#sessMeta').textContent = 'Spec 3.1 · 场景外任务入口';
+      bootFreeChat();
+    } else if (task) {
+      U.$('#sessTitle').textContent = task.title;
+      U.$('#sessMeta').textContent = '任务 ' + task.id + ' · 来源场景：' +
+        ((App.Scenes.get(task.scene) || {}).title || '自由对话');
+      bootTask(task, pending === task.id);
+    } else {
+      bootNoTask();
+    }
   }
 
   /* ------------------------------------------------------------- 渲染 */
@@ -1111,6 +1116,8 @@
       '建议回到 <a href="workbench.html">场景工作台</a> 选对应场景卡，产出质量更稳定。');
   }
 
+  // 所有声明就绪后再启动会话（见上方 boot 的注释）
+  boot();
   refreshSide();
   updateHint();
   // 每 5 秒刷新一次全局提示条，体现任务是全局态

@@ -463,7 +463,7 @@
       out: 'xlsx', runs: 64, source: 'tenant',
       fields: [
         { key: 'period', label: '对账期间', type: 'text', required: true, placeholder: '如：2026年9月' },
-        { key: 'files', label: '对账单与内部数据', type: 'files', required: true,
+        { key: 'files', label: '对账单与内部数据（至少 2 份）', type: 'files', required: true,
           preset: ['供应商月结对账单-9月（12家）.xlsx', 'ERP收货明细-202609.xlsx',
                    '发票登记台账-202609.xlsx'] },
         { key: 'tol', label: '金额差异容差（元）', type: 'number', required: true, placeholder: '如：50' },
