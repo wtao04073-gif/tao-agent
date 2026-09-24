@@ -16,7 +16,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGES = join(ROOT, "packages");
 
 // 依赖顺序：core 无依赖，其余依赖 core
-const ORDER = ["core", "agent-host", "orchestrator"];
+const ORDER = ["core", "office", "agent-host", "orchestrator"];
 
 const available = existsSync(PACKAGES)
 	? readdirSync(PACKAGES, { withFileTypes: true })

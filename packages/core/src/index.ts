@@ -11,3 +11,4 @@ export * from "./events.ts";
 export * from "./runner.ts";
 export * from "./path-policy.ts";
 export * from "./permission-gate.ts";
+export * from "./reconcile.ts";

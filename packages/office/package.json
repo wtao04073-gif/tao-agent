@@ -1,0 +1,24 @@
+{
+  "name": "@tao/office",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Office 产物生成与校验。原生文件生成路线，保留公式与数据格式。",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsgo -p tsconfig.build.json",
+    "clean": "shx rm -rf dist"
+  },
+  "dependencies": {
+    "@tao/core": "*",
+    "exceljs": "^4.4.0"
+  }
+}
