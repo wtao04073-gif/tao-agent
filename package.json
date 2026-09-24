@@ -17,6 +17,7 @@
   "scripts": {
     "build:vendor": "node scripts/build-vendor.mjs",
     "verify:vendor": "node scripts/verify-vendor.mjs",
+    "test:vendor": "node scripts/test-vendor.mjs",
     "spike:1": "node --experimental-strip-types spikes/01-concurrency-isolation/run.ts",
     "spike:2": "node --experimental-strip-types spikes/02-checkpoint-resume/run.ts",
     "spike:3": "node --experimental-strip-types spikes/03-permission-gate/run.ts",
