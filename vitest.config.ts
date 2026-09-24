@@ -20,6 +20,7 @@ export default defineConfig({
 			{ find: /^@earendil-works\/pi-agent-core$/, replacement: v("agent/src/index.ts") },
 			{ find: /^@earendil-works\/pi-ai$/, replacement: v("ai/src/index.ts") },
 			{ find: /^@earendil-works\/pi-ai\/compat$/, replacement: v("ai/src/compat.ts") },
+			{ find: /^@tao\/orchestrator$/, replacement: fileURLToPath(new URL("./packages/orchestrator/src/index.ts", import.meta.url)) },
 			{ find: /^@tao\/office$/, replacement: fileURLToPath(new URL("./packages/office/src/index.ts", import.meta.url)) },
 			{ find: /^@tao\/core$/, replacement: fileURLToPath(new URL("./packages/core/src/index.ts", import.meta.url)) },
 		],
