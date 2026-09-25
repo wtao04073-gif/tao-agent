@@ -26,3 +26,6 @@ export {
 	type ComparableTable,
 	type ExtractResult,
 } from "./revision-extract.ts";
+
+// ── 模板与口径资产（M3-4）──
+export { MemoryAssetStore } from "./memory-asset-store.ts";
