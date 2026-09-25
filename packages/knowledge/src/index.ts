@@ -29,3 +29,6 @@ export {
 
 // ── 模板与口径资产（M3-4）──
 export { MemoryAssetStore } from "./memory-asset-store.ts";
+
+// ── 计量与配额（M4-1）──
+export { MemoryMeteringStore } from "./memory-metering-store.ts";

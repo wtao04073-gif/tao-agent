@@ -8,7 +8,9 @@
  *  1. **显式传 streamFn** —— 省略会落到内核的进程级全局 `defaultStreamFn`，
  *     导致多会话共用同一模型入口。本文件从不省略。
  *  2. **一人一 Session** —— 每个 Runner 独占一个 Session。
- *     同 Session 的多 lane 在 mutation line 上串行，共用会让用户互相排队。
+ *     [Spike 5](../../../spikes/05-subagent-parallel/) 修正了 M0 的表述：
+ *     同 Session 的多 lane 只在**存储读-改-写**上排队，模型调用本来就并发。
+ *     所以独占 Session 是为了减少写入争用、故障隔离与独立检查点。
  *  3. **权限门 fail-closed** —— `before_tool` 抛异常时内核会拒绝执行，
  *     所以此处不吞异常、不做「出错就放行」的兜底。
  */
@@ -48,6 +50,30 @@ export interface HostRuntime {
 	model: Model<Api>;
 	/** 取当前时间。注入以便测试可控。 */
 	now?: () => number;
+	/**
+	 * 用量落账回调。
+	 *
+	 * 挂在这里而不是让编排层订阅 `usage` 事件，是因为**计量不能漏**：
+	 * 事件订阅者的异常被适配层刻意吞掉（进度上报失败不该影响执行），
+	 * 那套宽容策略用在计量上就变成了静默丢账。这里单独走一条路径，
+	 * 失败会被记录成任务级告警而非静默忽略。
+	 *
+	 * 仍然不让它中断执行：模型调用已经发生、token 已经烧掉，
+	 * 此时中断任务既救不回钱也白费已完成的工作。
+	 */
+	meter?: (record: {
+		readonly tenantId: string;
+		readonly workspaceId: string;
+		readonly taskId: string;
+		readonly model: string;
+		readonly inputTokens: number;
+		readonly outputTokens: number;
+		readonly cacheReadTokens: number;
+		readonly cacheWriteTokens: number;
+		readonly at: number;
+	}) => void | Promise<void>;
+	/** 落账失败的告警回调。默认不处理 —— 但**不静默**：调用方应当接上。 */
+	onMeterError?: (error: Error, taskId: string) => void;
 }
 
 /** 把平台工具适配成内核工具。参数 schema 与执行签名在此转换。 */
@@ -356,6 +382,57 @@ export class InProcessRunnerFactory implements RunnerFactory {
 			const detail = event.error?.message ?? JSON.stringify(event.error?.data ?? {});
 			runner.noteRunFailure(`内核运行失败（${code}）：${detail}`);
 		}) as never);
+
+		/**
+		 * 接用量落账。
+		 *
+		 * 单独订阅一次 `usage`（不复用上面那条翻译用的订阅），因为两者的
+		 * 失败语义相反：翻译失败只影响前端展示，落账失败影响收费。
+		 * 复用同一条路径会让计量继承「异常被吞」的宽容策略。
+		 *
+		 * [Spike 6](../../../spikes/06-metering-breaker/) 确认 usage 是**逐轮**
+		 * 上报的，且生成失败前已产生的 usage 不会回滚 —— 所以只要在这里
+		 * 不做过滤，失败任务的消耗同样会入账（这是防白嫖的关键）。
+		 */
+		const meter = this.runtime.meter;
+		if (meter !== undefined) {
+			harness.events.on("usage", ((event: {
+				row?: {
+					model?: string;
+					usage?: {
+						input?: number;
+						output?: number;
+						cacheRead?: number;
+						cacheWrite?: number;
+					};
+				};
+			}) => {
+				const u = event.row?.usage;
+				if (u === undefined) return;
+				void (async () => {
+					try {
+						await meter({
+							tenantId: spec.tenant.tenantId,
+							workspaceId: spec.tenant.workspaceId,
+							taskId: spec.taskId,
+							model: event.row?.model ?? "unknown",
+							inputTokens: u.input ?? 0,
+							outputTokens: u.output ?? 0,
+							cacheReadTokens: u.cacheRead ?? 0,
+							cacheWriteTokens: u.cacheWrite ?? 0,
+							at: now(),
+						});
+					} catch (error) {
+						// 不静默：落账失败必须能被发现，否则账目差异无从追查。
+						// 但也不中断执行 —— token 已经烧掉了，中断救不回钱
+						this.runtime.onMeterError?.(
+							error instanceof Error ? error : new Error(String(error)),
+							spec.taskId,
+						);
+					}
+				})();
+			}) as never);
+		}
 
 		installGate(harness as never, spec.gate, runner, spec);
 
