@@ -15,3 +15,14 @@ export {
 	type KnowledgeToolsetOptions,
 } from "./toolset.ts";
 export { MemoryKnowledgeStore } from "./memory-store.ts";
+
+// ── 修改意见回写（M3-3）──
+export { MemoryLessonStore } from "./memory-lesson-store.ts";
+export {
+	extractDocumentRevisions,
+	extractTableRevisions,
+	REWRITE_THRESHOLD,
+	type ComparableParagraph,
+	type ComparableTable,
+	type ExtractResult,
+} from "./revision-extract.ts";

@@ -19,3 +19,4 @@ export * from "./preset-cards.ts";
 export * from "./retrieval.ts";
 export * from "./chunking.ts";
 export * from "./provenance.ts";
+export * from "./lessons.ts";
