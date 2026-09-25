@@ -43,8 +43,14 @@ describe("工具目录 · 基本查询", () => {
 		}
 	});
 
-	it("知识库工具标为待实现", () => {
-		expect(findTool("search_knowledge")?.status).toBe(ToolStatus.Planned);
+	it("M3-2 交付的知识库工具已标为可用", () => {
+		expect(findTool("search_knowledge")?.status).toBe(ToolStatus.Available);
+	});
+
+	it("目录里已无待实现工具", () => {
+		// M3-1/M3-2 交付后全部工具均已实现。新增 Planned 工具时这条会失败，
+		// 提醒同步更新场景卡可跑名单
+		expect(TOOL_CATALOG.filter((t) => t.status === ToolStatus.Planned)).toEqual([]);
 	});
 
 	it("每个工具都标了读写属性", () => {
@@ -77,11 +83,14 @@ describe("工具目录 · 实现状态", () => {
 	});
 
 	it("全部已实现时判为可完整运行", () => {
-		expect(isFullyImplemented(["read_table", "reconcile_tables", "write_document"])).toBe(true);
+		expect(
+			isFullyImplemented(["read_table", "reconcile_tables", "write_document", "search_knowledge"]),
+		).toBe(true);
 	});
 
-	it("含待实现工具时判为不可完整运行", () => {
-		expect(isFullyImplemented(["read_table", "search_knowledge"])).toBe(false);
+	it("含未登记工具时判为不可完整运行", () => {
+		// 目录里已无 Planned 工具，所以用一个根本不存在的名字验这条路径
+		expect(isFullyImplemented(["read_table", "not_a_real_tool"])).toBe(false);
 	});
 
 	it("空工具列表算「已实现」", () => {

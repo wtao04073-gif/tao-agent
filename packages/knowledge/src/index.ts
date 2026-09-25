@@ -1,0 +1,17 @@
+/**
+ * @tao/knowledge —— 知识库检索与入库
+ *
+ * 不接触 vendor/pi —— 工具经 @tao/core 的 PlatformTool 接口暴露。
+ *
+ * 与 @tao/office 的分工：office 管文件格式读写，knowledge 管检索与权限。
+ * 混在一起会让 office 包依赖租户模型，边界就糊了。
+ */
+
+export {
+	createKnowledgeToolset,
+	ingestIntoStore,
+	KNOWLEDGE_TOOL_POLICIES,
+	type KnowledgeStore,
+	type KnowledgeToolsetOptions,
+} from "./toolset.ts";
+export { MemoryKnowledgeStore } from "./memory-store.ts";

@@ -38,8 +38,8 @@ export const TOOL_CATALOG: readonly ToolDescriptor[] = [
 	{ name: "read_document", label: "读取文档", status: ToolStatus.Available, access: "read" },
 	{ name: "write_document", label: "生成文档", status: ToolStatus.Available, access: "write" },
 
-	// ── 知识库（M3-2）──
-	{ name: "search_knowledge", label: "检索知识库", status: ToolStatus.Planned, access: "read" },
+	// ── 知识库（M3-2 已交付）──
+	{ name: "search_knowledge", label: "检索知识库", status: ToolStatus.Available, access: "read" },
 ];
 
 const BY_NAME = new Map(TOOL_CATALOG.map((t) => [t.name, t]));

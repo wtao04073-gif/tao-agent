@@ -250,32 +250,18 @@ describe("预置场景卡 · 工具白名单与安全", () => {
 		}
 	});
 
-	it("如实反映哪些场景当前能跑到产出、哪些还缺工具", () => {
-		// 这条断言是刻意会随进度失败的：M3-1 交付文档工具后它失败了一次，
-		// 逼我们把「6 张可跑」这个新事实写准，而不是让文档停留在旧状态。
-		// M3-2 交付 search_knowledge 后会再失败一次，那时 10 张全部可跑。
-		const runnable = PRESET_CARDS.filter((c) => isFullyImplemented([...c.tools])).map((c) => c.id);
-		expect(runnable.sort()).toEqual([
-			"mfg.8d-report",
-			"mfg.inspection-checklist",
-			"mfg.production-report",
-			"mfg.supplier-reconcile",
-			"univ.data-cross-check",
-			"univ.rectification-ledger",
-		]);
+	it("十张场景卡全部可跑到产出（M3-2 后达成）", () => {
+		// 这条断言刻意会随进度失败，已生效两次：
+		//   M3-1 交付文档工具 → 从 2 张变 6 张
+		//   M3-2 交付知识库工具 → 从 6 张变 10 张
+		// 每次失败都逼我们把新事实写准，而不是让文档停留在旧状态。
+		const runnable = PRESET_CARDS.filter((c) => isFullyImplemented([...c.tools]));
+		expect(runnable).toHaveLength(PRESET_CARDS.length);
 
-		// 剩下 4 张缺的必须只是 search_knowledge —— 若出现别的缺口，
-		// 说明有场景卡引用了计划外的工具
+		// 反向确认：目录里没有遗留的待实现工具被场景卡引用
 		const available = availableToolNames();
 		for (const card of PRESET_CARDS) {
-			const missing = card.tools.filter((t) => !available.has(t));
-			expect(missing.filter((m) => m !== "search_knowledge"), card.id).toEqual([]);
-		}
-
-		for (const card of PRESET_CARDS) {
-			for (const name of card.tools) {
-				expect(findTool(name)?.status, `${card.id} → ${name}`).toBeDefined();
-			}
+			expect(card.tools.filter((t) => !available.has(t)), card.id).toEqual([]);
 		}
 	});
 });
