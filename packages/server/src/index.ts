@@ -41,9 +41,18 @@ export {
 export {
 	createApp,
 	MAX_BODY_BYTES,
+	parseWindow,
 	readJsonBody,
 	sendError,
 	sendJson,
 	type AppDeps,
 	type Principal,
 } from "./app.ts";
+
+/**
+ * 角色枚举的再导出。
+ *
+ * 让调用方不必同时依赖 @tao/core 只为拿一个枚举 ——
+ * 服务层的 `Principal.role` 用的就是它。
+ */
+export { Role } from "@tao/core";

@@ -8,7 +8,9 @@
 
 import { createServer, type IncomingMessage } from "node:http";
 import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import {
+	buildDashboard,
 	createPermissionGate,
 	evaluateQuota,
 	PRESET_CARDS,
@@ -17,13 +19,15 @@ import {
 	resolveCard,
 	restrictPolicies,
 	withQuotaGate,
+	Role,
+	type AuditEntry,
 	type Quota,
 	type ScenarioCard,
 	type TenantContext,
 	type UsageRecord,
 } from "@tao/core";
 import { createDocToolset, createOfficeToolset, DOC_TOOL_POLICIES, OFFICE_TOOL_POLICIES } from "@tao/office";
-import { MemoryMeteringStore } from "@tao/knowledge";
+import { FileMeteringStore } from "@tao/knowledge";
 import {
 	createModelRuntime,
 	InProcessRunnerFactory,
@@ -52,8 +56,28 @@ process.stdout.write(describeConfig(config));
 // 工作区必须先存在。容器里首次启动时目录可能还没建
 mkdirSync(config.workspaceDir, { recursive: true });
 
-const meteringStore = new MemoryMeteringStore();
+/**
+ * 计量落盘。
+ *
+ * **不能用内存实现** —— 进程重启后用量归零，配额随之失效，
+ * 而用量看板会显示 0。看板读的数据不可信，看板就是假的。
+ *
+ * 依据见 [Spike 8](../../../spikes/08-append-durability/)：JSONL 追加写
+ * 在多进程并发下不截断、进程崩溃不丢数据、半写行可安全跳过。
+ */
+const meteringStore = new FileMeteringStore({
+	dir: join(config.workspaceDir, ".metering"),
+	onCorruptLine: ({ shard, skipped }) => {
+		// 坏行意味着有用量没算进去，运维需要知道
+		process.stderr.write(`[计量] 分片 ${shard} 有 ${skipped} 行无法解析，这部分用量未计入\n`);
+	},
+});
 const sessionFactory = new MemorySessionFactory();
+
+/** 审计日志。一期落在内存里，供管理接口查当次运行的记录。 */
+const auditEntries: Array<AuditEntry & { at: number; tenantId: string; taskId: string }> = [];
+/** 审计条数上限。超出后丢最旧的 —— 内存实现必须有上限，否则长跑会 OOM。 */
+const MAX_AUDIT_ENTRIES = 5000;
 const hub = new SseHub();
 
 /**
@@ -155,8 +179,16 @@ async function authenticate(req: IncomingMessage): Promise<Principal | undefined
 	 * 这不是「鉴权没做」而是「单租户部署下鉴权的退化形态」——
 	 * 但它必须在 M4.md 的能力边界里写明，否则会被当成已完成的多租户鉴权。
 	 */
+	/**
+	 * 一期：单机私有化部署下，token 以 `admin:` 开头即为租户管理员。
+	 *
+	 * 这是刻意做成「显式声明」而非「默认管理员」：默认给管理员权限
+	 * 会让用量与审计对全部使用者可见。真实账号体系见 M5。
+	 */
+	const isAdmin = token.startsWith("admin:");
 	return {
 		tenant: { tenantId: "default", workspaceId: "default", userId: token.slice(0, 16) },
+		role: isAdmin ? Role.TenantAdmin : Role.Member,
 	};
 }
 
@@ -190,6 +222,14 @@ const app = createApp({
 			policies: basePolicies,
 			workspace: toolsFor(tenant).dir,
 			audit: (entry) => {
+				auditEntries.push({
+					...entry,
+					at: Date.now(),
+					tenantId: tenant.tenantId,
+					taskId: "",
+				});
+				// 有上限：内存实现不设上限，长跑必然 OOM
+				if (auditEntries.length > MAX_AUDIT_ENTRIES) auditEntries.shift();
 				if (entry.decision !== "allowed") {
 					process.stdout.write(`[审计] ${entry.tool} 被拒：${entry.reason ?? ""}\n`);
 				}
@@ -241,6 +281,24 @@ const app = createApp({
 	},
 	steerTask: async (tenant, taskId, text) => orchestrator.steer(taskId, text),
 	cancelTask: async (tenant, taskId, reason) => void (await orchestrator.cancel(taskId, reason)),
+
+	usageDashboard: async (tenant, window) => {
+		const records = await meteringStore.list(tenant.tenantId, window);
+		const quota = currentQuota(tenant.tenantId);
+		const verdict =
+			quota === undefined ? undefined : await evaluateQuota({ store: meteringStore, quota });
+		return buildDashboard({
+			records,
+			period: window,
+			...(quota === undefined ? {} : { quota }),
+			...(verdict === undefined ? {} : { verdict }),
+		});
+	},
+
+	auditLog: async (tenant, window) =>
+		auditEntries.filter(
+			(e) => e.tenantId === tenant.tenantId && e.at >= window.from && e.at < window.to,
+		),
 });
 
 const server = createServer((req, res) => {
@@ -269,6 +327,8 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 		process.stdout.write(`\n收到 ${signal}，正在停止服务…\n`);
 		hub.closeAll();
 		void sessionFactory.close();
+		// 刷盘后再退出 —— 否则最后几秒的用量会丢
+		meteringStore.close();
 		server.close(() => {
 			process.stdout.write("服务已停止。\n");
 			process.exit(0);

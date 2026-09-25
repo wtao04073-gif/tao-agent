@@ -192,6 +192,44 @@ docker compose exec tao-agent ls /data/workspace/default/default/
 
 ---
 
+## 6 · 管理接口（用量与审计）
+
+需要**管理员 token** —— 当前版本约定 token 以 `admin:` 开头即为租户管理员。
+
+```bash
+# 用量看板（默认当月）
+curl http://localhost:8080/api/admin/usage \
+  -H "Authorization: Bearer admin:你的token"
+
+# 指定周期
+curl "http://localhost:8080/api/admin/usage?from=2026-08-01&to=2026-09-01" \
+  -H "Authorization: Bearer admin:你的token"
+
+# 审计日志（工具调用的放行/拒绝记录）
+curl http://localhost:8080/api/admin/audit \
+  -H "Authorization: Bearer admin:你的token"
+
+# 全部任务
+curl http://localhost:8080/api/admin/tasks \
+  -H "Authorization: Bearer admin:你的token"
+```
+
+用量看板返回的内容：
+
+| 字段 | 含义 |
+|---|---|
+| `totals` | 总 token、任务数 |
+| `costMicroYuan` | 费用（微元，1 元 = 1000000）|
+| `unpricedModels` | **未配单价的模型。有值说明费用不完整** |
+| `byUser` | 按工作区下钻（不是按用户，见下方限制）|
+| `byModel` | 按模型下钻 |
+| `byDay` | 按天趋势，可发现用量突增 |
+| `quota` | 配额已用/上限与进度比例 |
+
+用量数据落在 `<工作区>/.metering/usage-YYYY-MM.jsonl`，**重启不丢**。按月分片，归档直接删旧文件即可。
+
+---
+
 ## 常见问题
 
 ### 服务起不来，日志里是配置问题
@@ -264,10 +302,12 @@ location /api/events {
 |---|---|---|
 | **鉴权是单租户退化形态**：任何非空 token 都映射到同一个默认租户 | 不能用于多部门隔离或对外提供服务 | M5 接入真实账号体系 |
 | **会话存在内存里**，进程重启后丢失 | 重启会让进行中的任务失去上下文 | M5 落盘 |
-| **计量数据也在内存里** | 重启后用量归零，配额失效 | M5 落盘 |
+| **审计日志在内存里**，上限 5000 条 | 重启后审计记录清空 | M5 落盘 |
 | **配额熔断挂在工具执行前** | 拦不住「只生成文本、不调工具」的消耗 | M5 |
-| **无管理后台** | 用量与任务只能通过 API 查 | M4-3 |
+| **按用户下钻实际是按工作区** | 无法按人追责 | M5 把 userId 带进用量记录 |
+| **管理员靠 token 前缀判定** | 不是真实账号体系 | M5 |
 | **无前端界面** | 目前只有 HTTP API | M5 |
+| **看板每次查询全量读分片** | 数据量大时变慢（十万条内无感）| SaaS 形态换聚合表 |
 
 ---
 

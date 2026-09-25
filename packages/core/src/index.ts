@@ -23,3 +23,4 @@ export * from "./lessons.ts";
 export * from "./assets.ts";
 export * from "./fan-out.ts";
 export * from "./metering.ts";
+export * from "./dashboard.ts";

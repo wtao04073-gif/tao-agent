@@ -13,7 +13,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { TaskEvent, TenantContext } from "@tao/core";
+import { hasRoleAtLeast, Role, type TaskEvent, type TenantContext } from "@tao/core";
 import { parseAnchor, SseHub } from "./sse.ts";
 
 /** 请求体大小上限。防止一个请求吃满内存。 */
@@ -22,6 +22,13 @@ export const MAX_BODY_BYTES = 1024 * 1024;
 /** 鉴权结果。 */
 export interface Principal {
 	readonly tenant: TenantContext;
+	/**
+	 * 角色。管理接口按它判权。
+	 *
+	 * 默认 `Member` 而非 `TenantAdmin` —— 鉴权实现忘记设角色时，
+	 * 后果应当是「管理接口用不了」而不是「谁都是管理员」。
+	 */
+	readonly role: Role;
 }
 
 /** 平台需要的外部依赖。全部注入，便于测试与替换。 */
@@ -49,6 +56,20 @@ export interface AppDeps {
 	/** 取消任务。 */
 	readonly cancelTask: (tenant: TenantContext, taskId: string, reason: string) => Promise<void>;
 	readonly hub: SseHub;
+	/**
+	 * 取用量看板。仅租户管理员可调。
+	 *
+	 * 时间窗由调用方给定（默认当月），便于管理员查历史周期。
+	 */
+	readonly usageDashboard?: (
+		tenant: TenantContext,
+		window: { readonly from: number; readonly to: number },
+	) => Promise<unknown>;
+	/** 取审计日志。仅租户管理员可调。 */
+	readonly auditLog?: (
+		tenant: TenantContext,
+		window: { readonly from: number; readonly to: number },
+	) => Promise<readonly unknown[]>;
 }
 
 /** 读取并解析 JSON 请求体。 */
@@ -99,9 +120,64 @@ export function sendError(res: ServerResponse, status: number, message: string):
 	sendJson(res, status, { error: message });
 }
 
-/** 从 URL 里取路径段。 */
+/**
+ * 从 URL 里取路径段，并解码。
+ *
+ * **必须解码**：不解码的话中文路径会以 `%E4%B9%B1%E6%9D%A5` 的形态
+ * 进入错误信息，用户看到一串乱码不知道自己敲错了什么。
+ * 目标用户是高校行政与制造业管理岗，他们会用中文命名。
+ *
+ * 解码失败（畸形百分号编码）时保留原串 —— 报错总比崩掉好。
+ */
 function segments(pathname: string): string[] {
-	return pathname.split("/").filter((s) => s !== "");
+	return pathname
+		.split("/")
+		.filter((s) => s !== "")
+		.map((s) => {
+			try {
+				return decodeURIComponent(s);
+			} catch {
+				return s;
+			}
+		});
+}
+
+/**
+ * 解析时间窗查询参数，默认当月。
+ *
+ * 畸形值退回默认值而非报错 —— 管理员手敲 URL 时打错一个字符，
+ * 应当看到当月数据而不是一条参数校验错误。
+ *
+ * 但**起止顺序颠倒要报错**：`from > to` 会让查询返回空，
+ * 管理员会以为「这个月没人用」，而实际是参数写反了。
+ */
+export function parseWindow(
+	params: URLSearchParams,
+	now: () => number,
+): { ok: true; window: { from: number; to: number } } | { ok: false; reason: string } {
+	const parse = (raw: string | null): number | undefined => {
+		if (raw === null || raw.trim() === "") return undefined;
+		// 同时接受毫秒时间戳与 YYYY-MM-DD
+		const asNumber = Number(raw);
+		if (Number.isFinite(asNumber) && asNumber > 0) return asNumber;
+		const asDate = Date.parse(raw);
+		return Number.isNaN(asDate) ? undefined : asDate;
+	};
+
+	const at = new Date(now());
+	const defaultFrom = Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), 1);
+	const defaultTo = Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1);
+
+	const from = parse(params.get("from")) ?? defaultFrom;
+	const to = parse(params.get("to")) ?? defaultTo;
+
+	if (from >= to) {
+		return {
+			ok: false,
+			reason: "起始时间必须早于结束时间。参数格式为毫秒时间戳或 YYYY-MM-DD",
+		};
+	}
+	return { ok: true, window: { from, to } };
 }
 
 /**
@@ -116,7 +192,9 @@ function segments(pathname: string): string[] {
  *   POST /api/tasks/:id/cancel         取消
  *   GET  /api/events                   SSE 事件流
  */
-export function createApp(deps: AppDeps) {
+export function createApp(deps: AppDeps, options: { now?: () => number } = {}) {
+	const now = options.now ?? (() => Date.now());
+
 	return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 		const path = segments(url.pathname);
@@ -279,6 +357,56 @@ export function createApp(deps: AppDeps) {
 			}
 
 			sendError(res, 404, `未知的操作：${action}`);
+			return;
+		}
+
+		// ── 管理接口（仅租户管理员）──
+		if (path.length >= 2 && path[0] === "api" && path[1] === "admin") {
+			/**
+			 * 权限在这里统一判，不在每个子路由里各判一次。
+			 *
+			 * 分散判权的问题是「新增一个管理接口忘了加判断」——
+			 * 而那个疏漏的后果是普通成员能看到全租户的用量与审计日志。
+			 */
+			if (!hasRoleAtLeast(principal.role, Role.TenantAdmin)) {
+				// 回 403 而非 404：管理员入口是公开知识，藏不住也没必要藏。
+				// 但要说清是权限问题，否则管理员会以为功能没部署
+				sendError(res, 403, "需要租户管理员权限。若你确认应当有权限，请联系平台管理员");
+				return;
+			}
+
+			const window = parseWindow(url.searchParams, now);
+			if (!window.ok) {
+				sendError(res, 400, window.reason);
+				return;
+			}
+
+			if (method === "GET" && path[2] === "usage") {
+				if (deps.usageDashboard === undefined) {
+					sendError(res, 501, "当前部署未启用用量看板");
+					return;
+				}
+				sendJson(res, 200, await deps.usageDashboard(tenant, window.window));
+				return;
+			}
+
+			if (method === "GET" && path[2] === "audit") {
+				if (deps.auditLog === undefined) {
+					sendError(res, 501, "当前部署未启用审计查询");
+					return;
+				}
+				const entries = await deps.auditLog(tenant, window.window);
+				sendJson(res, 200, { entries, count: entries.length });
+				return;
+			}
+
+			if (method === "GET" && path[2] === "tasks") {
+				// 管理员看全工作区的任务，而成员只看自己工作区的
+				sendJson(res, 200, { tasks: deps.listTasks(tenant) });
+				return;
+			}
+
+			sendError(res, 404, `未知的管理接口：${path.slice(2).join("/")}`);
 			return;
 		}
 
