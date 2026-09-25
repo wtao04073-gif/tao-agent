@@ -37,10 +37,14 @@ describe("工具目录 · 基本查询", () => {
 		}
 	});
 
-	it("文档与知识库工具标为待实现", () => {
-		for (const name of ["read_document", "write_document", "search_knowledge"]) {
-			expect(findTool(name)?.status, name).toBe(ToolStatus.Planned);
+	it("M3-1 交付的文档工具已标为可用", () => {
+		for (const name of ["read_document", "write_document"]) {
+			expect(findTool(name)?.status, name).toBe(ToolStatus.Available);
 		}
+	});
+
+	it("知识库工具标为待实现", () => {
+		expect(findTool("search_knowledge")?.status).toBe(ToolStatus.Planned);
 	});
 
 	it("每个工具都标了读写属性", () => {
@@ -73,11 +77,11 @@ describe("工具目录 · 实现状态", () => {
 	});
 
 	it("全部已实现时判为可完整运行", () => {
-		expect(isFullyImplemented(["read_table", "reconcile_tables"])).toBe(true);
+		expect(isFullyImplemented(["read_table", "reconcile_tables", "write_document"])).toBe(true);
 	});
 
 	it("含待实现工具时判为不可完整运行", () => {
-		expect(isFullyImplemented(["read_table", "write_document"])).toBe(false);
+		expect(isFullyImplemented(["read_table", "search_knowledge"])).toBe(false);
 	});
 
 	it("空工具列表算「已实现」", () => {

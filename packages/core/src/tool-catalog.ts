@@ -34,9 +34,11 @@ export const TOOL_CATALOG: readonly ToolDescriptor[] = [
 	{ name: "read_table", label: "读取表格", status: ToolStatus.Available, access: "read" },
 	{ name: "reconcile_tables", label: "核对两张表并产出报告", status: ToolStatus.Available, access: "write" },
 
-	// ── 文档与知识库（M3）──
-	{ name: "read_document", label: "读取文档", status: ToolStatus.Planned, access: "read" },
-	{ name: "write_document", label: "生成文档", status: ToolStatus.Planned, access: "write" },
+	// ── 文档（M3-1 已交付）──
+	{ name: "read_document", label: "读取文档", status: ToolStatus.Available, access: "read" },
+	{ name: "write_document", label: "生成文档", status: ToolStatus.Available, access: "write" },
+
+	// ── 知识库（M3-2）──
 	{ name: "search_knowledge", label: "检索知识库", status: ToolStatus.Planned, access: "read" },
 ];
 

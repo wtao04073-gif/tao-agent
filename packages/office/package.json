@@ -19,6 +19,8 @@
   },
   "dependencies": {
     "@tao/core": "*",
-    "exceljs": "^4.4.0"
+    "docx": "^9.7.2",
+    "exceljs": "^4.4.0",
+    "mammoth": "^1.12.3"
   }
 }

@@ -26,7 +26,12 @@ import {
 	type ScenarioField,
 } from "../src/scenario.ts";
 import { Scope } from "../src/tenant.ts";
-import { findTool, isFullyImplemented, unknownTools } from "../src/tool-catalog.ts";
+import {
+	availableToolNames,
+	findTool,
+	isFullyImplemented,
+	unknownTools,
+} from "../src/tool-catalog.ts";
 
 /**
  * 按字段定义自动生成一个合法取值。
@@ -246,13 +251,27 @@ describe("预置场景卡 · 工具白名单与安全", () => {
 	});
 
 	it("如实反映哪些场景当前能跑到产出、哪些还缺工具", () => {
-		// 这条不是「全部必须已实现」—— M2 交付的是场景卡定义与提交链路，
-		// 文档与知识库工具排在 M3。断言的是**我们对差距的认知是准确的**：
-		// 纯表格场景现在就能跑通，其余在 M3 补齐工具后才完整。
+		// 这条断言是刻意会随进度失败的：M3-1 交付文档工具后它失败了一次，
+		// 逼我们把「6 张可跑」这个新事实写准，而不是让文档停留在旧状态。
+		// M3-2 交付 search_knowledge 后会再失败一次，那时 10 张全部可跑。
 		const runnable = PRESET_CARDS.filter((c) => isFullyImplemented([...c.tools])).map((c) => c.id);
-		expect(runnable.sort()).toEqual(["mfg.supplier-reconcile", "univ.data-cross-check"]);
+		expect(runnable.sort()).toEqual([
+			"mfg.8d-report",
+			"mfg.inspection-checklist",
+			"mfg.production-report",
+			"mfg.supplier-reconcile",
+			"univ.data-cross-check",
+			"univ.rectification-ledger",
+		]);
 
-		// 其余场景缺的必须只是 M3 计划内的工具，不能是不存在的工具
+		// 剩下 4 张缺的必须只是 search_knowledge —— 若出现别的缺口，
+		// 说明有场景卡引用了计划外的工具
+		const available = availableToolNames();
+		for (const card of PRESET_CARDS) {
+			const missing = card.tools.filter((t) => !available.has(t));
+			expect(missing.filter((m) => m !== "search_knowledge"), card.id).toEqual([]);
+		}
+
 		for (const card of PRESET_CARDS) {
 			for (const name of card.tools) {
 				expect(findTool(name)?.status, `${card.id} → ${name}`).toBeDefined();
