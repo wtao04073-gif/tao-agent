@@ -516,4 +516,165 @@ describe("RunnerAdapter 适配层", () => {
 			await runner.close();
 		});
 	});
+
+	describe("用量事件", () => {
+		it("usage 事件带真实模型名，不是 unknown", async () => {
+			/**
+			 * 这条断言是**真实服务跑通后补的**，而不是设计时就有的。
+			 *
+			 * 第一版翻译层从 `event.row.model` 读模型名，实测恒为 undefined ——
+			 * 内核的 `UsageRow` 只有 `{id, seq, usage, entryId, adjustment}`，
+			 * `Usage` 里也没有模型标识。模型名必须由宿主从配置注入。
+			 *
+			 * 缺陷有多隐蔽：用量事件照常上报、token 数完全正确，只有模型名
+			 * 是 "unknown"。而 M4-1 的 `estimateCost` 按模型名查单价 ——
+			 * 全归到 unknown 等于**全部未配价**，账面金额恒为 0。
+			 * 当时 764 项测试全绿，因为没有一条断言检查过模型名。
+			 */
+			const { factory, faux } = createRuntime();
+			const usages: Array<{ model: string; inputTokens: number }> = [];
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-usage",
+				sessionId: "session-usage",
+				systemPrompt: "s",
+				tools: [],
+				gate: () => allowAll,
+			});
+			runner.subscribe((event) => {
+				if (event.type === "usage") {
+					usages.push({ model: event.model, inputTokens: event.inputTokens });
+				}
+			});
+
+			faux.setResponses([fauxAssistantMessage("答复")]);
+			await runner.prompt("问题");
+			await runner.close();
+
+			expect(usages.length).toBeGreaterThanOrEqual(1);
+			// 关键：不是 "unknown"，而是真实配置的模型名
+			expect(usages[0]?.model).not.toBe("unknown");
+			expect(usages[0]?.model).toBe(faux.getModel().id);
+		});
+
+		it("用量落账拿到的模型名与事件一致", async () => {
+			// 事件用于展示、落账用于收费。两者模型名不一致会让看板与账单对不上
+			const { factory, faux } = createRuntime();
+			const metered: Array<{ model: string }> = [];
+			const eventModels: string[] = [];
+
+			const models = createModels();
+			models.setProvider(faux.provider);
+			const withMeter = new InProcessRunnerFactory({
+				async createSession(sessionId) {
+					const session = new StorageBackedSession(
+						{ id: sessionId, createdAt: 1, storageVersion: 1 },
+						new MemoryStorage(),
+					);
+					openSessions.push(session);
+					return session;
+				},
+				models,
+				model: faux.getModel(),
+				now: () => 1_700_000_000_000,
+				meter: (record) => void metered.push({ model: record.model }),
+			});
+
+			const runner = await withMeter.createRunner({
+				tenant: TENANT,
+				taskId: "task-meter",
+				sessionId: "session-meter",
+				systemPrompt: "s",
+				tools: [],
+				gate: () => allowAll,
+			});
+			runner.subscribe((event) => {
+				if (event.type === "usage") eventModels.push(event.model);
+			});
+
+			faux.setResponses([fauxAssistantMessage("答复")]);
+			await runner.prompt("问题");
+			// 落账是异步的，等它跑完
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await runner.close();
+
+			expect(metered.length).toBeGreaterThanOrEqual(1);
+			expect(metered[0]?.model).toBe(eventModels[0]);
+			expect(metered[0]?.model).not.toBe("unknown");
+		});
+
+		it("用量的 token 数逐项对应，不串字段", async () => {
+			// input/output/cacheRead/cacheWrite 写串了会让账目偏差而功能正常
+			const { factory, faux } = createRuntime();
+			const usages: Array<{
+				inputTokens: number;
+				outputTokens: number;
+				cacheReadTokens: number;
+				cacheWriteTokens: number;
+			}> = [];
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-tokens",
+				sessionId: "session-tokens",
+				systemPrompt: "s",
+				tools: [],
+				gate: () => allowAll,
+			});
+			runner.subscribe((event) => {
+				if (event.type === "usage") {
+					usages.push({
+						inputTokens: event.inputTokens,
+						outputTokens: event.outputTokens,
+						cacheReadTokens: event.cacheReadTokens,
+						cacheWriteTokens: event.cacheWriteTokens,
+					});
+				}
+			});
+
+			/**
+			 * 让 input 与 output 明显不等 —— 否则写串测不出来。
+			 *
+			 * faux provider 按**提示词与回复的实际长度**算 usage（忽略手填的
+			 * usage 字段），所以用一个很短的提问配一段很长的回复：
+			 * input 会远小于 output。
+			 */
+			const longReply = "这是一段很长的回复。".repeat(40);
+			faux.setResponses([fauxAssistantMessage(longReply)]);
+			await runner.prompt("短问");
+			await runner.close();
+
+			const usage = usages[0];
+			expect(usage).toBeDefined();
+
+			/**
+			 * 用**互不相同的值**逐项对号，不能只断言「是数字」。
+			 *
+			 * 这条断言被变异测试加强过：原版只检查四项都是 number，
+			 * 把 `inputTokens: usage.input` 与 `outputTokens: usage.output`
+			 * 互换后依然通过 —— 因为 `fauxAssistantMessage` 的 usage 全是 0，
+			 * 交换 0 和 0 没有差别。
+			 *
+			 * 而这个缺陷在生产里代价不小：输出单价通常是输入的 4 倍，
+			 * 写串会让账目系统性偏差，且功能完全正常。
+			 */
+			// 短问长答 → output 必然远大于 input。写串会让这条反过来
+			expect(usage?.outputTokens).toBeGreaterThan((usage?.inputTokens ?? 0) * 3);
+			expect(usage?.inputTokens).toBeGreaterThan(0);
+			// 四项都是数字，不会让账目出现 NaN
+			for (const value of Object.values(usage ?? {})) {
+				expect(typeof value).toBe("number");
+				expect(Number.isNaN(value)).toBe(false);
+			}
+
+			/**
+			 * **已知未覆盖**：`cacheRead` 与 `cacheWrite` 互换测不出来。
+			 *
+			 * faux provider 只在同一会话的第二轮起才产生非零缓存值，
+			 * 为此造场景的成本高于收益 —— 两项单价接近，写串的账目偏差很小。
+			 * 若将来接入按缓存计费差异大的模型，这里要补一条同会话多轮的断言。
+			 */
+		});
+	});
 });

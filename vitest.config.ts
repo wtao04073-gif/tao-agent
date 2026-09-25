@@ -24,6 +24,7 @@ export default defineConfig({
 			{ find: /^@tao\/orchestrator$/, replacement: fileURLToPath(new URL("./packages/orchestrator/src/index.ts", import.meta.url)) },
 			{ find: /^@tao\/office$/, replacement: fileURLToPath(new URL("./packages/office/src/index.ts", import.meta.url)) },
 			{ find: /^@tao\/knowledge$/, replacement: fileURLToPath(new URL("./packages/knowledge/src/index.ts", import.meta.url)) },
+			{ find: /^@tao\/server$/, replacement: fileURLToPath(new URL("./packages/server/src/index.ts", import.meta.url)) },
 			{ find: /^@tao\/core$/, replacement: fileURLToPath(new URL("./packages/core/src/index.ts", import.meta.url)) },
 		],
 	},

@@ -6,6 +6,12 @@
  */
 
 export { InProcessRunnerFactory, type HostRuntime } from "./in-process-runner.ts";
+export { MemorySessionFactory } from "./memory-session.ts";
+export {
+	createModelRuntime,
+	type ModelEndpoint,
+	type ModelRuntime,
+} from "./model-runtime.ts";
 export {
 	EventSequencer,
 	StepCounter,

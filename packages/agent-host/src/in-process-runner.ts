@@ -128,7 +128,14 @@ class InProcessRunner implements Runner {
 	private readonly lane: AgentLane;
 	private readonly spec: RunnerSpec;
 
-	constructor(sessionId: string, session: Session, lane: AgentLane, spec: RunnerSpec, now: () => number) {
+	constructor(
+		sessionId: string,
+		session: Session,
+		lane: AgentLane,
+		spec: RunnerSpec,
+		now: () => number,
+		model: string,
+	) {
 		this.sessionId = sessionId;
 		this.session = session;
 		this.lane = lane;
@@ -139,6 +146,7 @@ class InProcessRunner implements Runner {
 			sequencer: new EventSequencer(spec.taskId),
 			toolLabels: new Map(spec.tools.map((t) => [t.name, t.label])),
 			now,
+			model,
 		};
 	}
 
@@ -355,7 +363,8 @@ export class InProcessRunnerFactory implements RunnerFactory {
 		);
 
 		const lane = await harness.lane("main", BACKGROUND_CONTEXT);
-		const runner = new InProcessRunner(spec.sessionId, session, lane, spec, now);
+		const modelName = this.runtime.model.id;
+		const runner = new InProcessRunner(spec.sessionId, session, lane, spec, now, modelName);
 		runnerRef = runner;
 
 		// 接线：内核事件 → 平台事件
@@ -398,7 +407,6 @@ export class InProcessRunnerFactory implements RunnerFactory {
 		if (meter !== undefined) {
 			harness.events.on("usage", ((event: {
 				row?: {
-					model?: string;
 					usage?: {
 						input?: number;
 						output?: number;
@@ -415,7 +423,8 @@ export class InProcessRunnerFactory implements RunnerFactory {
 							tenantId: spec.tenant.tenantId,
 							workspaceId: spec.tenant.workspaceId,
 							taskId: spec.taskId,
-							model: event.row?.model ?? "unknown",
+							// 同上：模型名来自配置，不是内核事件
+							model: modelName,
 							inputTokens: u.input ?? 0,
 							outputTokens: u.output ?? 0,
 							cacheReadTokens: u.cacheRead ?? 0,

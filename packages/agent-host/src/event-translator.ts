@@ -38,6 +38,19 @@ export interface TranslatorContext {
 	readonly toolLabels: ReadonlyMap<string, string>;
 	/** 取当前时间。注入以便测试可控。 */
 	readonly now: () => number;
+	/**
+	 * 本次会话使用的模型名。
+	 *
+	 * **必须由宿主注入，内核事件里没有。** 第一版从 `event.row.model` 读，
+	 * 实测恒为 undefined —— 内核的 `UsageRow` 只有 `{id, seq, usage, ...}`，
+	 * `Usage` 里也没有模型标识。
+	 *
+	 * 后果很隐蔽：用量事件照常上报、token 数也对，只是模型名全是
+	 * "unknown"。而 M4-1 的 `estimateCost` 按模型名查单价 ——
+	 * 全归到 unknown 就等于**全部未配价**，账面金额恒为 0。
+	 * 功能测试全绿（任务能跑、token 有数），只有对账时才发现钱算不出来。
+	 */
+	readonly model: string;
 }
 
 /** 内核事件的最小形状 —— 只声明我们实际消费的字段，减少对上游结构的耦合。 */
@@ -48,7 +61,6 @@ export interface KernelEvent {
 	readonly args?: unknown;
 	readonly isError?: boolean;
 	readonly row?: {
-		readonly model?: string;
 		readonly usage?: {
 			readonly input?: number;
 			readonly output?: number;
@@ -146,7 +158,8 @@ export function translate(
 				{
 					...base(),
 					type: "usage",
-					model: event.row?.model ?? "unknown",
+					// 模型名来自宿主注入，内核事件里没有（见 TranslatorContext.model）
+					model: ctx.model,
 					inputTokens: usage.input ?? 0,
 					outputTokens: usage.output ?? 0,
 					cacheReadTokens: usage.cacheRead ?? 0,

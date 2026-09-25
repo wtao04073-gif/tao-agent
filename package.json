@@ -22,7 +22,9 @@
     "spike": "vitest --run --config vitest.spikes.config.ts",
     "verify:vendor": "node scripts/verify-vendor.mjs",
     "check:boundaries": "node scripts/check-boundaries.mjs",
-    "verify": "npm run check:boundaries && npm run test && npm run spike"
+    "verify": "npm run check:boundaries && npm run test && npm run spike",
+    "doctor": "node scripts/doctor.mjs",
+    "serve": "node packages/server/dist/main.js"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",

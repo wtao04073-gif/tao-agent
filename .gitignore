@@ -63,3 +63,4 @@ vendor/**/*.tsbuildinfo
 # 我们从发布包提取后纳入源码树，以保证离线可编译。详见 vendor/pi/README.md
 !vendor/pi/ai/src/providers/data/
 !vendor/pi/ai/src/providers/data/**
+deploy/.env
