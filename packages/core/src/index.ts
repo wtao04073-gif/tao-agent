@@ -21,3 +21,4 @@ export * from "./chunking.ts";
 export * from "./provenance.ts";
 export * from "./lessons.ts";
 export * from "./assets.ts";
+export * from "./fan-out.ts";
