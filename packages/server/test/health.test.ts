@@ -205,6 +205,42 @@ describe("模型 API 连通性检查", () => {
 		expect(result.level).toBe("warn");
 		expect(result.advice).toContain("稍后重试");
 	});
+
+	it("404 报 fail 并指出漏了 /v1 后缀 —— 不是「可达」", () => {
+		// 判 pass 会让客户带着「自检通过」的结论去查别处，而真实任务全部失败。
+		// 给的不是错误码，而是可执行动作：去改 MODEL_BASE_URL 的路径
+		const result = checkModelApi({ reachable: true, status: 404, endpointHost: "api.deepseek.com" });
+		expect(result.level).toBe("fail");
+		expect(result.advice).toContain("MODEL_BASE_URL");
+		expect(result.advice).toContain("/v1");
+	});
+
+	it("429 报 warn 并给出降并发与查配额两条动作", () => {
+		// 服务本身是通的，扛不住的是并发或配额，所以不报 fail；
+		// 给的不是「限流了」，而是先调 MAX_CONCURRENT_TASKS、再找服务方核配额
+		const result = checkModelApi({ reachable: true, status: 429 });
+		expect(result.level).toBe("warn");
+		expect(result.advice).toContain("MAX_CONCURRENT_TASKS");
+		expect(result.advice).toContain("配额");
+	});
+
+	it("其他 4xx 报 fail 并给出自行验证接口的命令", () => {
+		// 400 这类请求不合规同样不能算通过；给的不是状态码，
+		// 而是一条能立刻看到服务方真实原因的 curl
+		const result = checkModelApi({ reachable: true, status: 400 });
+		expect(result.level).toBe("fail");
+		expect(result.advice).toContain("curl");
+		expect(result.advice).toContain("MODEL_BASE_URL");
+	});
+
+	it("非 2xx 的排查建议同样不回显 API Key", () => {
+		// 安全断言覆盖新增分支：404 / 429 / 400 的输出也会被截图发群
+		for (const status of [400, 404, 429]) {
+			const result = checkModelApi({ reachable: true, status });
+			const text = `${result.detail} ${result.advice ?? ""}`;
+			expect(text).not.toMatch(/sk-[A-Za-z0-9]/);
+		}
+	});
 });
 
 describe("工作区可写检查", () => {

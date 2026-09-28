@@ -44,6 +44,17 @@ export class IllegalTransition extends Error {
 	}
 }
 
+/**
+ * 未编号的事件草稿。
+ *
+ * `seq` / `eventId` 一律由编排器在入库时统一分配，因此草稿里不带 ——
+ * 类型上挡住「调用方自带序号」这条路。条件类型是为了在联合类型上逐成员
+ * 做 Omit，直接 `Omit<TaskEvent, ...>` 会把各分支的专有字段都丢掉。
+ */
+type EventDraft<E extends TaskEvent = TaskEvent> = E extends TaskEvent
+	? Omit<E, "seq" | "eventId">
+	: never;
+
 export interface SubmitOptions {
 	readonly tenant: TenantContext;
 	readonly taskId: string;
@@ -68,6 +79,14 @@ export class TaskOrchestrator {
 	private readonly listeners = new Set<TaskEventListener>();
 	/** 每个任务的事件缓冲，供断线重连后按 seq 拉增量。 */
 	private readonly eventLog = new Map<string, TaskEvent[]>();
+	/**
+	 * 每个任务已分配到的最大 seq。
+	 *
+	 * 不复用 `eventLog` 的长度：一旦日志将来做裁剪（只留最近 N 条），
+	 * 长度就会回退，而 seq 一旦回退，`events(afterSeq)` 与 SSE 的
+	 * `Last-Event-ID` 就会把新事件误判成「客户端已收到」而永久漏发。
+	 */
+	private readonly seqCursor = new Map<string, number>();
 	private readonly factory: RunnerFactory;
 	private readonly now: () => number;
 
@@ -120,6 +139,7 @@ export class TaskOrchestrator {
 		};
 		this.tasks.set(options.taskId, record);
 		this.eventLog.set(options.taskId, []);
+		this.seqCursor.set(options.taskId, 0);
 		await this.emitStatus(record, null, TaskStatus.Queued);
 
 		const runner = await this.factory.createRunner({
@@ -133,20 +153,25 @@ export class TaskOrchestrator {
 		});
 		this.runners.set(options.taskId, runner);
 
-		// Runner 的事件转投给编排器的订阅者，并落到事件日志
+		// Runner 的事件转投给编排器的订阅者，并落到事件日志。
+		// Runner 有自己从 1 开始的序号空间，直接入库会与状态事件的序号撞车，
+		// 因此这里统一重新编号（见 ingest）
 		runner.subscribe(async (event) => {
-			this.eventLog.get(options.taskId)?.push(event);
+			const stamped = this.ingest(options.taskId, event);
+			// 先投递本事件再处理派生状态：派生出的状态事件 seq 更大，若晚于它
+			// 送达，客户端的重连锚点（Last-Event-ID / afterSeq）就会停在更大的
+			// 序号上，本事件从此再也拉不到
+			await this.fanout(stamped);
 			// 权限门要求确认时，任务转入 AWAIT_CONFIRM
-			if (event.type === "tool_decision" && event.decision === "await_confirm") {
-				await this.transition(options.taskId, TaskStatus.AwaitConfirm, event.reason);
+			if (stamped.type === "tool_decision" && stamped.decision === "await_confirm") {
+				await this.transition(options.taskId, TaskStatus.AwaitConfirm, stamped.reason);
 			}
-			if (event.type === "artifact") {
+			if (stamped.type === "artifact") {
 				this.updateRecord(options.taskId, (r) => ({
 					...r,
-					artifacts: [...r.artifacts, event.artifactId],
+					artifacts: [...r.artifacts, stamped.artifactId],
 				}));
 			}
-			await this.fanout(event);
 		});
 
 		return this.tasks.get(options.taskId) as TaskRecord;
@@ -259,10 +284,7 @@ export class TaskOrchestrator {
 		to: TaskStatus,
 		reason?: string,
 	): Promise<void> {
-		const log = this.eventLog.get(record.taskId) ?? [];
-		const event: TaskEvent = {
-			eventId: `${record.taskId}-status-${log.length + 1}`,
-			seq: log.length + 1,
+		const event = this.ingest(record.taskId, {
 			taskId: record.taskId,
 			tenant: record.tenant,
 			at: this.now(),
@@ -270,10 +292,37 @@ export class TaskOrchestrator {
 			from,
 			to,
 			...(reason === undefined ? {} : { reason }),
-		};
-		log.push(event);
-		this.eventLog.set(record.taskId, log);
+		});
 		await this.fanout(event);
+	}
+
+	/**
+	 * 给事件打上编排器的序号并落入事件日志。
+	 *
+	 * 进入 `eventLog` 的**唯一**入口。状态事件与 Runner 事件必须共用同一个
+	 * 序号空间：Runner 自己的序号从 1 开始，与状态事件混在一条日志里会出现
+	 * 重复且倒退的 seq，而 `events(afterSeq)` 和 SSE 的 `Last-Event-ID` 都是
+	 * 按数值单向过滤的 —— 序号一倒退，倒退区间内的事件就永久拉不到。
+	 *
+	 * Runner 原有的 seq / eventId 在此被丢弃（`TaskEvent` 上二者是 readonly，
+	 * 故以展开方式构造新对象）。Runner 侧序号只用于其内部排序与回放比对，
+	 * 跨层后不再有意义。
+	 */
+	private ingest(taskId: string, draft: EventDraft): TaskEvent {
+		const seq = (this.seqCursor.get(taskId) ?? 0) + 1;
+		this.seqCursor.set(taskId, seq);
+
+		const event = {
+			...draft,
+			seq,
+			// 序号在任务内唯一，拼上 taskId 后全局唯一，且可复现便于回放比对
+			eventId: `${taskId}-${seq}`,
+		} as TaskEvent;
+
+		const log = this.eventLog.get(taskId) ?? [];
+		log.push(event);
+		this.eventLog.set(taskId, log);
+		return event;
 	}
 
 	/** 把事件投给所有订阅者。单个订阅者异常不影响其他订阅者与任务执行。 */

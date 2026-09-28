@@ -273,6 +273,54 @@ describe("任务编排 · 事件流", () => {
 		expect(incremental.every((e) => e.seq > (all[0]?.seq ?? 0))).toBe(true);
 	});
 
+	it("状态事件与 Runner 事件混合后 seq 严格单调递增且不重复", async () => {
+		// Runner 有自己从 1 开始的序号空间（假 Runner 用 1000+ 模拟另一套空间），
+		// 编排器必须重编号 —— 否则日志里会出现重复且倒退的 seq，
+		// 而 events(afterSeq) / SSE 的 Last-Event-ID 都是按数值单向过滤的
+		const { runner } = fakeRunner({
+			onPrompt: (emit) => {
+				emit({ type: "step", step: 1, action: "读取表格", phase: "started" } as TaskEvent);
+				emit({ type: "step", step: 1, action: "读取表格", phase: "finished" } as TaskEvent);
+			},
+		});
+		const orch = new TaskOrchestrator(factoryOf(runner));
+		await orch.submit(baseSubmit);
+		await orch.run("task-1", "x");
+
+		const all = orch.events("task-1");
+		// QUEUED / RUNNING / SUCCEEDED 三条状态事件 + 两条 Runner 步骤事件
+		expect(all.length).toBe(5);
+		expect(all.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
+		// eventId 也必须唯一，前端靠它去重
+		expect(new Set(all.map((e) => e.eventId)).size).toBe(all.length);
+	});
+
+	it("Runner 事件晚于状态事件到达也不会被 afterSeq 漏掉", async () => {
+		// 缺陷场景复现：客户端收到 seq=2 后断线，若 Runner 事件仍用自己的
+		// seq=1，重连时按 afterSeq=2 过滤就会把它永久跳过
+		const { runner } = fakeRunner({
+			onPrompt: (emit) => {
+				emit({ type: "step", step: 1, action: "核对明细", phase: "started" } as TaskEvent);
+				emit({ type: "step", step: 1, action: "核对明细", phase: "finished" } as TaskEvent);
+			},
+		});
+		const orch = new TaskOrchestrator(factoryOf(runner));
+		await orch.submit(baseSubmit);
+		await orch.run("task-1", "x");
+
+		const all = orch.events("task-1");
+		// 逐个锚点拉增量：任一断点续传都应恰好补齐剩余部分，一条不漏一条不重
+		for (let i = 0; i < all.length; i += 1) {
+			const anchor = all[i]?.seq ?? 0;
+			const incremental = orch.events("task-1", anchor);
+			expect(incremental.map((e) => e.eventId)).toEqual(
+				all.slice(i + 1).map((e) => e.eventId),
+			);
+		}
+		// 步骤事件不能因序号被状态事件盖过而消失
+		expect(all.filter((e) => e.type === "step").length).toBe(2);
+	});
+
 	it("Runner 的事件被转投给编排器订阅者", async () => {
 		const { runner } = fakeRunner({
 			onPrompt: (emit) => {

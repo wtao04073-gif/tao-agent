@@ -210,6 +210,31 @@ export function checkModelApi(outcome: {
 		};
 	}
 
+	/**
+	 * 取不到状态码时不能判通过。连接建立只说明地址通，不说明模型接口能用，
+	 * 而「自检通过但所有任务失败」是最费时间的排查起点。
+	 */
+	if (outcome.status === undefined) {
+		return {
+			name: "模型 API 连通性",
+			level: "warn",
+			detail: `已连上${where}但未取到 HTTP 状态码`,
+			advice:
+				"手动确认接口真的可调用：" +
+				'curl -i "$MODEL_BASE_URL/v1/models" -H "Authorization: Bearer $MODEL_API_KEY"',
+		};
+	}
+
+	/**
+	 * 只有明确的 2xx 才算通过。
+	 *
+	 * 自检与真实任务用同一个地址和同一份凭证，这里放行就等于把问题推迟到
+	 * 任务全量失败时才暴露 —— 那时客户看到的是「装好了但一个都跑不成」。
+	 */
+	if (outcome.status >= 200 && outcome.status < 300) {
+		return { name: "模型 API 连通性", level: "pass", detail: `可达${where}` };
+	}
+
 	if (outcome.status === 401 || outcome.status === 403) {
 		return {
 			name: "模型 API 连通性",
@@ -220,7 +245,38 @@ export function checkModelApi(outcome: {
 		};
 	}
 
-	if (outcome.status !== undefined && outcome.status >= 500) {
+	/**
+	 * 404 是地址路径配错，与「服务不可用」要分开报 —— 前者改一行配置就好，
+	 * 后者要查网络。漏掉 /v1 后缀是最常见的一种。
+	 */
+	if (outcome.status === 404) {
+		return {
+			name: "模型 API 连通性",
+			level: "fail",
+			detail: "网络可达但接口路径不存在（HTTP 404）",
+			advice:
+				"检查配置项 MODEL_BASE_URL 的路径是否正确：多数服务商要求带 /v1 后缀" +
+				"（如 https://api.example.com/v1）。" +
+				'可用 curl -i "$MODEL_BASE_URL/v1/models" 确认哪个路径有响应',
+		};
+	}
+
+	/**
+	 * 429 归 warn 而非 fail：服务本身是通的，扛不住的是当前并发或配额，
+	 * 报 fail 会让客户回去反复检查配置。
+	 */
+	if (outcome.status === 429) {
+		return {
+			name: "模型 API 连通性",
+			level: "warn",
+			detail: "网络可达但被限流（HTTP 429）",
+			advice:
+				"把并发上限调低（配置项 MAX_CONCURRENT_TASKS=2）后重试；" +
+				"若刚部署就限流，多半是账号配额已用完或未开通该模型，需找模型服务提供方确认配额",
+		};
+	}
+
+	if (outcome.status >= 500) {
 		return {
 			name: "模型 API 连通性",
 			level: "warn",
@@ -229,7 +285,15 @@ export function checkModelApi(outcome: {
 		};
 	}
 
-	return { name: "模型 API 连通性", level: "pass", detail: `可达${where}` };
+	return {
+		name: "模型 API 连通性",
+		level: "fail",
+		detail: `网络可达但接口返回异常（HTTP ${outcome.status}）`,
+		advice:
+			"4xx 说明请求不符合服务方要求，先核对配置项 MODEL_BASE_URL 的路径与 MODEL_API_KEY 的格式；" +
+			"3xx 说明地址被重定向，改填重定向后的地址。" +
+			'可用 curl -i "$MODEL_BASE_URL/v1/models" 看响应体里的具体原因',
+	};
 }
 
 /**

@@ -21,6 +21,7 @@ import {
 	withQuotaGate,
 	Role,
 	type AuditEntry,
+	type ModelPrice,
 	type Quota,
 	type ScenarioCard,
 	type TenantContext,
@@ -79,6 +80,30 @@ const auditEntries: Array<AuditEntry & { at: number; tenantId: string; taskId: s
 /** 审计条数上限。超出后丢最旧的 —— 内存实现必须有上限，否则长跑会 OOM。 */
 const MAX_AUDIT_ENTRIES = 5000;
 const hub = new SseHub();
+
+/**
+ * 模型价格表。
+ *
+ * **配额判定与用量看板必须用同一份** —— 两边不一致时，看板显示「还没到上限」
+ * 而闸门已经在拦，或者反过来，客户会认为平台在乱算账。
+ *
+ * 一期只装配了一个模型（见 createModelRuntime），所以表里只有一条。
+ * 未配单价时是空表：用量会被列进 `unpricedModels` 而不是按 0 元放行；
+ * 配了金额上限却没配价的组合已在 config.ts 拦成启动错误。
+ */
+const modelPrices: readonly ModelPrice[] =
+	config.modelInputPriceYuan === undefined || config.modelOutputPriceYuan === undefined
+		? []
+		: [
+				{
+					model: config.modelName,
+					inputPerMillionYuan: config.modelInputPriceYuan,
+					outputPerMillionYuan: config.modelOutputPriceYuan,
+					...(config.modelCacheReadPriceYuan === undefined
+						? {}
+						: { cacheReadPerMillionYuan: config.modelCacheReadPriceYuan }),
+				},
+			];
 
 /**
  * 配额。三项都留空时为 undefined —— 私有化部署的默认形态。
@@ -240,7 +265,8 @@ const app = createApp({
 			quota === undefined
 				? baseGate
 				: withQuotaGate(baseGate, {
-						evaluate: async () => evaluateQuota({ store: meteringStore, quota }),
+						evaluate: async () =>
+							evaluateQuota({ store: meteringStore, quota, prices: modelPrices }),
 						audit: (entry) => {
 							process.stdout.write(
 								`[配额] ${entry.tool} 被拦：${entry.reason}（${entry.exceeded}）\n`,
@@ -286,10 +312,13 @@ const app = createApp({
 		const records = await meteringStore.list(tenant.tenantId, window);
 		const quota = currentQuota(tenant.tenantId);
 		const verdict =
-			quota === undefined ? undefined : await evaluateQuota({ store: meteringStore, quota });
+			quota === undefined
+				? undefined
+				: await evaluateQuota({ store: meteringStore, quota, prices: modelPrices });
 		return buildDashboard({
 			records,
 			period: window,
+			prices: modelPrices,
 			...(quota === undefined ? {} : { quota }),
 			...(verdict === undefined ? {} : { verdict }),
 		});

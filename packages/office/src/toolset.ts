@@ -11,7 +11,8 @@
  * 结果经过模型必然失真。让工具内部完成数据流转，模型只负责决策。
  */
 
-import { join } from "node:path";
+import { lstat, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { reconcile, type PlatformTool } from "@tao/core";
 import { readSheet, listSheets } from "./xlsx-reader.ts";
 import { writeReconcileReport } from "./xlsx-report.ts";
@@ -26,6 +27,81 @@ export interface ToolsetOptions {
 
 /** 预览行数上限。给模型看样本即可，不必也不该把整表塞进上下文。 */
 const PREVIEW_ROWS = 5;
+
+/** 产出路径的校验结论。拒绝原因要能直接回给模型，所以带上说明文本。 */
+type OutputPath = { readonly ok: true; readonly path: string } | { readonly ok: false; readonly text: string };
+
+/**
+ * 把产出文件名解析成工作区内的绝对路径。
+ *
+ * `outputName` 由模型给出，而它不是登记在 `OFFICE_TOOL_POLICIES` 里的路径参数，
+ * 权限门不会校验它 —— 所以这道约束是产物落盘前唯一的边界：光靠 `join` 拼接，
+ * `../../其他租户/凭据` 这类名字会把写入落到工作区之外。
+ *
+ * 逃逸有两层，必须分别挡：
+ *
+ *  1. **词法层**：`../` 与绝对路径。与 [writeDocx](./docx-writer.ts) 同口径只接受
+ *     纯文件名，再用 resolve 后的结果复核一次，防止规范化层面没想到的写法。
+ *  2. **文件系统层**：词法上干净的纯文件名，在工作区里也可能已经是一条指向外部的
+ *     链接（前一轮任务的产物、被投毒的输入目录都可能留下）。符号链接跟随写入等于
+ *     覆写工作区外的目标；硬链接更隐蔽 —— 它就是同一个 inode 的另一个名字，
+ *     `isFile()` 为真、也没有链接形态可查，只有 `nlink > 1` 这一个迹象能说明
+ *     「这份数据在工作区外还有别的入口」。字符串比对完全看不到这一层，所以必须
+ *     落到 inode 上看。
+ *
+ * 这里用 `lstat` 而非 `stat` —— `stat` 会跟随链接，看到的是目标而不是链接本身，
+ * 正好把要拦的东西隐藏掉。目标文件不存在是首次产出的正常情况，不算失败。
+ *
+ * 这道校验与 open 之间仍有时间窗，所以它只负责把拒绝原因讲清楚回给模型；写入不越界
+ * 由 [writeReconcileReport](./xlsx-report.ts) 的临时文件 + 原子 rename 独立保证。
+ */
+async function resolveOutputPath(workspace: string, fileName: string): Promise<OutputPath> {
+	const rejectLexical = { ok: false, text: `产出文件名不能包含路径：${fileName}。报告一律落在任务工作区内，请只给文件名` } as const;
+	if (fileName.includes("/") || fileName.includes("\\") || isAbsolute(fileName)) return rejectLexical;
+	const absolute = resolve(workspace, fileName);
+	if (!absolute.startsWith(`${resolve(workspace)}${sep}`)) return rejectLexical;
+
+	// 父目录按 realpath 比对：纯文件名的父目录就是工作区，而工作区路径自身也可能
+	// 经由链接指进来。把两端都解析成真实路径再比，边界才建立在 inode 上而不是字面量上。
+	// realpath 对不存在的路径会抛错，工作区不可用时宁可不产出。
+	let realWorkspace: string;
+	let realParent: string;
+	try {
+		realWorkspace = await realpath(resolve(workspace));
+		realParent = await realpath(dirname(absolute));
+	} catch {
+		return { ok: false, text: `任务工作区不可用，无法产出报告：${workspace}` };
+	}
+	if (realParent !== realWorkspace && !realParent.startsWith(`${realWorkspace}${sep}`)) {
+		return { ok: false, text: `产出目录不在任务工作区内，已拒绝写出：${fileName}` };
+	}
+
+	try {
+		const info = await lstat(absolute);
+		if (info.isSymbolicLink()) {
+			return {
+				ok: false,
+				text: `产出位置已是符号链接，拒绝跟随写出：${fileName}。请换一个文件名`,
+			};
+		}
+		if (!info.isFile()) {
+			return { ok: false, text: `产出位置已被非普通文件占用：${fileName}。请换一个文件名` };
+		}
+		if (info.nlink > 1) {
+			return {
+				ok: false,
+				text: `产出位置被多个硬链接共享，拒绝写出：${fileName}。请换一个文件名`,
+			};
+		}
+	} catch (error) {
+		// ENOENT 是首次产出的常态；其余错误说明这个位置本身有问题，不该继续写
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+			return { ok: false, text: `产出位置不可用：${fileName}` };
+		}
+	}
+
+	return { ok: true, path: absolute };
+}
 
 export function createOfficeToolset(options: ToolsetOptions): PlatformTool[] {
 	const now = options.now ?? (() => new Date());
@@ -135,6 +211,14 @@ export function createOfficeToolset(options: ToolsetOptions): PlatformTool[] {
 			const leftLabel = input.leftLabel ?? "左表";
 			const rightLabel = input.rightLabel ?? "右表";
 
+			// 在读表之前先把产出路径定下来 —— 名字不合法就不必白跑一趟核对
+			const fileName = input.outputName ?? "对账差异报告.xlsx";
+			const output = await resolveOutputPath(options.workspace, fileName);
+			if (!output.ok) {
+				return { isError: true, text: output.text };
+			}
+			const outputPath = output.path;
+
 			report("正在读取两张表");
 			const [left, right] = await Promise.all([
 				readSheet(input.leftPath, input.leftSheet),
@@ -168,8 +252,6 @@ export function createOfficeToolset(options: ToolsetOptions): PlatformTool[] {
 			});
 
 			report("正在生成报告");
-			const fileName = input.outputName ?? "对账差异报告.xlsx";
-			const outputPath = join(options.workspace, fileName);
 			await writeReconcileReport(outputPath, result, {
 				title: `${leftLabel} 与 ${rightLabel} 核对报告`,
 				leftLabel,
@@ -227,5 +309,7 @@ export function createOfficeToolset(options: ToolsetOptions): PlatformTool[] {
 export const OFFICE_TOOL_POLICIES = [
 	{ tool: "list_sheets", pathParams: ["path"] },
 	{ tool: "read_table", pathParams: ["path"] },
+	// reconcile_tables 的 outputName 不登记为路径参数 —— 它由 resolveOutputPath
+	// 强制成工作区内的纯文件名，不给模型指定路径的机会
 	{ tool: "reconcile_tables", pathParams: ["leftPath", "rightPath"] },
 ] as const;
