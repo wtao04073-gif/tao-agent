@@ -156,7 +156,8 @@
    场景工作台页面逻辑
    - 渲染分组场景卡网格
    - 行业筛选 + 关键词搜索（无匹配时给出自由对话空态）
-   - 点击卡片 → 引导式要点收集表单 → 必填校验 → 写入 pending → 跳转会话页
+   - 点击卡片 → 引导式要点收集表单 → 必填校验 → 建 queued 任务 → 申领并发名额
+     → 写入 pending → 跳转会话页
    ========================================================================= */
 (function () {
   var U = App.Util, S = App.Scenes;
@@ -258,8 +259,75 @@
   });
   S.bindFiles(U.$('#sceneForm'));
 
-  /* ---------- 提交：必填校验 → 建任务 → 跳会话页 ---------- */
-  U.$('#sceneSubmit').addEventListener('click', function () {
+  /* ---------- 提交：必填校验 → 建 queued 任务 → 申领名额 → 跳会话页 ----------
+     整条链路（固定 id → 落盘 → 申领名额 → 交还租约 → 写待启动 → 跳转）由一个闸门
+     看住：点第一次就落闸，链路走完之前的任何一次点击都不再新建任务。按任务 id 去重
+     挡不住连点——每次点击都会先摇一个新 id，两次点击是两个互不相同的 id，各自都能
+     通过 id 级去重，各自落盘并申领名额，用户只看到后一个会话，前一个成了没人看着
+     却仍排队或占着名额的任务。 */
+  var submitting = false;   // 提交链路是否在途：全页唯一的闸门，不按任务 id 分桶
+  var submitBtn = U.$('#sceneSubmit');
+  var submitText = submitBtn.textContent;
+
+  /** 落闸：按钮同步禁用并换成在途文案，让用户看得出点击已被受理 */
+  function lockSubmit() {
+    submitting = true;
+    submitBtn.disabled = true;
+    submitBtn.setAttribute('aria-disabled', 'true');
+    submitBtn.textContent = '提交中…';
+  }
+
+  /** 开闸：链路的每一个不跳转的出口都要调到，否则按钮永久停在禁用态 */
+  function unlockSubmit() {
+    submitting = false;
+    submitBtn.disabled = false;
+    submitBtn.removeAttribute('aria-disabled');
+    submitBtn.textContent = submitText;
+  }
+
+  /** 把链路里的一步包起来：抛错一律走 abortSubmit，闸门不会因为异常而卡死 */
+  function step(id, fn) {
+    return function (arg) {
+      try { fn(arg); } catch (e) { abortSubmit(id); }
+    };
+  }
+
+  /** 收掉本次提交留下的半成品任务。没有删除任务的接口，改为强制收回租约并落已取消
+      态：已取消既不占并发名额，也不会再被排队接管流程捞起来执行 */
+  function discard(id, note) {
+    if (!id) return;
+    App.Lease.revoke(id, { status: 'cancelled', now: note }, function () {
+      App.Store.refresh();
+      renderRecent();
+    });
+  }
+
+  /** 链路真失败（任务没落进库 / 中途抛错）：收掉半成品并开闸，让用户能原地重提 */
+  function abortSubmit(id) {
+    discard(id, '提交未完成，已自动取消');
+    unlockSubmit();
+    App.Toast.show('提交未完成', '任务没有创建成功，未占用并发名额，请重新提交', 'err');
+  }
+
+  /** 用户在链路在途时关掉了要点收集弹窗，按取消本次提交处理：撤回刚落盘的任务 */
+  function cancelSubmit(id) {
+    discard(id, '已取消：提交过程中关闭了要点收集');
+    unlockSubmit();
+    App.Toast.show('已取消提交', '刚创建的任务已撤回，不会占用并发名额', 'info');
+  }
+
+  /** 要点收集弹窗是否已被关掉（取消按钮 / 遮罩 / Esc 三条路都会摘掉 open 类） */
+  function sceneModalClosed() {
+    var bd = document.getElementById('sceneModal');
+    return !bd || !bd.classList.contains('open');
+  }
+
+  submitBtn.addEventListener('click', function () {
+    // 按钮禁用期间浏览器本就不派发 click，这道判断兜住键盘 / 脚本触发的重复提交
+    if (submitting) {
+      App.Toast.show('正在提交', '上一次提交还在处理，请稍候', 'info');
+      return;
+    }
     var res = S.collect(U.$('#sceneForm'));
     var box = U.$('#sceneMissing');
     if (!res.ok) {
@@ -277,32 +345,73 @@
     }
     box.hidden = true;
 
-    // 并发上限检查：体现「档位限制 + 升档引导」（Spec 3.3 / 4.4）
-    var runningCount = App.Store.tasks().filter(function (t) { return t.status === 'running'; }).length;
     var title = deriveTitle(activeScene, res.values);
+    // id 在链路开头一次定死，之后落盘、申领、清理、跳转全都只认这一个值：换成每次点击
+    // 现摇一个，两次点击就是两条不同的任务，任何按 id 的去重都形同虚设
     var id = 'T-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' +
              String(Math.floor(Math.random() * 900) + 100);
+    lockSubmit();
 
+    // 新任务一律先以 queued 落盘：本页不预先判名额，也不预先决定 status。
+    // 「数名额 + queued→running 迁移 + 取租约」由 Lease.claimSlot 放进同一个跨上下文
+    // 互斥区内按当次整库快照完成，两个工作台标签页在仅剩一个名额时不会双双建出
+    // running，并发数不会越过 Lease.LIMIT
     var task = {
       id: id, scene: activeScene.id, title: title, industry: activeScene.industry,
-      status: runningCount >= 2 ? 'queued' : 'running',
+      status: 'queued',
       step: 0, stepTotal: 7,
-      now: runningCount >= 2
-        ? '排队中：当前档位并发 2/2，等待前序任务释放'
-        : '准备执行环境与知识库检索范围',
+      now: '排队中：等待并发名额',
       owner: '刘敏', workspace: '教务处',
+      // 执行租约初始为空：由申领到名额的一方写入，交还后别的页面才能接管推进
+      leaseBy: '', leaseVer: 0, leaseAt: 0,
       created: Date.now(), updated: Date.now(),
       tokens: 0, cost: 0, sessionId: 'S-' + (4480 + Math.floor(Math.random() * 20)),
       artifacts: [], inputs: res.values, fresh: true
     };
-    App.Store.addTask(task);
-    App.Store.setPending(id);
-    App.Modal.close('sceneModal');
-    if (task.status === 'queued') {
-      App.Toast.show('任务已排队', '当前档位并发已满（2/2），任务将在前序任务完成后自动开始', 'info');
+
+    try {
+      App.Store.addTask(task, step(id, function () {
+        // 落盘写不进去（配额满等）时任务不会出现在刷新后的库里：这是真失败而非排队，
+        // 库里既然没有这个 id，开闸让用户原地重提即可，没有半成品要清理
+        if (!App.Store.task(id)) { abortSubmit(id); return; }
+        // 来源限定为 queued：本页刚把它以 queued 落盘，只应从这一个状态入场。来源与
+        // 名额在同一笔互斥提交内一起断言，落盘到申领之间若被别的页面取消或抢先推进，
+        // 这笔提交一个字段都不落，不会把已经易主的任务改回 running
+        App.Lease.claimSlot(id, { now: '准备执行环境与知识库检索范围' }, 'queued',
+          step(id, function (got) {
+            // 名额没抢到不算失败：任务照原样留在 queued，交给会话页 / 任务中心的统一
+            // 接管流程出队，本页既不硬启动也不把它清理掉
+            if (!got) { afterClaim(id, false); return; }
+            // 名额已落定，但推进要由随后打开的会话页做：本页马上要卸载，先把租约交还，
+            // 否则任务会停在「租约属于已离开的页面」而白等一个 TTL 才被接管
+            App.Lease.release(id, null, step(id, function () { afterClaim(id, true); }));
+          }));
+      }));
+    } catch (e) {
+      abortSubmit(id);
     }
-    location.href = 'session.html?task=' + encodeURIComponent(id);
   });
+
+  /** 申领结果落定后：写待启动标记 → 告知用户实际去向 → 再跳会话页。
+      got 为假只代表名额已满、任务留在 queued，仍要照常写待启动标记并跳转 */
+  function afterClaim(id, got) {
+    // 等待期间用户关掉了弹窗：视为取消本次提交，撤回任务而不是留个没人看的幽灵
+    if (sceneModalClosed()) { cancelSubmit(id); return; }
+    App.Store.setPending(id, step(id, function () {
+      App.Modal.close('sceneModal');
+      var LIMIT = App.Lease.LIMIT;
+      if (got) {
+        App.Toast.show('任务已开始执行',
+          '已占用 1 个并发名额（档位上限 ' + LIMIT + '），可随时关闭页面去做别的事', 'ok');
+      } else {
+        App.Toast.show('任务已排队',
+          '当前档位并发已满（' + LIMIT + '/' + LIMIT + '），等前序任务释放名额后自动开始', 'info');
+      }
+      // 跳转前开闸：跳转被浏览器拦下或用户按了返回时，按钮不会停在禁用态
+      unlockSubmit();
+      location.href = 'session.html?task=' + encodeURIComponent(id);
+    }));
+  }
 
   /** 由场景与表单值推导可读的任务标题（用行业真实叫法） */
   function deriveTitle(s, v) {

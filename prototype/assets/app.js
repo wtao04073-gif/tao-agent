@@ -5,6 +5,7 @@
      Toast   轻量通知（任务完成主动提示）
      Modal   模态框开关 + 焦点管理
      Store   跨页面共享的演示数据（localStorage，任务与会话分离的载体）
+     Lease   跨标签页执行租约（leaseBy + 版本 + 心跳，Web Locks 互斥区实现）
      Scenes  场景卡定义与引导式要点收集表单（含必填校验）
      Util    杂项
    ========================================================================== */
@@ -155,6 +156,230 @@
     }
   };
 
+  /* casCommit 的两个小工具：值比较（null 与 undefined 视为等价）、期望判定
+     （允许给函数做条件判断，断言函数还能拿到整库快照做范围判断） */
+  function sameVal(a, b) { return (a == null && b == null) || a === b; }
+  function expectOk(want, got, t, snap) {
+    return typeof want === 'function' ? !!want(got, t, snap) : sameVal(got, want);
+  }
+  /** 回调可选：所有写入 API 的最后一个参数都按「有就回调、没有就算了」处理 */
+  function hand(fn, v) { if (typeof fn === 'function') fn(v); }
+
+  /* ------------------------------------------------ 跨上下文互斥（核心）
+     localStorage 没有原生的比较并交换，而「一段连续的同步 JavaScript」并不构成
+     跨标签页临界区：每个标签页有各自独立的事件循环（Chromium 下往往还是独立
+     进程），完全可以在本页 getItem 与 setItem 之间跑完自己那一整套读改写。
+     localStorage 早年规范里的 storage mutex 从未被浏览器真正实现、且已从规范
+     移除，所以「本页内不被打断」与「跨页互斥」是两件不同的事，前者不能替代后者。
+
+     这里用 Web Locks（navigator.locks）取得真正的跨上下文互斥：同一个命名锁在
+     同源的所有标签页 / iframe / worker 之间同一时刻只有一个持有者，「读取整库
+     → 比较期望值 → 写回整库」整段都在锁内完成。代价是 Web Locks 只有异步接口，
+     因此 Store / Lease 的写入 API 全部改成回调形态（见各方法的调用范式说明）。
+
+     降级路径（诚实说明，不要误读成「降级后同样原子」）：
+       navigator.locks 要求安全上下文，且对不透明源会抛 SecurityError。
+       https:// 与 http://localhost 一定可用；file:// 取决于浏览器——Chromium 系
+       把 file:// 视为可信来源并给同一个 localStorage 分区，此时可用；把 file://
+       当不透明源处理的浏览器则不可用。拿不到 Web Locks 时退到下面 lsAcquire 的
+       降级实现：它靠「写入自己的令牌 → 等一个传播窗口 → 回读确认仍是自己」来
+       仲裁，属于**基于时序假设**的互斥（假设同源各页对同一个 key 的写入能在
+       SPIN_MS 内互相看到），不是可证明的互斥——若某页恰在抢锁窗口内被浏览器
+       冻结、又在另一页按超时接手之后恢复，两边仍可能都认为自己持锁。
+       这一残留风险只存在于没有 Web Locks 的环境，真实产品形态必须由服务端仲裁
+       租约与并发名额，前端互斥只是原型层面的近似。
+
+     调用约定：expect 断言与 patch 计算仍必须是纯同步函数——不 await、不起定时器、
+     不调用 Store 的任何读写方法，否则它们会被挪到锁外执行，互斥就失去意义。 */
+  var Lock = {
+    NAME: 'agentproto.lock.v1',   // Web Locks 的锁名，同时是降级实现的 localStorage 键
+    HOLD_MS: 4000,                // 降级实现里认定持锁页已消失、可以接手的时长
+    SPIN_MS: 30,                  // 降级实现的写入传播观察窗口与重试节奏
+    locksOk: null,                // Web Locks 是否可用，首次使用时判定并缓存
+    _chain: null,                 // 本页的 FIFO：同页各临界区串行，杜绝自等待与重入
+    _seq: 0,
+
+    /** 当前实际生效的互斥机制，便于诚实地告知与排查 */
+    mode: function () { return Lock.supported() ? 'weblocks' : 'fallback'; },
+
+    supported: function () {
+      if (Lock.locksOk === null) {
+        var nav = global.navigator;
+        Lock.locksOk = !!(nav && nav.locks && typeof nav.locks.request === 'function' &&
+          global.isSecureContext !== false);
+      }
+      return Lock.locksOk;
+    },
+
+    /** 在跨上下文互斥区内跑一段同步临界区 fn，结束后把返回值交给 done */
+    run: function (fn, done) {
+      var next = (Lock._chain || Promise.resolve()).then(function () { return Lock.hold(fn); });
+      Lock._chain = next.then(null, function () { /* 单次失败不打断本页后续排队 */ });
+      next.then(function (out) { hand(done, out); }, function () { hand(done, null); });
+      return next;
+    },
+
+    hold: function (fn) {
+      var ran = false;
+      if (Lock.supported()) {
+        return global.navigator.locks.request(Lock.NAME, function () {
+          ran = true;
+          return fn();
+        }).then(null, function (e) {
+          if (ran) throw e;            // 临界区已经跑过，异常来自业务代码，不重跑
+          Lock.locksOk = false;        // 不透明源等原因拿不到 Web Locks：转降级实现
+          return Lock.lsHold(fn);
+        });
+      }
+      return Lock.lsHold(fn);
+    },
+
+    /** 降级实现：以 localStorage 上的令牌 + 传播窗口回读确认来仲裁（见上方说明） */
+    lsHold: function (fn) {
+      var token = 'k' + Date.now().toString(36) + '-' + (++Lock._seq) +
+        '-' + Math.random().toString(36).slice(2, 7);
+      return new Promise(function (resolve, reject) {
+        function enter() {
+          lsAcquire(token, function (got) {
+            if (!got) {
+              setTimeout(enter, Lock.SPIN_MS + Math.floor(Math.random() * Lock.SPIN_MS));
+              return;
+            }
+            // 抢到之后再确认一次并刷新持锁时间：本页若在等待窗口里被冻结，
+            // 锁可能已被别页按超时接手，此时必须重新排队而不是直接进临界区
+            if (!lsRefresh(token)) { enter(); return; }
+            var out;
+            try { out = fn(); } catch (e) { lsRelease(token); reject(e); return; }
+            lsRelease(token);
+            resolve(out);
+          });
+        }
+        enter();
+      });
+    }
+  };
+
+  /** 读锁记录；localStorage 不可用时返回 undefined，调用方按「各页不共享」处理 */
+  function lsRead() {
+    var raw;
+    try { raw = localStorage.getItem(Lock.NAME); } catch (e) { return undefined; }
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch (e) { return null; }
+  }
+
+  /** 尝试占锁：无人持有或持有者已超时才写入自己的令牌，等一个传播窗口后回读确认 */
+  function lsAcquire(token, done) {
+    var cur = lsRead();
+    // 存储不可用（隐私模式）：各标签页本就不共享 localStorage，无需跨页仲裁
+    if (cur === undefined) { done(true); return; }
+    if (cur && cur.token !== token && Date.now() - (cur.at || 0) < Lock.HOLD_MS) {
+      done(false);
+      return;
+    }
+    try {
+      localStorage.setItem(Lock.NAME, JSON.stringify({ token: token, at: Date.now() }));
+    } catch (e) { done(true); return; }
+    setTimeout(function () {
+      var back = lsRead();
+      done(back === undefined || !!(back && back.token === token));
+    }, Lock.SPIN_MS);
+  }
+
+  /** 进临界区前复核持锁归属并刷新时间戳；已易主返回 false，由调用方重新排队 */
+  function lsRefresh(token) {
+    var cur = lsRead();
+    if (cur === undefined) return true;
+    if (!cur || cur.token !== token) return false;
+    try {
+      localStorage.setItem(Lock.NAME, JSON.stringify({ token: token, at: Date.now() }));
+    } catch (e) { /* 写不进去也继续，最坏情况是被别页按超时接手 */ }
+    return true;
+  }
+
+  /** 交还降级锁：只清理仍属于自己的那一份，避免抹掉别页刚抢到的锁 */
+  function lsRelease(token) {
+    var cur = lsRead();
+    if (cur === undefined || !cur || cur.token !== token) return;
+    try { localStorage.removeItem(Lock.NAME); } catch (e) { /* ignore */ }
+  }
+
+  /** localStorage 不可用（隐私模式）或尚无落盘数据时的退路：直接改内存状态。
+      此时各标签页并不共享存储，也就不存在需要仲裁的跨页竞争。 */
+  function memWrite(id, expect, patch) {
+    var cur = Store.task(id), i, k, keys;
+    if (!cur) return null;
+    keys = expect ? Object.keys(expect) : [];
+    for (i = 0; i < keys.length; i++) {
+      if (!expectOk(expect[keys[i]], cur[keys[i]], cur, Store.load())) return null;
+    }
+    var body = typeof patch === 'function' ? patch(cur, Store.load()) : patch;
+    if (!body) return null;
+    keys = Object.keys(body);
+    for (i = 0; i < keys.length; i++) { k = keys[i]; cur[k] = body[k]; }
+    cur.updated = Date.now();
+    Store.save();
+    return body;
+  }
+
+  /** 单个任务的读—判—写，全程在互斥区内执行（由 atomicWrite 负责取锁）。
+      expect 全部成立才写入，任一不符整体放弃、不产生任何副作用。
+      返回实际写入的补丁对象，放弃时返回 null。 */
+  function writeInLock(id, expect, patch) {
+    var raw = null, avail = true;
+    try { raw = localStorage.getItem(Store.KEY); } catch (e) { avail = false; }
+    if (!avail || !raw) return memWrite(id, expect, patch);
+    var snap = null;
+    try { snap = JSON.parse(raw); } catch (e) { snap = null; }
+    var list = (snap && snap.tasks) || null;
+    if (!list) return memWrite(id, expect, patch);
+    var cur = null, i, k, keys;
+    for (i = 0; i < list.length; i++) {
+      if (list[i].id === id) { cur = list[i]; break; }
+    }
+    if (!cur) return null;
+    keys = expect ? Object.keys(expect) : [];
+    for (i = 0; i < keys.length; i++) {
+      if (!expectOk(expect[keys[i]], cur[keys[i]], cur, snap)) return null;
+    }
+    var body = typeof patch === 'function' ? patch(cur, snap) : patch;
+    if (!body) return null;
+    keys = Object.keys(body);
+    for (i = 0; i < keys.length; i++) { k = keys[i]; cur[k] = body[k]; }
+    cur.updated = Date.now();
+    try { localStorage.setItem(Store.KEY, JSON.stringify(snap)); } catch (e) { return null; }
+    return body;
+  }
+
+  /** 整库级读—改—写，全程在互斥区内执行（由 atomicState 负责取锁）。用于新增
+      任务、待启动标记、意见回写这类不属于单个任务的字段——不用本页缓存整体覆盖，
+      否则会把别的标签页刚写入的任务状态与租约一起回滚。 */
+  function stateInLock(fn) {
+    var raw = null, avail = true;
+    try { raw = localStorage.getItem(Store.KEY); } catch (e) { avail = false; }
+    var snap = null;
+    if (avail && raw) { try { snap = JSON.parse(raw); } catch (e) { snap = null; } }
+    if (!snap || !snap.tasks) {
+      var mem = Store.load();
+      var r0 = fn(mem);
+      Store.save();
+      return r0;
+    }
+    var out = fn(snap);
+    try { localStorage.setItem(Store.KEY, JSON.stringify(snap)); } catch (e) { /* ignore */ }
+    return out;
+  }
+
+  /** 单个任务的跨上下文原子读—判—写：整段读—判—写在 Lock 的互斥区内完成。
+      done(body) 收结果，放弃时收到 null。 */
+  function atomicWrite(id, expect, patch, done) {
+    Lock.run(function () { return writeInLock(id, expect, patch); }, done);
+  }
+
+  /** 整库级跨上下文原子改写：fn(snapshot) 就地改，返回值经 done 回传 */
+  function atomicState(fn, done) {
+    Lock.run(function () { return stateInLock(fn); }, done);
+  }
+
   /* --------------------------------------------------------------- Store
      跨页面共享的演示状态。任务是与会话解耦的一等公民（Spec 3.3），
      因此任务列表放在 Store 里，工作台 / 会话页 / 任务中心 / 移动端共享同一份。
@@ -162,6 +387,7 @@
   var Store = {
     KEY: 'agentproto.state.v1',
     state: null,
+    subs: [],
 
     /** 平台预置的演示任务：覆盖全部状态（排队/执行/待确认/完成/失败/取消） */
     seed: function () {
@@ -274,6 +500,49 @@
     save: function () {
       try { localStorage.setItem(Store.KEY, JSON.stringify(Store.state)); } catch (e) { /* ignore */ }
     },
+    /** 直读 localStorage 里的最新状态，不经进程内缓存（跨标签页判读用） */
+    readRaw: function () {
+      try {
+        var raw = localStorage.getItem(Store.KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch (e) { return null; }
+    },
+    /** 直读 localStorage 上某个任务的最新快照，不经进程内缓存。
+        返回的是临时解析出来的对象，只用于判读，不要拿去改字段 */
+    rawTask: function (id) {
+      var raw = Store.readRaw();
+      var list = (raw && raw.tasks) || [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === id) return list[i];
+      }
+      return null;
+    },
+    /** 用 localStorage 的最新值刷新缓存。逐字段合并而非整体替换，保留任务
+        对象的引用，避免其它页面已持有的任务引用指向被丢弃的旧对象。
+        调用方按需触发（例如收到 storage 事件、或轮询同一任务的进度）。 */
+    refresh: function () {
+      var fresh = Store.readRaw();
+      var cur = Store.load();
+      if (!fresh || !fresh.tasks) return cur;
+      var byId = {};
+      cur.tasks.forEach(function (t) { byId[t.id] = t; });
+      cur.tasks.length = 0;
+      fresh.tasks.forEach(function (n) {
+        var old = byId[n.id];
+        if (!old) { cur.tasks.push(n); return; }
+        Object.keys(old).forEach(function (k) { if (!(k in n)) delete old[k]; });
+        Object.keys(n).forEach(function (k) { old[k] = n[k]; });
+        cur.tasks.push(old);
+      });
+      cur.pending = fresh.pending;
+      if (cur.feedback) {
+        cur.feedback.length = 0;
+        (fresh.feedback || []).forEach(function (f) { cur.feedback.push(f); });
+      } else {
+        cur.feedback = fresh.feedback || [];
+      }
+      return cur;
+    },
     reset: function () {
       Store.state = Store.seed();
       Store.save();
@@ -296,20 +565,313 @@
       Store.save();
       return t;
     },
-    addTask: function (t) {
-      Store.load().tasks.unshift(t);
-      Store.save();
+    /** 穿透缓存的任务写入：改动在跨上下文互斥区内落到 localStorage 的最新整库
+        快照上，再把结果合并回本页缓存，避免用进程内旧缓存整体覆盖其它标签页刚
+        写入的改动。需要跨标签页竞争同一字段（如执行租约）的场景用此方法而非
+        update。互斥要靠 Web Locks，因此是异步的：
+          Store.commit(id, patch, function (t) { … })   // t 为 null 表示放弃
+        无需知道结果时可省略回调。 */
+    commit: function (id, patch, done) {
+      atomicWrite(id, null, patch, function (body) {
+        hand(done, body ? Store.localMerge(id, body) : null);
+      });
+    },
+    /** 把已落盘的补丁合并回本页缓存，保持任务对象引用不变（桌面页有
+        `t.step = t.step + 1` 这类就地写法依赖同一个引用） */
+    localMerge: function (id, body) {
+      var t = Store.task(id);
+      if (!t) { Store.refresh(); t = Store.task(id); }
+      if (!t) return null;
+      Object.keys(body).forEach(function (k) { t[k] = body[k]; });
+      t.updated = Date.now();
       return t;
     },
-    setPending: function (p) { Store.load().pending = p; Store.save(); },
-    takePending: function () {
-      var s = Store.load(), p = s.pending;
-      s.pending = null; Store.save();
-      return p;
+    /** 带期望旧值的比较并交换：expect 里每个键都要与 localStorage 上的当前值
+        相符才写入，任一不符就整体放弃，不产生任何副作用。读取、校验与写入整段
+        都在跨上下文互斥区内完成（见文件上方 Lock 的说明），别的标签页无法插进
+        中间做同样的读改写，因此不需要写后回读——旧页面被冻结后恢复，也无法把
+        校验结果套用到已经易主的租约上。
+        用法（执行租约续期、队列名额抢占等需要跨标签页竞争同一字段的场景）：
+          Store.casCommit(id, { leaseBy: 'm1a2b3', leaseVer: 4 },
+                              { step: 5, now: '…' },
+                              function (t) { if (!t) …期望不符… })
+        expect 的值可以是断言函数 fn(currentValue, currentTask, snapshot)，返回真
+        即通过，用于「名额未满」这类需要看整库的范围判断。
+        patch 也可以是 fn(currentTask, snapshot) 并返回补丁对象，这样补丁能基于
+        提交时刻的最新快照计算（例如 step 自增），而不是调用方手里的旧快照；
+        返回假值表示放弃本次提交。
+        约定：expect 断言与 patch 计算必须是纯同步的，不得在其中调用 Store 的
+        读写方法或起异步操作，否则它们会被挪到互斥区外执行。 */
+    casCommit: function (id, expect, patch, done) {
+      atomicWrite(id, expect || {}, patch, function (body) {
+        hand(done, body ? Store.localMerge(id, body) : null);
+      });
     },
-    addFeedback: function (fb) {
-      Store.load().feedback.push(fb);
-      Store.save();
+    /** 注册跨标签页变更回调：其它标签页改写 Store 时触发（storage 事件） */
+    onChange: function (fn) {
+      if (typeof fn === 'function') Store.subs.push(fn);
+    },
+    /** 新增任务：写入与 refresh 都在互斥区落定后才回调，done(task) */
+    addTask: function (t, done) {
+      atomicState(function (s) { s.tasks.unshift(t); }, function () {
+        Store.refresh();
+        hand(done, t);
+      });
+    },
+    setPending: function (p, done) {
+      atomicState(function (s) { s.pending = p; }, function () {
+        Store.refresh();
+        hand(done, p);
+      });
+    },
+    /** 取走待启动标记：读与清空在同一互斥区内完成，两个页面不会都取到同一个 */
+    takePending: function (done) {
+      atomicState(function (s) {
+        var v = s.pending;
+        s.pending = null;
+        return v;
+      }, function (p) {
+        Store.refresh();
+        hand(done, p);
+      });
+    },
+    addFeedback: function (fb, done) {
+      atomicState(function (s) {
+        if (!s.feedback) s.feedback = [];
+        s.feedback.push(fb);
+      }, function () {
+        Store.refresh();
+        hand(done, fb);
+      });
+    }
+  };
+
+  /* --------------------------------------------------------------- Lease
+     统一的跨页执行租约。桌面会话页、任务中心的后台接管、移动端会话页都用这一套，
+     不再各维护一份锁协议——两套并存时桌面页与移动页同开一个任务会双推进。
+
+     任务上的三个字段构成租约：
+       leaseBy    持租约的页面身份（Lease.id()），空 / null 表示无人持有
+       leaseVer 租约版本号，每次抢占与每次续期都自增，用于识别「本页被冻结期间
+                租约已易主又转回同名 leaseBy」这类情形
+       leaseAt  最近一次心跳时间；Date.now() - leaseAt >= TTL 即视为租约过期，
+                可被其它长驻页面接管（页面被关掉没来得及清理时靠这条兜底）
+
+     规则：
+       1. 只有持租约的一方才能写 step / tokens / 产物 / 终态，写入必须走
+          Lease.renew —— 它把「校验 leaseBy → 写业务字段 + 续期」放进同一个跨上下文
+          互斥区，不匹配就整体放弃，调用方据此立即停止推进。
+       2. 页面退出时用 Lease.release 以所有权校验原子清理，任务不会卡在 running。
+       3. 接管方必须尊重任务上已有的业务标记（如 dangerAcked / failedStep）。
+
+     调用范式：互斥要靠异步的 Web Locks，因此所有写入方法都以回调收结果，
+     回调参数为写入后的任务对象，null 表示校验不通过、本次一个字段都没写：
+       Lease.renew(id, patch, function (t) { if (!t) stopTimer(); });
+     判读方法（expired / heldByOther / mine / ver / runningCount / staleRunning）
+     仍是同步的——它们只读不写，读到过期值的后果由随后的写入校验兜住。
+     ---------------------------------------------------------------------- */
+  var Lease = {
+    TTL: 10000,                 // 心跳超过此时长即视为租约过期，可被接管
+    LIMIT: 2,                   // 档位并发上限，桌面 / 移动 / 任务中心同一口径
+    _id: null,
+
+    /** 本页身份：同一个标签页内稳定，不同标签页必不相同 */
+    id: function () {
+      if (!Lease._id) {
+        Lease._id = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      }
+      return Lease._id;
+    },
+
+    /** 租约是否已过期（无 leaseBy 也按过期处理，可直接抢占） */
+    expired: function (t) {
+      if (!t || !t.leaseBy) return true;
+      return Date.now() - (t.leaseAt || 0) >= Lease.TTL;
+    },
+    /** 租约是否由别的页面持有且心跳未过期 */
+    heldByOther: function (t) {
+      return !!(t && t.leaseBy && t.leaseBy !== Lease.id() && !Lease.expired(t));
+    },
+    /** 本页是否仍持有该任务的租约（穿透 localStorage 判读） */
+    mine: function (id) {
+      var t = Store.rawTask(id);
+      return !!(t && t.leaseBy === Lease.id() && !Lease.expired(t));
+    },
+    /** 本页认定的租约版本，用于给下一次提交带期望旧值 */
+    ver: function (id) {
+      var t = Store.rawTask(id);
+      return t ? (t.leaseVer || 0) : 0;
+    },
+
+    /** 期望断言：版本号必须仍等于 n（缺字段按 0 计，避免 0 与 undefined 误判）。
+        下面的 acquire / renew / release 不再用它——它们的归属判定就在互斥区内按
+        当次快照做，再断言「版本与我上次读到的一致」是同义重复。留给调用方在
+        「先读一次、隔一段时间才提交」这类场景自行带期望版本用：
+          Store.casCommit(id, { leaseVer: Lease.verIs(myVer) }, patch, done) */
+    verIs: function (n) {
+      return function (v) { return (v || 0) === n; };
+    },
+
+    /** 快照上的运行中任务数：判并发名额一律用整库快照，不用本页缓存 */
+    runningCount: function (snap) {
+      var list = (snap && snap.tasks) || [];
+      var n = 0;
+      for (var i = 0; i < list.length; i++) if (list[i].status === 'running') n++;
+      return n;
+    },
+
+    /** 可申领名额的入场状态：这几种都还没占着名额，因此都要过名额校验。
+        这里只回答「哪些状态尚未占名额」，不回答「某次操作允许从哪个状态进入」——
+        后者由 claimSlot 的 from 参数逐路径声明，两道校验都在互斥区内一起做。
+        cancelled 留在表内是因为任务中心支持「重试一个已取消的任务」，那条路径会
+        显式把 cancelled 声明进 from；恢复执行（确认 / 跳过 / 会话页重试）一律不带它。 */
+    CLAIMABLE: ['queued', 'failed', 'cancelled', 'waiting'],
+
+    /**
+     * 抢占租约：只在「无人持有或租约已过期」时成功，成功即 leaseBy 归本页、版本自增。
+     * extra 是同笔提交里要写的业务补丁（可为 fn(cur, snap)），与抢占不可分离。
+     * 判定与写入都在互斥区内，不存在「判完被别页抢走再写」的窗口。
+     *   Lease.acquire(id, extra, function (t) { if (!t) …别页正持有… });
+     */
+    acquire: function (id, extra, done) {
+      Store.casCommit(id, {
+        leaseBy: function (v, t) { return !t.leaseBy || t.leaseBy === Lease.id() || Lease.expired(t); }
+      }, function (t, snap) {
+        var body = typeof extra === 'function' ? extra(t, snap) : (extra || {});
+        if (!body) return null;
+        body.leaseBy = Lease.id();
+        body.leaseVer = (t.leaseVer || 0) + 1;
+        body.leaseAt = Date.now();
+        return body;
+      }, done);
+    },
+
+    /**
+     * 续期并写业务字段：以「租约仍属本页」为前提在互斥区内原子提交。
+     * patch 可以是 fn(cur, snap)，由它基于提交时刻的最新快照算补丁——本页可能
+     * 被浏览器冻结过，手里的旧快照算出的 step 可能已经过时。返回假值表示放弃。
+     * 回调收到 null 即租约已易主，调用方必须立即停止推进，不得再写任何字段。
+     */
+    renew: function (id, patch, done) {
+      Store.casCommit(id, { leaseBy: Lease.id() }, function (t, snap) {
+        var body = typeof patch === 'function' ? patch(t, snap) : (patch || {});
+        if (!body) return null;
+        if (!('leaseBy' in body)) body.leaseBy = Lease.id();
+        // 交还租约时不再递增版本，留给下一个抢占者接着算
+        if (body.leaseBy === Lease.id()) {
+          body.leaseVer = (t.leaseVer || 0) + 1;
+          body.leaseAt = Date.now();
+        }
+        return body;
+      }, done);
+    },
+
+    /**
+     * 以所有权校验原子交还租约。extra 里可带终态或退回 queued 的补丁；
+     * 租约已不属本页则整体不写，避免把别人的推进结果覆盖掉。
+     */
+    release: function (id, extra, done) {
+      Store.casCommit(id, { leaseBy: Lease.id() }, function (t, snap) {
+        var body = typeof extra === 'function' ? extra(t, snap) : (extra || {});
+        if (!body) body = {};
+        body.leaseBy = '';
+        body.leaseAt = 0;
+        return body;
+      }, done);
+    },
+
+    /**
+     * 本次操作是否允许从 status 这个来源状态入场。
+     * from 为字符串或字符串数组，省略 / 空表示不额外限定，只用全局 CLAIMABLE 兜底。
+     * 供调用方在申领失败后分辨「来源状态已变」与「名额真满」两种原因用——判定本身
+     * 在 claimSlot 的互斥区内已经做过一遍，这里是只读判读，不承担正确性。
+     */
+    fromAllows: function (from, status) {
+      if (Lease.CLAIMABLE.indexOf(status) < 0) return false;
+      if (!from) return true;
+      if (typeof from === 'string') return from === status;
+      return from.indexOf(status) >= 0;
+    },
+
+    /**
+     * 申领一个并发名额：数名额、状态迁移到 running 与抢租约是同一笔提交，整段
+     * 都在跨上下文互斥区内——名额是否已满按当次整库快照判定，两个标签页不可能
+     * 同时抢到最后一个名额，也不需要事后仲裁与退回。回调收到任务对象即申领成功。
+     * 入场状态限定为 CLAIMABLE（排队 / 失败 / 取消 / 待确认）这几种尚未占用名额的
+     * 状态：重试与确认继续同样必须过这道名额校验，不能成为绕过上限的第二条路径。
+     *
+     * from 声明「本次操作允许从哪个来源状态入场」，与名额校验在同一笔互斥提交内
+     * 断言，因此不存在「等锁期间任务被别页改成别的状态、申领却照样成功」的窗口：
+     *   - 字符串：只允许这一个状态（确认 / 跳过传 'waiting'，恢复重试传 'failed'）
+     *   - 数组：允许其中任一状态（任务中心的重试传 ['failed', 'cancelled']）
+     *   - 省略 / 传 null：不额外限定，沿用全局 CLAIMABLE（向后兼容旧调用）
+     * 省略 from 时仍可写成三参数形态，第三个参数是回调：
+     *   Lease.claimSlot(id, extra, function (t) { … });
+     *   Lease.claimSlot(id, extra, 'waiting', function (t) { if (t) startRunner(); else 排队(); });
+     */
+    claimSlot: function (id, extra, from, done) {
+      // 三参数形态（id, extra, done）：把回调挪回 done，本次不限定来源状态
+      if (typeof from === 'function' && done === undefined) { done = from; from = null; }
+      Store.casCommit(id, {
+        status: function (v, t, snap) {
+          // 来源状态与名额在同一笔提交内一起断言：任一不成立则一个字段都不写，
+          // 期间被别页取消 / 推进的任务不会被旧的恢复请求改回 running
+          if (!Lease.fromAllows(from, v)) return false;
+          return Lease.runningCount(snap) < Lease.LIMIT;
+        },
+        leaseBy: function (v, t) { return !t.leaseBy || t.leaseBy === Lease.id() || Lease.expired(t); }
+      }, function (t, snap) {
+        var body = typeof extra === 'function' ? extra(t, snap) : (extra || {});
+        if (!body) return null;
+        body.status = 'running';
+        body.leaseBy = Lease.id();
+        body.leaseVer = (t.leaseVer || 0) + 1;
+        body.leaseAt = Date.now();
+        return body;
+      }, done);
+    },
+
+    /**
+     * 强制收回租约并落终态：用于「取消」这类由创建人发起、不该受租约归属限制的
+     * 动作。版本号在同一笔提交里自增，正在代跑该任务的页面下一拍校验必然失败，
+     * 从而停止推进，不会把已落的终态又覆盖回执行中。
+     */
+    revoke: function (id, extra, done) {
+      Store.casCommit(id, {}, function (t, snap) {
+        var body = typeof extra === 'function' ? extra(t, snap) : (extra || {});
+        if (!body) return null;
+        body.leaseBy = '';
+        body.leaseAt = 0;
+        body.leaseVer = (t.leaseVer || 0) + 1;
+        return body;
+      }, done);
+    },
+
+    /** 租约已过期的运行中任务：长驻页面据此接管，任务不会永久卡在 running */
+    staleRunning: function (snap) {
+      var raw = snap || Store.readRaw();
+      var list = (raw && raw.tasks) || [];
+      return list.filter(function (t) {
+        return t.status === 'running' && t.leaseBy !== Lease.id() && Lease.expired(t);
+      }).sort(function (a, b) { return a.created - b.created; });
+    },
+
+    /**
+     * 接管一个租约已过期的运行中任务：只换 leaseBy 不改 status，因此不额外占名额
+     * （它本来就已经计入 running）。别的页面在此之前续上了心跳则接管失败。
+     */
+    adopt: function (id, extra, done) {
+      Store.casCommit(id, {
+        status: 'running',
+        leaseBy: function (v, t) { return Lease.expired(t); }
+      }, function (t, snap) {
+        var body = typeof extra === 'function' ? extra(t, snap) : (extra || {});
+        if (!body) return null;
+        body.leaseBy = Lease.id();
+        body.leaseVer = (t.leaseVer || 0) + 1;
+        body.leaseAt = Date.now();
+        return body;
+      }, done);
     }
   };
 
@@ -812,6 +1374,16 @@
     Theme.init();
     Modal.init();
     Store.load();
+    // 其它标签页改写共享状态时刷新缓存，使本页读到的任务状态不停留在首次载入的快照
+    global.addEventListener('storage', function (e) {
+      if (e.key && e.key !== Store.KEY) return;
+      Store.refresh();
+      paintNavBadges();
+      Util.$$('[data-taskbar]').forEach(renderTaskbar);
+      Store.subs.forEach(function (fn) {
+        try { fn(); } catch (err) { /* 单个订阅出错不影响其它订阅 */ }
+      });
+    });
     Util.$$('[data-sidenav]').forEach(renderSidenav);
     paintNavBadges();
     Util.$$('[data-taskbar]').forEach(renderTaskbar);
@@ -833,7 +1405,7 @@
   /* --------------------------------------------------------- 对外导出 */
   global.App = {
     Util: Util, Theme: Theme, Toast: Toast, Modal: Modal,
-    Store: Store, Scenes: Scenes,
+    Store: Store, Scenes: Scenes, Lease: Lease, Lock: Lock,
     STATUS: STATUS, statusTag: statusTag,
     INDUSTRY: INDUSTRY,
     svgIcon: svg,

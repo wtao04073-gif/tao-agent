@@ -120,7 +120,7 @@
    - 失败原因归类展示；空态；并发上限提示与升档引导
    ========================================================================= */
 (function () {
-  var U = App.Util, Store = App.Store, S = App.Scenes;
+  var U = App.Util, Store = App.Store, S = App.Scenes, Lease = App.Lease;
   var f = { st: 'all', scene: 'all', sort: 'updated', kw: '' };
   var selected = {};
 
@@ -294,23 +294,79 @@
   function doCancel(id) {
     var t = Store.task(id);
     if (!t) return;
-    Store.update(id, { status: 'cancelled', now: '已由 刘敏 取消（中间物保留）' });
-    App.Toast.show('任务已取消', t.title + ' · 已产出的中间物保留', 'info');
-    delete selected[id];
-    refresh();
+    adoptStop(id);
+    // 取消由创建人发起，不受租约归属限制：revoke 在同一笔提交里递增租约版本，
+    // 正在代跑它的页面下一拍校验必然失败，不会把终态又覆盖回执行中
+    Lease.revoke(id, { status: 'cancelled', now: '已由 刘敏 取消（中间物保留）' }, function () {
+      Store.refresh();
+      App.Toast.show('任务已取消', t.title + ' · 已产出的中间物保留', 'info');
+      delete selected[id];
+      refresh();
+      scheduleQueued();              // 取消释放名额，队首任务随即由本页接管
+    });
   }
   function doRetry(id) {
-    var t = Store.task(id);
+    var t = Store.rawTask(id);
     if (!t) return;
+    if (claiming[id]) return;      // 该任务已有在途的申领 / 接管提交，不重复发起
     // 从检查点续跑：保留已完成步骤，不重复消耗
-    var from = Math.max(0, Math.min(t.step, (t.stepTotal || 1) - 1));
-    Store.update(id, {
-      status: 'running', reason: '', retried: true, step: from,
-      now: '从检查点第 ' + from + ' 步续跑（已完成步骤不重复消耗）'
+    var from = Math.max(0, Math.min(typeof t.failedStep === 'number' ? t.failedStep : t.step,
+      (t.stepTotal || 1) - 1));
+    var note = '从检查点第 ' + from + ' 步续跑（已完成步骤不重复消耗）';
+    // 重试等于重新入场，必须走并发名额：名额已满时退回排队，不直接置为 running，
+    // 否则重试会成为绕过上限的第二条路径，也会留下无人推进的 running 任务
+    var patch = { reason: '', retried: true, step: from, now: note };
+    claiming[id] = true;
+    // 来源状态限定为失败 / 已取消这两种：任务中心的重试入口本就只对这两类开放，
+    // 而把允许范围写进申领本身，等锁期间任务被别处推进或改成别的状态时就不会被
+    // 这笔旧请求改回 running
+    Lease.claimSlot(id, patch, ['failed', 'cancelled'], function (got) {
+      delete claiming[id];
+      if (got) {
+        Store.refresh();
+        App.Toast.show('已重试', '从检查点第 ' + from + ' 步接力，前序步骤不重复消耗模型调用', 'ok');
+        adoptRun(id, true);          // 取得名额即由本页推进，状态迁移与执行不分离
+        delete selected[id];
+        refresh();
+        return;
+      }
+      // claimSlot 交回 null 不等于「名额已满」，三种原因的处置完全不同，先分辨再动作：
+      //   1. 任务已不在 CLAIMABLE（典型是另一个标签页抢先把它重试成 running）——
+      //      名额与租约都在对方手里，本页只刷新视图
+      //   2. 租约仍由别的页面有效持有——同样交给持有方，本页不碰
+      //   3. 以上都不是，才是名额真的满了，退回排队
+      // 前两种若照「退回排队」处理，会清掉新持有者的租约、递增版本并把状态改回
+      // queued，对方刚起来的推进循环下一拍就被强制中止
+      var cur = Store.rawTask(id);
+      if (!cur || Lease.CLAIMABLE.indexOf(cur.status) < 0 || Lease.heldByOther(cur)) {
+        Store.refresh();
+        App.Toast.show('重试已由其它页面接力', t.title + ' · 由持有执行租约的一方继续推进', 'info');
+        delete selected[id];
+        refresh();
+        return;
+      }
+      // 名额已满：退回排队，由名额释放后的接管流程提升它。退回带上读到的状态、
+      // 租约归属与租约版本做条件提交——若在这个间隙里别的页面把它抢成 running，
+      // 期望值不符，这笔提交一个字段都不落，不会覆盖对方的租约与进度
+      patch.status = 'queued';
+      patch.now = '排队中：等待前序任务释放并发名额后从检查点第 ' + from + ' 步续跑';
+      patch.leaseBy = '';
+      patch.leaseAt = 0;
+      patch.leaseVer = (cur.leaseVer || 0) + 1;
+      Store.casCommit(id, {
+        status: cur.status,
+        leaseBy: cur.leaseBy,
+        leaseVer: Lease.verIs(cur.leaseVer || 0)
+      }, patch, function (wrote) {
+        Store.refresh();
+        if (wrote) {
+          App.Toast.show('已排队重试', '当前并发已满，名额释放后将从检查点第 ' + from + ' 步接力',
+            'info');
+        }
+        delete selected[id];
+        refresh();
+      });
     });
-    App.Toast.show('已重试', '从检查点第 ' + from + ' 步接力，前序步骤不重复消耗模型调用', 'ok');
-    delete selected[id];
-    refresh();
   }
 
   /* ---------------- 批量操作 ---------------- */
@@ -454,6 +510,183 @@
     App.paintNavBadges();
   }
   refresh();
+
+  /* ---------------- 排队接管：名额释放即提升队首任务 ----------------
+     排队不依赖目标任务自己的会话页：任务中心是长驻页面，名额一空出就在这里
+     完成队首任务的出队。名额申领、queued→running 迁移与取得执行租约是同一笔
+     提交，整段在跨上下文互斥区内完成（App.Lease.claimSlot，见 app.js 的 Lock
+     说明），不会与会话页同时抢到同一个名额。本页还负责把「租约已过期的运行中
+     任务」捡回来继续推进，否则原推进页面一关，任务就永久卡在 running 无人接手。
+     互斥依赖异步的 Web Locks，因此这里所有租约写入都以回调收结果。 */
+  var LIMIT = Lease.LIMIT;
+  var POLL_MS = 2000;
+  var HEARTBEAT_MS = 3000;             // 心跳节奏须明显小于 Lease.TTL
+  var tabId = Lease.id();
+
+  function rawTasks() {
+    var raw = Store.readRaw();
+    return (raw && raw.tasks) ? raw.tasks : Store.tasks();
+  }
+  function runningCount() {
+    return rawTasks().filter(function (t) { return t.status === 'running'; }).length;
+  }
+
+  var adopted = {};                    // 本页接管推进的任务 id → 定时器
+  var beats = {};                      // 本页接管推进的任务 id → 心跳定时器
+  var claiming = {};                   // 已发出申领 / 接管提交、结果未回的任务 id
+  var advancing = {};                  // 已发出步骤推进提交、结果未回的任务 id（按任务隔离）
+
+  function scheduleQueued() {
+    adoptStale();
+    // 名额够不够最终由 claimSlot 在互斥区内按当次快照判定，这里只是省一次取锁的粗筛
+    if (runningCount() >= LIMIT) return;
+    var next = rawTasks().filter(function (t) { return t.status === 'queued'; })
+      .sort(function (a, b) { return a.created - b.created; })[0];
+    if (!next || adopted[next.id] || claiming[next.id]) return;
+    claiming[next.id] = true;
+    Lease.claimSlot(next.id, { now: '并发名额已释放，由任务中心接管并开始执行' }, 'queued',
+      function (ok) {
+        delete claiming[next.id];
+        if (!ok) return;
+        Store.refresh();
+        adoptRun(next.id, true);
+      });
+  }
+
+  /** 捡回租约已过期的运行中任务：原推进页面已离开，由本页接手跑完 */
+  function adoptStale() {
+    Lease.staleRunning().forEach(function (st) {
+      if (adopted[st.id] || claiming[st.id]) return;
+      claiming[st.id] = true;
+      Lease.adopt(st.id, { now: '执行中：租约已过期，由任务中心接管继续推进' }, function (ok) {
+        delete claiming[st.id];
+        if (!ok) return;
+        Store.refresh();
+        adoptRun(st.id, false);
+      });
+    });
+  }
+
+  /** 接管后紧接着把步骤跑起来，状态迁移与执行推进不分离 */
+  function adoptRun(id, fresh) {
+    var t = Store.task(id);
+    if (!t) return;
+    App.Toast.show(fresh ? '队首任务已出队' : '任务已被接管',
+      t.title + (fresh ? ' · 名额释放后已自动开始执行' : ' · 原推进页面已离开，任务中心继续推进'),
+      'ok', 5000);
+    // 心跳续期：本页推进期间租约不会被误判过期而被别处抢走
+    beats[id] = setInterval(function () {
+      Lease.renew(id, {}, function (kept) { if (!kept) adoptStop(id); });
+    }, HEARTBEAT_MS);
+    adopted[id] = setInterval(function () { adoptTick(id); }, 3200);
+    adoptTick(id);
+  }
+  function adoptStop(id) {
+    if (adopted[id]) { clearInterval(adopted[id]); delete adopted[id]; }
+    if (beats[id]) { clearInterval(beats[id]); delete beats[id]; }
+  }
+
+  /** 高危动作是否仍需人工确认：口径在 tick 外层与互斥区内的 patch 里共用一份 */
+  function needsDangerAck(t) {
+    return !!t && t.scene === 'mfg-8d' && t.step === 4 && !t.dangerAcked;
+  }
+
+  /** 交还租约并停在 waiting 等人工确认，由用户到会话页裁决 */
+  function handBackForAck(id) {
+    adoptStop(id);
+    Lease.release(id, {
+      status: 'waiting',
+      now: '等待确认：是否向供应商发送纠正措施要求邮件',
+      reason: '高危动作需人工确认：对外发送邮件'
+    }, function () { refresh(); });
+  }
+
+  /**
+   * 接管任务的步骤推进：每一拍都在跨上下文互斥区内校验「租约仍属本页」再写
+   * step / tokens / 产物 / 终态（Lease.renew 回调收到 null 即已易主），
+   * 因此两个标签页不会同时推进同一个任务。
+   * 互斥要靠异步的 Web Locks，取锁等待可能跨过一整个 tick 周期，多拍推进会在
+   * 本页的临界区队列里堆积：因此一是按任务记在途标志，上一笔回调没回来就不发下
+   * 一笔；二是把高危确认的判定挪进 patch 函数——它在互斥区内按最新快照执行，
+   * 即便真有堆积，后一笔也会在锁内读到已推进到高危步的 step 并放弃提交，
+   * 不会把人工确认边界静默越过。
+   */
+  function adoptTick(id) {
+    if (advancing[id]) return;         // 上一拍的推进提交还没回结果，本拍不排队
+    Store.refresh();
+    var t = Store.rawTask(id);
+    if (!t || t.status !== 'running') { adoptStop(id); refresh(); return; }
+    // 租约已由别的页面接手（如用户打开了它的会话页）：本页停止推进
+    if (t.leaseBy !== tabId) { adoptStop(id); refresh(); return; }
+    var total = t.stepTotal || 1;
+    // 高危动作不静默执行：连同租约一起交还
+    if (needsDangerAck(t)) { handBackForAck(id); return; }
+    if (t.step >= total) { adoptFinish(id, total); return; }
+    var ackBlocked = false;
+    advancing[id] = true;
+    Lease.renew(id, function (cur) {
+      if (cur.status !== 'running' || cur.step >= total) return null;
+      // 锁内按最新快照复核：本笔排队期间 step 已被前一笔推到高危步且仍未确认，
+      // 放弃提交，交由回调把任务停在 waiting 等人工确认
+      if (needsDangerAck(cur)) { ackBlocked = true; return null; }
+      return {
+        step: cur.step + 1,
+        now: '正在做第 ' + (cur.step + 1) + ' 步（任务中心接管推进）',
+        tokens: cur.tokens + 22000 + Math.floor(Math.random() * 9000),
+        cost: Math.round((cur.cost + 0.3 + Math.random() * 0.2) * 100) / 100
+      };
+    }, function (wrote) {
+      delete advancing[id];            // 成功、放弃、租约易主三种结果都要清标志
+      if (ackBlocked) { handBackForAck(id); return; }
+      if (!wrote) { adoptStop(id); refresh(); return; }
+      refresh();
+    });
+  }
+
+  /** 接管任务落终态并交还租约与名额，名额交还后继续接管下一个队首 */
+  function adoptFinish(id, total) {
+    adoptStop(id);
+    var t = Store.rawTask(id);
+    if (!t) return;
+    var title = t.title;
+    var failed = t.scene === 'edu-crosscheck' && !t.retried;
+    // 终态与交还租约同处一笔互斥区内的提交；租约已易主则整体不写，不覆盖别人的结果
+    var patch = failed
+      ? {
+          status: 'failed', step: total - 1, failedStep: total - 1, now: '执行失败',
+          reason: '数据源解析失败：《科研系统-项目负责人清单.xlsx》存在合并单元格，表头无法定位。' +
+                  '建议拆分合并单元格后重试，或改为按「以人事系统为准」策略跳过该表。'
+        }
+      : { status: 'done', step: total, now: '已完成' };
+    Lease.release(id, patch, function (wrote) {
+      if (wrote) {
+        App.Toast.show(failed ? '任务执行失败' : '任务已完成',
+          title + (failed ? ' · 中间物与检查点已保留' : ''), failed ? 'err' : 'ok', 6000);
+      }
+      refresh();
+      scheduleQueued();
+    });
+  }
+
+  Store.onChange(function () { refresh(); scheduleQueued(); });
+  setInterval(function () { Store.refresh(); refresh(); scheduleQueued(); }, POLL_MS);
+  /* 离开页面即收掉接管中的推进循环，并把本页持有的租约交还：不交还的话任务会停在
+     running 无人推进。pagehide 里等不到异步回调，因此只发起提交——提交本身仍在
+     互斥区内做所有权校验，不会覆盖别人的结果；万一没来得及落盘（进程被杀），
+     其它长驻页面仍可在 Lease.TTL 后按「租约已过期」接管 */
+  window.addEventListener('pagehide', function () {
+    Object.keys(adopted).forEach(function (id) {
+      adoptStop(id);
+      var cur = Store.rawTask(id);
+      if (!cur || cur.leaseBy !== tabId) return;
+      Lease.release(id, cur.status === 'running'
+        ? { now: '执行中：原推进页面已关闭，等待其它页面接管' } : {});
+    });
+    // 在途标志一并清掉：页面卸载后这些提交的回调不会再回来，留着会让页面从
+    // 后台缓存恢复后第一拍推进被永久挡住
+    Object.keys(advancing).forEach(function (id) { delete advancing[id]; });
+  });
+  scheduleQueued();
 })();
 </script>
 </body>

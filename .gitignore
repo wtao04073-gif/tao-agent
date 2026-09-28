@@ -64,3 +64,5 @@ vendor/**/*.tsbuildinfo
 !vendor/pi/ai/src/providers/data/
 !vendor/pi/ai/src/providers/data/**
 deploy/.env
+flux/.local
+flux/changes

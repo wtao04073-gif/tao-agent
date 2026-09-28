@@ -151,11 +151,12 @@
       <button class="iconbtn" type="button" data-modal-close="permModal" aria-label="关闭">×</button>
     </div>
     <div class="modal__body">
+      <div id="permScopeWarn"></div>
       <div class="field">
         <label class="field__label" for="permScope">生效范围（资产分级）</label>
         <select id="permScope">
           <option>平台通用（所有租户可见）</option>
-          <option selected>租户共享（本租户所有工作区）</option>
+          <option>租户共享（本租户所有工作区）</option>
           <option>工作区专属（仅教务处）</option>
           <option>个人私有（仅我）</option>
         </select>
@@ -163,14 +164,19 @@
       </div>
       <div class="table-wrap">
         <table class="data perm-matrix">
-          <thead><tr><th>角色</th><th>查看</th><th>检索引用</th><th>上传</th><th>编辑</th><th>删除</th></tr></thead>
+          <thead><tr><th>角色</th><th>查看</th><th>检索引用</th><th>上传</th><th>编辑</th><th>删除</th>
+            <th>权限设置</th></tr></thead>
           <tbody id="permBody"></tbody>
         </table>
       </div>
       <div class="banner banner--warn" style="margin-top:var(--sp-4)">
         <span aria-hidden="true">🔒</span>
         <span>普通成员默认仅「查看 + 检索引用」。取消勾选「查看」后，该角色在检索结果中完全看不到本库内容
-          （不可见 ≠ 可见但不可编辑，两者提示文案不同）。</span>
+          （不可见 ≠ 可见但不可编辑，两者提示文案不同）。「权限设置」是独立的管理权限，
+          仅持有该权限的角色才能打开本弹窗并改动范围与矩阵；且管理权限既不越层级、也不跨归属——
+          资产所在范围高于角色管辖等级时（如工作区管理员遇到租户共享库），须由对应层级管理员处理；
+          资产属于其他工作区或他人的个人私有资产时，同级管理员同样无权改动，须由该资产的归属方处理。
+          任何角色都不能授予自己未持有的权限。</span>
       </div>
     </div>
     <div class="modal__foot">
@@ -193,20 +199,35 @@
   var U = App.Util;
 
   /* ---------------- 演示数据 ---------------- */
+  // 每个库都带真实归属：tenantId 所属租户、workspaceId 所属工作区（租户级资产留空）、
+  // ownerId 资产责任人（个人私有资产以此判定唯一可管理人）
   var KBS = [
     { id: 'kb-edu-eval', name: '评估材料知识库', scope: '租户共享', role: 'edu',
+      tenantId: 't-jcut', workspaceId: '', ownerId: 'u-liumin',
       desc: '审核评估相关规章、上轮反馈、历史自评报告' },
     { id: 'kb-edu-doc', name: '公文与制度库', scope: '租户共享', role: 'edu',
+      tenantId: 't-jcut', workspaceId: '', ownerId: 'u-wangjianhua',
       desc: '公文格式规范、校内规章制度' },
+    { id: 'kb-edu-fix', name: '评估整改台账库', scope: '工作区专属', role: 'edu',
+      tenantId: 't-jcut', workspaceId: 'ws-edu', ownerId: 'u-liumin',
+      desc: '教务处工作区专属：整改台账、任务分解与落实材料' },
     { id: 'kb-mfg-qms', name: '质量体系文件库', scope: '租户共享', role: 'mfg',
+      tenantId: 't-jcut', workspaceId: '', ownerId: 'u-chenguodong',
       desc: '质量手册、程序文件、体系标准条款' },
     { id: 'kb-mfg-sup', name: '供应商与采购库', scope: '工作区专属', role: 'mfg',
-      desc: '供应商准入资料、对账规则、价格协议' },
+      tenantId: 't-jcut', workspaceId: 'ws-purchase', ownerId: 'u-zhouyaqin',
+      desc: '采购部工作区专属：供应商准入资料、对账规则、价格协议' },
     { id: 'kb-personal', name: '我的草稿库', scope: '个人私有', role: 'edu',
+      tenantId: 't-jcut', workspaceId: 'ws-edu', ownerId: 'u-liumin',
       desc: '个人临时材料，不参与共享检索' },
+    { id: 'kb-chen-draft', name: '体系换版草稿库', scope: '个人私有', role: 'mfg',
+      tenantId: 't-jcut', workspaceId: 'ws-quality', ownerId: 'u-chenguodong',
+      desc: '他人的个人资产：仅所有者本人能改动范围与权限' },
     { id: 'kb-locked', name: '人事薪酬资料库', scope: '租户共享', role: 'edu',
+      tenantId: 't-jcut', workspaceId: '', ownerId: 'u-wangjianhua',
       desc: '受限库：当前账号无查看权限', locked: true },
     { id: 'kb-empty', name: '2027 迎新专项库', scope: '工作区专属', role: 'edu',
+      tenantId: 't-jcut', workspaceId: 'ws-edu', ownerId: 'u-liumin',
       desc: '新建库，尚未上传任何文档', empty: true }
   ];
 
@@ -232,6 +253,14 @@
       { name: '江城理工大学公文处理办法.docx', size: '148 KB', state: 'ready',
         chunks: 52, cited: 63, by: '办公室', at: '05-22' }
     ],
+    'kb-edu-fix': [
+      { name: '审核评估整改任务台账（2026秋）.xlsx', size: '318 KB', state: 'ready',
+        chunks: 96, cited: 22, by: '刘敏', at: '09-19' },
+      { name: '各学院整改落实情况汇总（第一轮）.docx', size: '512 KB', state: 'ready',
+        chunks: 134, cited: 15, by: '王建华', at: '09-08' },
+      { name: '整改销项验收标准与时间表.docx', size: '94 KB', state: 'parsing',
+        progress: 45, by: '刘敏', at: '刚刚' }
+    ],
     'kb-mfg-qms': [
       { name: '质量手册-QM-2026-RevC.docx', size: '1.6 MB', state: 'ready',
         chunks: 246, cited: 88, by: '陈国栋', at: '07-15' },
@@ -251,6 +280,10 @@
     'kb-personal': [
       { name: '评估汇报提纲草稿.docx', size: '36 KB', state: 'ready',
         chunks: 12, cited: 0, by: '刘敏', at: '09-22' }
+    ],
+    'kb-chen-draft': [
+      { name: '质量手册换版对照草稿-RevD.docx', size: '1.1 MB', state: 'ready',
+        chunks: 88, cited: 0, by: '陈国栋', at: '09-19' }
     ],
     'kb-locked': [],
     'kb-empty': []
@@ -312,12 +345,130 @@
   ];
 
   var PERM_ROLES = [
-    ['平台管理员',   [1, 1, 1, 1, 1]],
-    ['租户管理员',   [1, 1, 1, 1, 1]],
-    ['工作区管理员', [1, 1, 1, 1, 0]],
-    ['普通成员',     [1, 1, 0, 0, 0]],
-    ['外部协作者',   [0, 0, 0, 0, 0]]
+    ['平台管理员',   [1, 1, 1, 1, 1, 1]],
+    ['租户管理员',   [1, 1, 1, 1, 1, 1]],
+    ['工作区管理员', [1, 1, 1, 1, 1, 1]],
+    ['普通成员',     [1, 1, 0, 0, 0, 0]],
+    ['外部协作者',   [0, 0, 0, 0, 0, 0]]
   ];
+
+  // 矩阵列序与 thead 一致：查看 / 检索引用 / 上传 / 编辑 / 删除 / 权限设置
+  var PERM_COL = { view: 0, search: 1, upload: 2, edit: 3, del: 4, manage: 5 };
+  var PERM_LABELS = ['查看', '检索引用', '上传', '编辑', '删除', '权限设置'];
+  var CUR_ROLE = '工作区管理员';   // 侧边栏演示身份：刘敏 · 教务处工作区管理员
+  // 当前身份的归属：角色只说明管辖层级，归属决定能管哪一份资产
+  var CUR_USER = {
+    userId: 'u-liumin', name: '刘敏',
+    tenantId: 't-jcut', workspaceId: 'ws-edu', workspaceName: '教务处'
+  };
+
+  // 资产分级由小到大；范围变大即可见人群变多
+  var SCOPE_RANK = { '个人私有': 1, '工作区专属': 2, '租户共享': 3, '平台通用': 4 };
+  var SCOPE_OWNER = {
+    '个人私有': '刘敏',
+    '工作区专属': '江城理工大学 · 教务处',
+    '租户共享': '江城理工大学 · 租户',
+    '平台通用': '全部租户'
+  };
+  // 各角色能管辖到的最高资产分级；再往上的范围须由对应层级管理员审批
+  var ROLE_SCOPE_MAX = {
+    '平台管理员': 4, '租户管理员': 3, '工作区管理员': 2, '普通成员': 1, '外部协作者': 0
+  };
+  var SCOPE_APPROVER = {
+    '平台通用': '平台管理员',
+    '租户共享': '租户管理员',
+    '工作区专属': '工作区管理员',
+    '个人私有': '资产所有者'
+  };
+  // 归属 id 到展示名，拒绝文案要能说清「这是谁的资产」
+  var WORKSPACE_NAMES = { 'ws-edu': '教务处', 'ws-purchase': '采购部', 'ws-quality': '质量部' };
+  var USER_NAMES = {
+    'u-liumin': '刘敏', 'u-wangjianhua': '王建华',
+    'u-chenguodong': '陈国栋', 'u-zhouyaqin': '周雅琴'
+  };
+
+  // 个别演示库的初始权限：只读库与受限库偏离默认矩阵
+  var PERM_SEED = {
+    'kb-edu-doc': { '工作区管理员': [1, 1, 0, 0, 0, 0] },
+    'kb-locked': {
+      '工作区管理员': [0, 0, 0, 0, 0, 0],
+      '普通成员': [0, 0, 0, 0, 0, 0],
+      '外部协作者': [0, 0, 0, 0, 0, 0]
+    }
+  };
+
+  /** 某角色的管辖等级是否覆盖某个资产范围；管理权限一律以此为上限 */
+  function roleCoversScope(role, scope) {
+    return (SCOPE_RANK[scope] || 0) <= (ROLE_SCOPE_MAX[role] || 0);
+  }
+
+  /** 资产归属展示名：工作区级看工作区，个人私有看所有者 */
+  function assetOwnerLabel(kb) {
+    var rank = SCOPE_RANK[kb.scope] || 0;
+    if (rank === 1) return USER_NAMES[kb.ownerId] || kb.ownerId || '未知所有者';
+    if (rank === 2) return (WORKSPACE_NAMES[kb.workspaceId] || kb.workspaceId || '未知工作区') + '工作区';
+    return SCOPE_OWNER[kb.scope] || kb.scope;
+  }
+
+  /** 归属判定：层级够不等于归属对。工作区级资产要同一工作区，
+   *  个人私有资产必须是所有者本人，且一律不跨租户 */
+  function assetBelongsToMe(kb) {
+    var rank = SCOPE_RANK[kb.scope] || 0;
+    if (rank >= SCOPE_RANK['平台通用']) return true;   // 平台通用不归属单一租户，交由层级规则裁定
+    if ((kb.tenantId || '') !== CUR_USER.tenantId) return false;
+    if (rank === SCOPE_RANK['个人私有']) return (kb.ownerId || '') === CUR_USER.userId;
+    if (rank === SCOPE_RANK['工作区专属']) return (kb.workspaceId || '') === CUR_USER.workspaceId;
+    return true;                                       // 租户共享资产在本租户内按层级裁定
+  }
+
+  /** 取知识库自己的权限矩阵；首次访问时按默认矩阵与演示种子初始化 */
+  function kbPerms(kb) {
+    if (!kb.perms) {
+      var seed = PERM_SEED[kb.id] || {};
+      kb.perms = {};
+      PERM_ROLES.forEach(function (r) {
+        var row = (seed[r[0]] || r[1]).slice();
+        // 管理权限按资产范围初始化：本库所在层级超出该角色管辖时不默认授予「权限设置」
+        if (!roleCoversScope(r[0], kb.scope)) row[PERM_COL.manage] = 0;
+        kb.perms[r[0]] = row;
+      });
+    }
+    return kb.perms;
+  }
+
+  /** 访问判定统一走本库保存的权限矩阵，不按知识库 ID 分支 */
+  function can(kb, act) {
+    return !!kbPerms(kb)[CUR_ROLE][PERM_COL[act]];
+  }
+
+  /** 管理权限独立于查看权限：改范围与权限矩阵须持有本库的「权限设置」，
+   *  且要同时满足两个维度——角色管辖等级覆盖本库当前范围（纵向），
+   *  本库归属于当前用户所在工作区或本人（横向） */
+  function canManage(kb) {
+    return can(kb, 'view') && can(kb, 'manage') &&
+      roleCoversScope(CUR_ROLE, kb.scope) && assetBelongsToMe(kb);
+  }
+
+  /** 目标范围是否在当前角色的管辖等级内 */
+  function scopeAllowed(scope) {
+    return roleCoversScope(CUR_ROLE, scope);
+  }
+
+  /** 无管理权限时的说明文案：层级不够与归属不符是两回事，分别指明该找谁 */
+  function manageDenyText(kb) {
+    if (!roleCoversScope(CUR_ROLE, kb.scope)) {
+      return '本库属于「' + kb.scope + '」资产，超出' + CUR_ROLE + '的管辖范围，' +
+        '请联系' + (SCOPE_APPROVER[kb.scope] || '更高层级管理员') + '调整生效范围与权限矩阵';
+    }
+    if (!assetBelongsToMe(kb)) {
+      if ((SCOPE_RANK[kb.scope] || 0) === SCOPE_RANK['个人私有']) {
+        return '本库是' + assetOwnerLabel(kb) + '的个人私有资产，只有所有者本人能改动生效范围与权限矩阵';
+      }
+      return '本库归属' + assetOwnerLabel(kb) + '，不在你所属的' + CUR_USER.workspaceName +
+        '工作区内；同为' + CUR_ROLE + '也只能管理本工作区资产，请联系该工作区的管理员处理';
+    }
+    return '你没有本知识库的管理权限，无法改动生效范围与权限矩阵';
+  }
 
   /* ---------------- 标签页切换 ---------------- */
   U.$$('[data-tab]').forEach(function (b) {
@@ -342,8 +493,9 @@
         'font-family:inherit;border-radius:var(--r-md);background:' +
         (active ? 'var(--brand-50)' : 'transparent') + '">' +
         '<b style="color:' + (active ? 'var(--brand-600)' : 'var(--fg-strong)') + '">' +
-        U.esc(k.name) + (k.locked ? ' 🔒' : '') + '</b>' +
+        U.esc(k.name) + (can(k, 'view') ? '' : ' 🔒') + '</b>' +
         '<span style="font-size:var(--fs-11);color:var(--fg-muted)">' + U.esc(k.scope) +
+        ' · ' + U.esc(assetOwnerLabel(k)) +
         ' · ' + ((DOCS[k.id] || []).length) + ' 篇</span>' +
         '</button></li>';
     }).join('');
@@ -360,7 +512,9 @@
 
   U.$('#newKb').addEventListener('click', function () {
     var id = 'kb-new-' + Date.now();
+    // 新建库归属创建者本人与其所在工作区，否则建完自己也管不了
     KBS.push({ id: id, name: '新建知识库', scope: '工作区专属', role: 'edu',
+      tenantId: CUR_USER.tenantId, workspaceId: CUR_USER.workspaceId, ownerId: CUR_USER.userId,
       desc: '刚创建，尚未上传文档', empty: true });
     DOCS[id] = [];
     curKb = KBS[KBS.length - 1];
@@ -373,14 +527,14 @@
     U.$('#kbTitle').textContent = curKb.name;
     U.$('#kbScope').textContent = curKb.scope;
 
-    // 权限不足提示：区分「不可见」与「可见但不可编辑」
+    // 权限不足提示：区分「不可见」与「可见但不可编辑」，均以本库保存的权限矩阵为准
     var notice = U.$('#permNotice');
-    if (curKb.locked) {
+    if (!can(curKb, 'view')) {
       notice.innerHTML = '<div class="banner banner--err"><span aria-hidden="true">🚫</span>' +
         '<div><strong>你没有本知识库的查看权限</strong><br>' +
         '该库内容对你完全不可见，检索时也不会召回其中任何片段。' +
         '如需访问，请联系租户管理员（人事处 · 王建华）授权。</div></div>';
-    } else if (curKb.scope === '租户共享' && curKb.id === 'kb-edu-doc') {
+    } else if (!can(curKb, 'upload') && !can(curKb, 'edit') && !can(curKb, 'del')) {
       notice.innerHTML = '<div class="banner banner--warn"><span aria-hidden="true">👁</span>' +
         '<div><strong>你对本知识库只有查看与检索引用权限</strong><br>' +
         '可以在任务中引用其中内容，但不能上传、编辑或删除文档（读写分离）。</div></div>';
@@ -388,12 +542,18 @@
       notice.innerHTML = '';
     }
 
-    // 上传区在只读 / 无权限时禁用
-    var readOnly = curKb.locked || curKb.id === 'kb-edu-doc';
+    // 上传区在无上传权限时禁用
+    var readOnly = !can(curKb, 'upload');
     var drop = U.$('#drop');
     drop.style.opacity = readOnly ? '.45' : '';
     drop.style.pointerEvents = readOnly ? 'none' : '';
     drop.setAttribute('aria-disabled', String(readOnly));
+
+    // 权限设置入口在无管理权限时禁用，与上传区同一套「无权限」表现
+    var permBtn = U.$('#permBtn');
+    var noManage = !canManage(curKb);
+    permBtn.disabled = noManage;
+    permBtn.title = noManage ? manageDenyText(curKb) : '';
 
     // 演示上传按钮
     U.$('#uploadDemo').innerHTML = readOnly ? '' :
@@ -411,7 +571,7 @@
     var host = U.$('#docHost');
     U.$('#docCount').textContent = docs.length ? docs.length + ' 篇文档' : '';
 
-    if (curKb.locked) {
+    if (!can(curKb, 'view')) {
       host.innerHTML = '<div class="empty"><div class="empty__icon" aria-hidden="true">🔒</div>' +
         '<h3>无权访问</h3><p>本知识库的文档列表对你不可见。</p></div>';
       return;
@@ -523,9 +683,9 @@
     var del = e.target.closest('[data-doc-del]');
     if (del) {
       var i = +del.getAttribute('data-doc-del');
-      // 读写分离：只读库不允许删除
-      if (curKb.id === 'kb-edu-doc') {
-        App.Toast.show('无法删除', '你对本知识库只有查看与检索引用权限（读写分离）', 'err');
+      // 读写分离：删除权限以本库保存的权限矩阵为准
+      if (!can(curKb, 'del')) {
+        App.Toast.show('无法删除', '当前身份在本知识库没有删除权限（读写分离）', 'err');
         return;
       }
       var removed = DOCS[curKb.id].splice(i, 1)[0];
@@ -542,29 +702,123 @@
   });
 
   /* ---------------- 权限设置：读写分离矩阵 ---------------- */
-  U.$('#permBody').innerHTML = PERM_ROLES.map(function (r) {
-    return '<tr><td class="cell-main">' + r[0] + '</td>' +
-      r[1].map(function (v, i) {
-        var fixed = r[0] === '平台管理员' || r[0] === '租户管理员';
-        return '<td><input type="checkbox"' + (v ? ' checked' : '') +
-          (fixed ? ' disabled' : '') + ' aria-label="' + r[0] + ' 权限 ' + (i + 1) + '"></td>';
-      }).join('') + '</tr>';
-  }).join('');
+  function renderPermMatrix() {
+    var perms = kbPerms(curKb);
+    var mine = perms[CUR_ROLE] || [];
+    U.$('#permBody').innerHTML = PERM_ROLES.map(function (r) {
+      var fixed = r[0] === '平台管理员' || r[0] === '租户管理员';
+      return '<tr data-perm-role="' + r[0] + '"><td class="cell-main">' + r[0] + '</td>' +
+        perms[r[0]].map(function (v, i) {
+          // 自己不持有的权限不可勾选，避免通过矩阵给任何角色（含自己）提权
+          var beyond = !mine[i] && !v;
+          return '<td><input type="checkbox" data-perm-col="' + i + '"' + (v ? ' checked' : '') +
+            (fixed || beyond ? ' disabled' : '') +
+            (beyond ? ' title="' + CUR_ROLE + '在本库不持有「' + PERM_LABELS[i] + '」，无法授予他人"' : '') +
+            ' aria-label="' + r[0] + ' 权限 ' + PERM_LABELS[i] + '"></td>';
+        }).join('') + '</tr>';
+    }).join('');
+  }
 
-  U.$('#permBtn').addEventListener('click', function () {
-    if (curKb.locked) {
-      App.Toast.show('无权操作', '你没有本知识库的管理权限', 'err');
+  // 范围扩大属于敏感变更，保存前先在弹窗内明示影响面；越级范围直接标注不可选
+  function renderScopeWarn() {
+    var next = U.$('#permScope').value.replace(/（.*/, '');
+    var host = U.$('#permScopeWarn');
+    if (!scopeAllowed(next)) {
+      host.innerHTML = '<div class="banner banner--err" style="margin-bottom:var(--sp-4)">' +
+        '<span aria-hidden="true">🚫</span><span>「' + U.esc(next) + '」超出' + CUR_ROLE +
+        '的管辖范围，无法在此变更：范围扩大需由' + U.esc(SCOPE_APPROVER[next] || '更高层级管理员') +
+        '审批后调整。</span></div>';
       return;
     }
+    host.innerHTML = SCOPE_RANK[next] > SCOPE_RANK[curKb.scope]
+      ? '<div class="banner banner--warn" style="margin-bottom:var(--sp-4)">' +
+        '<span aria-hidden="true">⚠</span><span>可见范围将由「' + U.esc(curKb.scope) + '」扩大到「' +
+        U.esc(next) + '」：本库全部文档会对「' + U.esc(SCOPE_OWNER[next]) +
+        '」范围内的成员可见并可被其任务检索引用，请确认内容可对外共享。</span></div>'
+      : '';
+  }
+
+  // 打开弹窗时按当前知识库的真实范围与权限回填，避免沿用默认值造成误改
+  function syncPermForm() {
+    var sel = U.$('#permScope');
+    U.$$('#permScope option').forEach(function (o, i) {
+      var name = o.textContent.replace(/（.*/, '');
+      // 超出管辖等级的范围置灰，越级提升在界面上即不可达
+      o.disabled = !scopeAllowed(name);
+      if (o.textContent.indexOf(curKb.scope) === 0) sel.selectedIndex = i;
+    });
+    renderPermMatrix();
+    renderScopeWarn();
+  }
+
+  U.$('#permScope').addEventListener('change', renderScopeWarn);
+
+  U.$('#permBtn').addEventListener('click', function () {
+    // 入口按独立的管理权限判定：查看权限只说明能读，不代表能改范围与矩阵
+    if (!canManage(curKb)) {
+      App.Toast.show('无权操作', manageDenyText(curKb), 'err', 6000);
+      return;
+    }
+    syncPermForm();
     App.Modal.open('permModal');
   });
   U.$('#permSave').addEventListener('click', function () {
+    // 保存再判一次：按钮禁用只是界面表现，写回矩阵前必须独立校验管理权限与本库所在范围
+    if (!canManage(curKb)) {
+      App.Toast.show('无权保存', manageDenyText(curKb) +
+        '；生效范围与权限矩阵未做任何改动', 'err', 6000);
+      return;
+    }
     var scope = U.$('#permScope').value.replace(/（.*/, '');
+    var prevScope = curKb.scope;
+    // 越级改范围直接拒绝：范围扩大要交由对应层级管理员审批
+    if (!scopeAllowed(scope)) {
+      App.Toast.show('生效范围超出管辖', '「' + scope + '」超出' + CUR_ROLE + '的管辖范围，需由' +
+        (SCOPE_APPROVER[scope] || '更高层级管理员') + '审批后调整；本次未做任何改动', 'err', 6000);
+      return;
+    }
+    var widened = SCOPE_RANK[scope] > SCOPE_RANK[prevScope];
+    var perms = kbPerms(curKb);
+    // 自身权限快照：不能给任何角色（含自己）勾上超出自己管辖的权限
+    var mine = (perms[CUR_ROLE] || []).slice();
+    var over = null;
+    U.$$('#permBody tr').forEach(function (tr) {
+      var row = perms[tr.getAttribute('data-perm-role')];
+      if (!row || over) return;
+      U.$$('input[data-perm-col]', tr).forEach(function (cb) {
+        var col = +cb.getAttribute('data-perm-col');
+        if (over || !cb.checked || row[col] || mine[col]) return;
+        over = { role: tr.getAttribute('data-perm-role'), col: col };
+      });
+    });
+    if (over) {
+      App.Toast.show('无法授予超出自身的权限', CUR_ROLE + '在本知识库不持有「' + PERM_LABELS[over.col] +
+        '」，因此不能把该权限授予' + over.role + '；本次未做任何改动', 'err', 6000);
+      return;
+    }
+    // 逐行读取矩阵的实际勾选状态并落到本库，后续访问判定都基于这份数据
+    U.$$('#permBody tr').forEach(function (tr) {
+      var row = perms[tr.getAttribute('data-perm-role')];
+      if (!row) return;
+      U.$$('input[data-perm-col]', tr).forEach(function (cb) {
+        row[+cb.getAttribute('data-perm-col')] = cb.checked ? 1 : 0;
+      });
+    });
     curKb.scope = scope;
+    // 范围变更同时把归属写成当前身份的归属，避免改完范围后资产落到别的工作区或别人名下
+    curKb.tenantId = CUR_USER.tenantId;
+    if (SCOPE_RANK[scope] <= SCOPE_RANK['工作区专属']) curKb.workspaceId = CUR_USER.workspaceId;
+    if (SCOPE_RANK[scope] === SCOPE_RANK['个人私有']) curKb.ownerId = CUR_USER.userId;
+    curKb.scopeOwner = assetOwnerLabel(curKb);   // 范围与租户 / 工作区归属一并落库
     App.Modal.close('permModal');
     renderKbList(); renderKb();
     App.Toast.show('权限已保存并即时生效',
-      '生效范围：' + scope + ' · 变更已写入审计日志（操作人 刘敏）', 'ok', 5000);
+      '生效范围：' + scope + '（归属 ' + curKb.scopeOwner + '）· 变更已写入审计日志（操作人 刘敏）',
+      'ok', 5000);
+    if (widened) {
+      App.Toast.show('可见范围已扩大', '「' + prevScope + '」→「' + scope +
+        '」：本库内容现已对更大范围可见，如需收回请重新调整生效范围', 'err', 6000);
+    }
   });
 
   /* ---------------- 其他标签页内容 ---------------- */
