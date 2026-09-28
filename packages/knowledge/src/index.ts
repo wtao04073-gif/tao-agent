@@ -39,3 +39,14 @@ export {
 	shardsInWindow,
 	type FileMeteringStoreOptions,
 } from "./file-metering-store.ts";
+
+// ── 任务与审计持久化（M5-1）──
+export { MemoryTaskStore, MemoryAuditStore } from "./memory-task-store.ts";
+export {
+	FileTaskStore,
+	FileAuditStore,
+	isSafeTaskId,
+	auditShardName,
+	interruptedStatusOnRestart,
+	type FileTaskStoreOptions,
+} from "./file-task-store.ts";

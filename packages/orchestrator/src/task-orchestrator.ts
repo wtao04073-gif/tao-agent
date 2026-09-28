@@ -14,14 +14,19 @@ import {
 	type Runner,
 	type RunnerFactory,
 	type RunnerSpec,
+	type StoredTask,
+	type TaskChange,
 	type TaskEvent,
 	type TaskEventListener,
+	type TaskStore,
 	type TenantContext,
 } from "@tao/core";
 
 export interface TaskRecord {
 	readonly taskId: string;
 	readonly tenant: TenantContext;
+	/** 创建任务时的会话标识。恢复时用于判断能否续跑。 */
+	readonly sessionId: string;
 	readonly status: TaskStatus;
 	/** 面向用户的失败/取消原因。终态非成功时必须有值。 */
 	readonly reason?: string;
@@ -89,16 +94,80 @@ export class TaskOrchestrator {
 	private readonly seqCursor = new Map<string, number>();
 	private readonly factory: RunnerFactory;
 	private readonly now: () => number;
+	/**
+	 * 可选的持久化存储。给了就把变更与事件落盘、支持 {@link TaskOrchestrator.recover}；
+	 * 不给就是纯内存编排器（测试与开发态）。
+	 */
+	private readonly store: TaskStore | undefined;
 
-	constructor(factory: RunnerFactory, options: { now?: () => number } = {}) {
+	constructor(
+		factory: RunnerFactory,
+		options: { now?: () => number; store?: TaskStore } = {},
+	) {
 		this.factory = factory;
 		this.now = options.now ?? (() => Date.now());
+		this.store = options.store;
 	}
 
 	/** 订阅全部任务的事件。返回取消订阅函数。 */
 	subscribe(listener: TaskEventListener): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
+	}
+
+	/**
+	 * 从持久化存储恢复任务到内存（进程重启后调用一次）。
+	 *
+	 * 恢复语义见 [M5-1](../../../docs/M5.md)：
+	 *  - 终态、QUEUED、AWAIT_CONFIRM 原样恢复；
+	 *  - **RUNNING 改写为 INTERRUPTED** —— 执行器随旧进程消失，会话上下文也丢了，
+	 *    恢复成 RUNNING 是没有执行器的僵尸态；用户可从检查点重试。
+	 *
+	 * 恢复**不重建 Runner**（无法续跑会话），只恢复可读的任务列表与事件历史，
+	 * 并为每个任务重建事件日志与 seq 游标。Runner 在用户重试时由 factory 新建。
+	 *
+	 * @returns 被标记为 INTERRUPTED 的任务 id（供启动日志/通知用）
+	 */
+	recover(): readonly string[] {
+		if (this.store === undefined) return [];
+		// listAll 仅限此处启动恢复使用，业务读必须走按租户的 list
+		const all = this.store.listAll();
+		const interrupted: string[] = [];
+		for (const stored of all) {
+			const events = this.store.events(stored.taskId);
+			this.eventLog.set(stored.taskId, [...events]);
+			const maxSeq = events.reduce((m, e) => Math.max(m, e.seq), 0);
+			this.seqCursor.set(stored.taskId, maxSeq);
+
+			if (stored.status === TaskStatus.Running) {
+				// 落一条 RUNNING → INTERRUPTED 的变更，让恢复结果也持久化，
+				// 下次重启不会重复判定
+				const at = this.now();
+				const seq = maxSeq + 1;
+				const reason = "服务重启，任务中断，可从最后成功检查点重试";
+				const recovered: TaskRecord = {
+					...stored,
+					status: TaskStatus.Interrupted,
+					reason,
+					updatedAt: at,
+				};
+				this.tasks.set(stored.taskId, recovered);
+				this.store.appendChange({
+					taskId: stored.taskId,
+					tenant: stored.tenant,
+					sessionId: stored.sessionId,
+					seq,
+					at,
+					from: TaskStatus.Running,
+					to: TaskStatus.Interrupted,
+					reason,
+				});
+				interrupted.push(stored.taskId);
+			} else {
+				this.tasks.set(stored.taskId, { ...stored });
+			}
+		}
+		return interrupted;
 	}
 
 	get(taskId: string): TaskRecord | undefined {
@@ -132,6 +201,7 @@ export class TaskOrchestrator {
 		const record: TaskRecord = {
 			taskId: options.taskId,
 			tenant: options.tenant,
+			sessionId: options.sessionId,
 			status: TaskStatus.Queued,
 			artifacts: [],
 			createdAt: at,
@@ -140,6 +210,7 @@ export class TaskOrchestrator {
 		this.tasks.set(options.taskId, record);
 		this.eventLog.set(options.taskId, []);
 		this.seqCursor.set(options.taskId, 0);
+		// 变更随首条状态事件一起落盘（见 emitStatus），先于事件对外发送
 		await this.emitStatus(record, null, TaskStatus.Queued);
 
 		const runner = await this.factory.createRunner({
@@ -167,10 +238,22 @@ export class TaskOrchestrator {
 				await this.transition(options.taskId, TaskStatus.AwaitConfirm, stamped.reason);
 			}
 			if (stamped.type === "artifact") {
-				this.updateRecord(options.taskId, (r) => ({
+				const withArtifact = this.updateRecord(options.taskId, (r) => ({
 					...r,
 					artifacts: [...r.artifacts, stamped.artifactId],
 				}));
+				// 产物追加也进变更流（状态不变，仅累积 artifacts），
+				// 否则重启后当前态的产物列表会丢
+				this.store?.appendChange({
+					taskId: options.taskId,
+					tenant: withArtifact.tenant,
+					sessionId: withArtifact.sessionId,
+					seq: stamped.seq,
+					at: this.now(),
+					from: withArtifact.status,
+					to: withArtifact.status,
+					artifacts: [stamped.artifactId],
+				});
 			}
 		});
 
@@ -319,10 +402,54 @@ export class TaskOrchestrator {
 			eventId: `${taskId}-${seq}`,
 		} as TaskEvent;
 
+		// 状态事件同时是一条持久化变更（当前态折叠自这条流）
+		if (event.type === "status") {
+			const r = this.tasks.get(taskId);
+			if (r !== undefined) {
+				this.persistChange(
+					r,
+					event.from,
+					seq,
+					event.reason === undefined ? undefined : { reason: event.reason },
+				);
+			}
+		}
+
 		const log = this.eventLog.get(taskId) ?? [];
 		log.push(event);
 		this.eventLog.set(taskId, log);
+		// 事件流落盘（含 step/usage 等非状态事件），供重启后断线重连
+		this.store?.appendEvent(event);
 		return event;
+	}
+
+	/**
+	 * 把一次任务变更追加到持久化变更流。
+	 *
+	 * 变更序号取自对应状态事件的 seq（事件溯源：当前态是这条流的折叠）。
+	 * 首条（from=null）走 create，幂等挡住重复创建；其余追加。
+	 */
+	private persistChange(
+		record: TaskRecord,
+		from: TaskStatus | null,
+		seq: number,
+		extra?: { reason?: string; artifacts?: readonly string[] },
+	): void {
+		const change: TaskChange = {
+			taskId: record.taskId,
+			tenant: record.tenant,
+			sessionId: record.sessionId,
+			seq,
+			at: record.updatedAt,
+			from,
+			to: record.status,
+			...(extra?.reason === undefined ? {} : { reason: extra.reason }),
+			...(extra?.artifacts === undefined || extra.artifacts.length === 0
+				? {}
+				: { artifacts: extra.artifacts }),
+		};
+		if (from === null) this.store?.create(change);
+		else this.store?.appendChange(change);
 	}
 
 	/** 把事件投给所有订阅者。单个订阅者异常不影响其他订阅者与任务执行。 */

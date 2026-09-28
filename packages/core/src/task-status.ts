@@ -22,6 +22,14 @@ export const TaskStatus = {
 	Cancelled: "CANCELLED",
 	/** 超出步数或时长上限，转为需用户确认是否继续。 */
 	Exceeded: "EXCEEDED",
+	/**
+	 * 进程重启时任务正在执行、但会话上下文已随旧进程丢失。
+	 *
+	 * 不是 RUNNING（没有任何执行器在跑它，标 RUNNING 就是僵尸态），
+	 * 也不是 FAILED（任务本身没错）。用户可从最后成功检查点重试。
+	 * 仅在 M5 持久化恢复时由系统写入，正常执行过程不会进入这个状态。
+	 */
+	Interrupted: "INTERRUPTED",
 } as const;
 
 export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
@@ -55,6 +63,9 @@ const TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
 	// 确认后回到执行；拒绝则取消。EXCEEDED 同理（用户决定是否继续）。
 	[TaskStatus.AwaitConfirm]: [TaskStatus.Running, TaskStatus.Cancelled, TaskStatus.Failed],
 	[TaskStatus.Exceeded]: [TaskStatus.Running, TaskStatus.Cancelled],
+	// 重启后从检查点恢复执行，或放弃。**没有任何状态经正常 transition 进入
+	// INTERRUPTED** —— 它只由持久化层在回放时重建，见 task-store。
+	[TaskStatus.Interrupted]: [TaskStatus.Running, TaskStatus.Cancelled],
 	[TaskStatus.Succeeded]: [],
 	[TaskStatus.Failed]: [],
 	[TaskStatus.Cancelled]: [],

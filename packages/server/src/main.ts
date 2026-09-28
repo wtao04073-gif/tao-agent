@@ -20,15 +20,15 @@ import {
 	restrictPolicies,
 	withQuotaGate,
 	Role,
-	type AuditEntry,
 	type ModelPrice,
 	type Quota,
 	type ScenarioCard,
+	type StoredAuditEntry,
 	type TenantContext,
 	type UsageRecord,
 } from "@tao/core";
 import { createDocToolset, createOfficeToolset, DOC_TOOL_POLICIES, OFFICE_TOOL_POLICIES } from "@tao/office";
-import { FileMeteringStore } from "@tao/knowledge";
+import { FileAuditStore, FileMeteringStore, FileTaskStore } from "@tao/knowledge";
 import {
 	createModelRuntime,
 	InProcessRunnerFactory,
@@ -75,10 +75,24 @@ const meteringStore = new FileMeteringStore({
 });
 const sessionFactory = new MemorySessionFactory();
 
-/** 审计日志。一期落在内存里，供管理接口查当次运行的记录。 */
-const auditEntries: Array<AuditEntry & { at: number; tenantId: string; taskId: string }> = [];
-/** 审计条数上限。超出后丢最旧的 —— 内存实现必须有上限，否则长跑会 OOM。 */
-const MAX_AUDIT_ENTRIES = 5000;
+/**
+ * 任务与审计落盘（M5-1）。
+ *
+ * 与计量同目录根下的 JSONL 存储：任务变更 / 事件按任务分文件，审计按天分片。
+ * 服务重启后任务列表、事件历史、审计都可恢复 —— 不再是 M4 的「重启即空」。
+ */
+const taskStore = new FileTaskStore({
+	dir: join(config.workspaceDir, ".tasks"),
+	onCorruptLine: ({ file, skipped }) => {
+		process.stderr.write(`[任务] ${file} 有 ${skipped} 行无法解析，已跳过\n`);
+	},
+});
+const auditStore = new FileAuditStore({
+	dir: join(config.workspaceDir, ".tasks"),
+	onCorruptLine: ({ file, skipped }) => {
+		process.stderr.write(`[审计] ${file} 有 ${skipped} 行无法解析，已跳过\n`);
+	},
+});
 const hub = new SseHub();
 
 /**
@@ -168,7 +182,16 @@ const factory = new InProcessRunnerFactory({
 	},
 });
 
-const orchestrator = new TaskOrchestrator(factory);
+const orchestrator = new TaskOrchestrator(factory, { store: taskStore });
+
+// 启动恢复：把上次进程遗留在 RUNNING 的任务标记为 INTERRUPTED（不重建执行器，
+// 会话上下文已随旧进程丢失，用户可从检查点重试）。必须在接 SSE 订阅前完成。
+const interrupted = orchestrator.recover();
+if (interrupted.length > 0) {
+	process.stdout.write(
+		`[恢复] ${interrupted.length} 个任务在服务重启时处于执行中，已标记为中断：${interrupted.join(", ")}\n`,
+	);
+}
 
 // 编排器事件 → SSE 下发
 orchestrator.subscribe((event) => {
@@ -247,14 +270,16 @@ const app = createApp({
 			policies: basePolicies,
 			workspace: toolsFor(tenant).dir,
 			audit: (entry) => {
-				auditEntries.push({
+				const stored: StoredAuditEntry = {
 					...entry,
 					at: Date.now(),
 					tenantId: tenant.tenantId,
+					workspaceId: tenant.workspaceId,
+					userId: tenant.userId,
+					// 工具级审计在 M2 即固定不带 taskId（权限门在任务上下文外也可触发）
 					taskId: "",
-				});
-				// 有上限：内存实现不设上限，长跑必然 OOM
-				if (auditEntries.length > MAX_AUDIT_ENTRIES) auditEntries.shift();
+				};
+				auditStore.append(stored);
 				if (entry.decision !== "allowed") {
 					process.stdout.write(`[审计] ${entry.tool} 被拒：${entry.reason ?? ""}\n`);
 				}
@@ -324,10 +349,7 @@ const app = createApp({
 		});
 	},
 
-	auditLog: async (tenant, window) =>
-		auditEntries.filter(
-			(e) => e.tenantId === tenant.tenantId && e.at >= window.from && e.at < window.to,
-		),
+	auditLog: async (tenant, window) => auditStore.list(tenant.tenantId, window.from, window.to),
 });
 
 const server = createServer((req, res) => {
