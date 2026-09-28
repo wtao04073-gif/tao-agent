@@ -36,8 +36,10 @@ export interface UsageDashboard {
 	readonly costMicroYuan: number;
 	/** 未配价的模型。有值时金额是**不完整的**，必须在界面上说明。 */
 	readonly unpricedModels: readonly string[];
-	/** 按用户下钻。 */
+	/** 按用户下钻（实际消耗者）。 */
 	readonly byUser: readonly UsageBreakdown[];
+	/** 按工作区下钻。 */
+	readonly byWorkspace: readonly UsageBreakdown[];
 	/** 按模型下钻。 */
 	readonly byModel: readonly UsageBreakdown[];
 	/** 按天的趋势。用于发现突增。 */
@@ -149,10 +151,11 @@ export function buildDashboard(options: {
 		byUser: breakdown(
 			records,
 			prices,
-			// 用量记录里没有 userId —— 按 workspaceId 下钻（见文件末尾的能力边界）
-			(r) => r.workspaceId,
+			// 旧分片可能没有 userId（M4 数据），归到「未知用户」而非按空串散成多组
+			(r) => r.userId || "未知用户",
 			(key) => options.userNames?.get(key) ?? key,
 		),
+		byWorkspace: breakdown(records, prices, (r) => r.workspaceId, (key) => key),
 		byModel: breakdown(records, prices, (r) => r.model, (key) => key),
 		byDay: breakdown(records, prices, (r) => dayKey(r.at), (key) => key),
 	};
@@ -263,7 +266,8 @@ export function renderDashboard(dashboard: UsageDashboard): string {
 		}
 	};
 
-	section("按工作区", dashboard.byUser);
+	section("按用户", dashboard.byUser);
+	section("按工作区", dashboard.byWorkspace);
 	section("按模型", dashboard.byModel);
 	section("按日期", dashboard.byDay, 10);
 

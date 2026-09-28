@@ -35,6 +35,12 @@ import type { TenantContext } from "./tenant.ts";
 export interface UsageRecord {
 	readonly tenantId: string;
 	readonly workspaceId: string;
+	/**
+	 * 实际消耗者。M5-2 起落账，支撑看板按人下钻。
+	 *
+	 * 旧分片里没有这个字段（M4 落盘的数据），读取时按缺失处理、不报错。
+	 */
+	readonly userId: string;
 	readonly taskId: string;
 	readonly model: string;
 	readonly inputTokens: number;

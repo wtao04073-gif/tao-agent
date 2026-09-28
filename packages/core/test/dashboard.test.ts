@@ -33,6 +33,7 @@ function usage(patch: Partial<UsageRecord> = {}): UsageRecord {
 	return {
 		tenantId: "univ-009",
 		workspaceId: "office",
+		userId: "u-default",
 		taskId: "t-1",
 		model: "deepseek-chat",
 		inputTokens: 0,
@@ -169,27 +170,40 @@ describe("下钻", () => {
 		expect(dashboard.byDay[0]?.totalTokens).toBe(5000);
 	});
 
-	it("按工作区分组（不是按用户 —— 记录里没有 userId）", () => {
+	it("按用户与按工作区分别分组（M5-2 起 userId 进用量记录）", () => {
 		const records = [
-			usage({ workspaceId: "教务处", inputTokens: 100 }),
-			usage({ workspaceId: "学生处", inputTokens: 200 }),
+			usage({ userId: "u-li", workspaceId: "教务处", inputTokens: 100 }),
+			usage({ userId: "u-wang", workspaceId: "学生处", inputTokens: 200 }),
+			// 同一工作区的第二个用户：按人是两组、按工作区仍各归各的处
+			usage({ userId: "u-zhang", workspaceId: "学生处", inputTokens: 300 }),
 		];
 		const dashboard = buildDashboard({ records, period: PERIOD, prices: PRICES });
-		expect(dashboard.byUser.map((r) => r.key).sort()).toEqual(["学生处", "教务处"]);
+		expect(dashboard.byUser.map((r) => r.key).sort()).toEqual(["u-li", "u-wang", "u-zhang"]);
+		expect(dashboard.byWorkspace.map((r) => r.key).sort()).toEqual(["学生处", "教务处"]);
 	});
 
-	it("提供显示名时用显示名，缺失时用 id", () => {
-		const records = [usage({ workspaceId: "ws-01", inputTokens: 100 })];
+	it("旧分片缺 userId 时归入「未知用户」，不散成多组", () => {
+		// M4 落盘的记录没有 userId（运行时按 undefined），读旧数据要兜底
+		const records = [
+			{ ...usage({ inputTokens: 100 }), userId: undefined },
+			{ ...usage({ inputTokens: 200 }), userId: undefined },
+		] as unknown as UsageRecord[];
+		const dashboard = buildDashboard({ records, period: PERIOD, prices: PRICES });
+		expect(dashboard.byUser.map((r) => r.key)).toEqual(["未知用户"]);
+	});
+
+	it("用户提供显示名时用显示名，缺失时用 id", () => {
+		const records = [usage({ userId: "u-li", inputTokens: 100 })];
 		const dashboard = buildDashboard({
 			records,
 			period: PERIOD,
 			prices: PRICES,
-			userNames: new Map([["ws-01", "教务处"]]),
+			userNames: new Map([["u-li", "李老师"]]),
 		});
-		expect(dashboard.byUser[0]?.label).toBe("教务处");
+		expect(dashboard.byUser[0]?.label).toBe("李老师");
 
 		const without = buildDashboard({ records, period: PERIOD, prices: PRICES });
-		expect(without.byUser[0]?.label).toBe("ws-01");
+		expect(without.byUser[0]?.label).toBe("u-li");
 	});
 
 	it("分组内先汇总再折算金额", () => {
@@ -370,17 +384,18 @@ describe("文本渲染", () => {
 		expect(text).toContain("0 token");
 	});
 
-	it("写「按工作区」而非「按用户」—— 口径不能误导追责", () => {
-		// 记录里没有 userId，按用户下钻实际是按工作区。
-		// 界面上写「按用户」会让管理员按错误口径追责
+	it("同时给出按用户与按工作区两个维度（M5-2 起可真正按人下钻）", () => {
 		const text = renderDashboard(
 			buildDashboard({
-				records: [usage({ workspaceId: "教务处", inputTokens: 100 })],
+				records: [
+					usage({ userId: "u-li", workspaceId: "教务处", inputTokens: 100 }),
+					usage({ userId: "u-wang", workspaceId: "学生处", inputTokens: 200 }),
+				],
 				period: PERIOD,
 				prices: PRICES,
 			}),
 		);
+		expect(text).toContain("按用户");
 		expect(text).toContain("按工作区");
-		expect(text).not.toContain("按用户");
 	});
 });

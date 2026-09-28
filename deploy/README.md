@@ -161,7 +161,7 @@ docker compose exec tao-agent node scripts/doctor.mjs
 curl http://localhost:8080/healthz
 # 期望：{"status":"ok"}
 
-# 提交一个任务（TOKEN 可以是任意非空字符串，见下方说明）
+# 提交一个任务（token 在工作区 accounts.json 里配置，见下方「账号与权限」）
 curl -X POST http://localhost:8080/api/tasks \
   -H "Authorization: Bearer 你的token" \
   -H "Content-Type: application/json" \
@@ -194,25 +194,53 @@ docker compose exec tao-agent ls /data/workspace/default/default/
 
 ## 6 · 管理接口（用量与审计）
 
-需要**管理员 token** —— 当前版本约定 token 以 `admin:` 开头即为租户管理员。
+需要**管理员账号的 token** —— 是否管理员由账号文件里该账号的 `role` 决定，
+不再有 `admin:` 前缀约定。把下面示例里的 `$ADMIN_TOKEN` 换成 accounts.json 中
+`role` 为 `TENANT_ADMIN` 的账号 token。
 
 ```bash
 # 用量看板（默认当月）
 curl http://localhost:8080/api/admin/usage \
-  -H "Authorization: Bearer admin:你的token"
+  -H "Authorization: Bearer $ADMIN_TOKEN"
 
 # 指定周期
 curl "http://localhost:8080/api/admin/usage?from=2026-08-01&to=2026-09-01" \
-  -H "Authorization: Bearer admin:你的token"
+  -H "Authorization: Bearer $ADMIN_TOKEN"
 
 # 审计日志（工具调用的放行/拒绝记录）
 curl http://localhost:8080/api/admin/audit \
-  -H "Authorization: Bearer admin:你的token"
+  -H "Authorization: Bearer $ADMIN_TOKEN"
 
 # 全部任务
 curl http://localhost:8080/api/admin/tasks \
-  -H "Authorization: Bearer admin:你的token"
+  -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
+
+### 账号与权限
+
+账号在工作区根目录的 **`accounts.json`**。服务首次启动时会自动生成一份种子，
+含一个管理员和一个普通成员，token 都是 `change-me-...` 占位值 —— **上线前必须改**，
+启动日志也会持续警告。
+
+```json
+{
+  "accounts": [
+    {
+      "name": "教务管理员",
+      "token": "换成足够长的随机字符串",
+      "tenantId": "default",
+      "workspaceId": "default",
+      "userId": "admin",
+      "role": "TENANT_ADMIN"
+    }
+  ]
+}
+```
+
+- `role` 取 `TENANT_ADMIN`（可看用量/审计）、`WORKSPACE_ADMIN` 或 `MEMBER`；
+- token 至少 16 个字符、全局唯一，客户端用 `Authorization: Bearer <token>` 传；
+- 改完重启服务生效。文件格式不对或缺字段时服务会拒绝启动并列出具体问题；
+- 私有化默认单租户（`tenantId: "default"`），但用户、工作区、角色模型完整保留。
 
 用量看板返回的内容：
 

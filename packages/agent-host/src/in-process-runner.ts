@@ -31,6 +31,7 @@ import type {
 	RunnerSpec,
 	TaskEvent,
 	ToolDecision,
+	UsageRecord,
 } from "@tao/core";
 import {
 	EventSequencer,
@@ -61,17 +62,7 @@ export interface HostRuntime {
 	 * 仍然不让它中断执行：模型调用已经发生、token 已经烧掉，
 	 * 此时中断任务既救不回钱也白费已完成的工作。
 	 */
-	meter?: (record: {
-		readonly tenantId: string;
-		readonly workspaceId: string;
-		readonly taskId: string;
-		readonly model: string;
-		readonly inputTokens: number;
-		readonly outputTokens: number;
-		readonly cacheReadTokens: number;
-		readonly cacheWriteTokens: number;
-		readonly at: number;
-	}) => void | Promise<void>;
+	meter?: (record: UsageRecord) => void | Promise<void>;
 	/** 落账失败的告警回调。默认不处理 —— 但**不静默**：调用方应当接上。 */
 	onMeterError?: (error: Error, taskId: string) => void;
 }
@@ -422,6 +413,7 @@ export class InProcessRunnerFactory implements RunnerFactory {
 						await meter({
 							tenantId: spec.tenant.tenantId,
 							workspaceId: spec.tenant.workspaceId,
+							userId: spec.tenant.userId,
 							taskId: spec.taskId,
 							// 同上：模型名来自配置，不是内核事件
 							model: modelName,

@@ -19,7 +19,6 @@ import {
 	resolveCard,
 	restrictPolicies,
 	withQuotaGate,
-	Role,
 	type ModelPrice,
 	type Quota,
 	type ScenarioCard,
@@ -36,6 +35,7 @@ import {
 } from "@tao/agent-host";
 import { TaskOrchestrator } from "@tao/orchestrator";
 import { createApp, type Principal } from "./app.ts";
+import { authenticateToken, hasDefaultTokens, loadAccounts, type AccountDirectory } from "./accounts.ts";
 import { describeConfig, loadConfig, renderConfigErrors } from "./config.ts";
 import { SseHub } from "./sse.ts";
 
@@ -56,6 +56,25 @@ process.stdout.write(describeConfig(config));
 
 // 工作区必须先存在。容器里首次启动时目录可能还没建
 mkdirSync(config.workspaceDir, { recursive: true });
+
+/**
+ * 账号目录（M5-2）。
+ *
+ * 工作区下的 accounts.json：首启落一份种子（含占位 token，会警告尽快改）。
+ * 加载失败直接退出 —— 坏账号表要么全员 401 要么权限错乱，必须在启动时拦住。
+ */
+let accounts: AccountDirectory;
+try {
+	accounts = loadAccounts(config.workspaceDir);
+} catch (error) {
+	process.stderr.write(`账号配置有误，服务不启动：\n${error instanceof Error ? error.message : String(error)}\n`);
+	process.exit(1);
+}
+if (hasDefaultTokens(accounts)) {
+	process.stderr.write(
+		"[安全警告] accounts.json 仍含 change-me 占位 token，仅用于首次启动，请立即替换为强随机值。\n",
+	);
+}
 
 /**
  * 计量落盘。
@@ -209,10 +228,11 @@ function toolsFor(tenant: TenantContext) {
 }
 
 /**
- * 鉴权。
+ * 鉴权（M5-2）。
  *
- * 一期用 Bearer token 映射到租户，token 从环境变量读。
- * 这是私有化单租户部署的够用形态；SaaS 形态换成真实会话服务。
+ * Bearer token 在账号目录里**精确查表**得到租户 / 工作区 / 用户 / 角色，
+ * 不再有「任意非空 token 进默认租户」「admin: 前缀判管理员」。
+ * 查不到即匿名（路由层回 401）。
  *
  * **刻意不支持从请求体或查询参数传租户** —— 那等于没有隔离。
  */
@@ -220,24 +240,9 @@ async function authenticate(req: IncomingMessage): Promise<Principal | undefined
 	const header = req.headers.authorization;
 	const token = typeof header === "string" ? header.replace(/^Bearer\s+/i, "").trim() : "";
 	if (token === "") return undefined;
-
-	/**
-	 * 一期：单租户私有化部署，任何非空 token 都映射到默认租户。
-	 *
-	 * 这不是「鉴权没做」而是「单租户部署下鉴权的退化形态」——
-	 * 但它必须在 M4.md 的能力边界里写明，否则会被当成已完成的多租户鉴权。
-	 */
-	/**
-	 * 一期：单机私有化部署下，token 以 `admin:` 开头即为租户管理员。
-	 *
-	 * 这是刻意做成「显式声明」而非「默认管理员」：默认给管理员权限
-	 * 会让用量与审计对全部使用者可见。真实账号体系见 M5。
-	 */
-	const isAdmin = token.startsWith("admin:");
-	return {
-		tenant: { tenantId: "default", workspaceId: "default", userId: token.slice(0, 16) },
-		role: isAdmin ? Role.TenantAdmin : Role.Member,
-	};
+	const hit = authenticateToken(accounts, token);
+	if (hit === undefined) return undefined;
+	return { tenant: hit.tenant, role: hit.role };
 }
 
 const app = createApp({
