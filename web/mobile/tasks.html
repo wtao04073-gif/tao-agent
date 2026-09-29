@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>我的任务（移动端）· 办公 Agent 平台</title>
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/web.css">
+</head>
+<body class="mobile">
+<div class="m-app">
+  <header class="m-topbar">
+    <span style="width:32px"></span>
+    <h1>我的任务</h1>
+    <button class="m-back" data-theme-toggle type="button">☾</button>
+  </header>
+
+  <div class="m-body">
+    <div id="notice"></div>
+    <div class="m-filters" role="group" aria-label="按状态筛选" id="filters">
+      <button type="button" data-st="all" aria-pressed="true">全部</button>
+      <button type="button" data-st="RUNNING" aria-pressed="false">执行中</button>
+      <button type="button" data-st="AWAIT_CONFIRM" aria-pressed="false">待确认</button>
+      <button type="button" data-st="SUCCEEDED" aria-pressed="false">完成</button>
+      <button type="button" data-st="FAILED" aria-pressed="false">失败</button>
+    </div>
+    <div id="list" style="display:grid;gap:var(--sp-3)"></div>
+
+    <div class="m-desktop-hint">
+      移动端可查看进度、追问与取回产物。<br>
+      <strong>发起复杂任务请用桌面端</strong>——场景引导式填表涉及多份材料上传，小屏体验不佳。
+    </div>
+  </div>
+</div>
+
+<script src="/assets/core.js"></script>
+<script>
+(function () {
+	var tasks = [];
+	var st = "all";
+	var sub = null;
+
+	App.bootstrap("tasks").then(load);
+
+	async function load() {
+		var r = await App.api("GET", "/api/tasks");
+		if (!r.ok) return;
+		tasks = r.data.tasks || [];
+		render();
+		if (!sub) sub = App.subscribe(null, { onEvent: function () { clearTimeout(t); var t = setTimeout(load, 400); } });
+	}
+
+	function render() {
+		var list = tasks
+			.filter(function (t) { return st === "all" || t.status === st; })
+			.sort(function (a, b) { return b.updatedAt - a.updatedAt; });
+		var host = document.getElementById("list");
+		if (!list.length) {
+			host.innerHTML = '<div class="empty" style="padding:var(--sp-8) var(--sp-4)">' +
+				'<div class="empty__icon">📭</div><h3>' + (st === "all" ? "还没有任务" : "没有此状态的任务") + "</h3>" +
+				"<p>任务从桌面端场景工作台发起；发起后可在手机上查看进度、追问与取回产物。</p></div>";
+			return;
+		}
+		host.innerHTML = list.map(function (t) {
+			var arts = t.artifacts || [];
+			return '<a class="m-task" href="/mobile/session.html?task=' + encodeURIComponent(t.taskId) + '">' +
+				'<div class="m-task__top">' + App.statusTag(t.status) +
+				'<span style="flex:1"></span><span class="m-task__meta">' + App.ago(t.updatedAt) + "</span></div>" +
+				'<div class="m-task__title">' + App.esc(title(t)) + "</div>" +
+				(t.status === "FAILED" && t.reason
+					? '<div class="banner banner--err" style="margin-top:var(--sp-2);font-size:var(--fs-12)"><span aria-hidden="true">⚠</span><span>' + App.esc(t.reason) + "</span></div>" : "") +
+				(arts.length ? '<div style="margin-top:var(--sp-3);display:grid;gap:6px">' + arts.slice(0, 3).map(function (p) {
+					var n = String(p).split(/[\\/]/).pop();
+					return '<div style="display:flex;align-items:center;gap:var(--sp-2)">' + App.fileIcon(n, true) +
+						'<span style="font-size:var(--fs-12);color:var(--fg-strong);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+						App.esc(n) + '</span><span class="tag tag--ok">可取回</span></div>';
+				}).join("") + "</div>" : "") + "</a>";
+		}).join("");
+
+		var done = tasks.filter(function (t) { return t.status === "SUCCEEDED"; })
+			.sort(function (a, b) { return b.updatedAt - a.updatedAt; })[0];
+		document.getElementById("notice").innerHTML = done ?
+			'<div class="banner banner--ok"><span aria-hidden="true">🔔</span>' +
+			'<div class="spacer"><strong>任务已完成</strong><br>' + App.esc(title(done)) + " · " +
+			(done.artifacts || []).length + ' 份产物可取回</div>' +
+			'<a class="btn btn--sm" href="/mobile/session.html?task=' + encodeURIComponent(done.taskId) + '">查看</a></div>' : "";
+	}
+
+	function title(t) { return t.scenarioTitle || (t.status === "FAILED" && t.reason ? t.reason.slice(0, 30) : "任务 " + t.taskId); }
+
+	App.$$("#filters button").forEach(function (b) {
+		b.addEventListener("click", function () {
+			App.$$("#filters button").forEach(function (x) { x.setAttribute("aria-pressed", "false"); });
+			b.setAttribute("aria-pressed", "true");
+			st = b.getAttribute("data-st"); render();
+		});
+	});
+	setInterval(load, 8000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,164 @@
+/* =============================================================================
+ * Web 前端补丁样式
+ *
+ * style.css 提供了设计变量与绝大多数组件（卡片/按钮/标签/进度条/侧栏/移动端）。
+ * 本文件只补 style.css 里没有、而接真实 API 的页面需要的少量类：
+ * Toast 容器、模态遮罩、登录页、事件时间线、对话气泡、文件图标、场景卡网格。
+ * 全部沿用 style.css 的设计变量，浅/深色主题自动跟随。
+ * ========================================================================== */
+
+/* ── Toast ─────────────────────────────────────────────── */
+.toast-host {
+	position: fixed; right: var(--sp-4); bottom: var(--sp-4); z-index: 1000;
+	display: flex; flex-direction: column; gap: var(--sp-2); max-width: 360px;
+}
+.toast {
+	background: var(--bg-raised); border: 1px solid var(--line);
+	border-left: 3px solid var(--info-fg); border-radius: var(--r-md);
+	padding: var(--sp-3) var(--sp-4); box-shadow: var(--shadow-2);
+	animation: toast-in .18s ease-out;
+}
+.toast--ok  { border-left-color: var(--ok-fg); }
+.toast--err { border-left-color: var(--err-fg); }
+.toast--warn { border-left-color: var(--warn-fg); }
+.toast__t { font-size: var(--fs-13); font-weight: 600; color: var(--fg-strong); }
+.toast__b { font-size: var(--fs-12); color: var(--fg-muted); margin-top: 2px; }
+.toast--out { opacity: 0; transform: translateY(6px); transition: all .25s; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; } }
+
+/* ── 模态 ─────────────────────────────────────────────── */
+.modal-mask {
+	position: fixed; inset: 0; z-index: 900;
+	background: rgba(15, 20, 30, .45);
+	display: flex; align-items: center; justify-content: center; padding: var(--sp-4);
+}
+.modal-mask[hidden] { display: none; }
+.modal-card {
+	background: var(--bg-raised); border: 1px solid var(--line);
+	border-radius: var(--r-lg); width: 100%; max-width: 560px;
+	max-height: 88vh; overflow: auto; box-shadow: var(--shadow-3, 0 12px 40px rgba(0,0,0,.25));
+}
+.modal-card--wide { max-width: 820px; }
+.modal-card__head {
+	display: flex; align-items: center; gap: var(--sp-3);
+	padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--line);
+}
+.modal-card__head h2 { font-size: var(--fs-16); flex: 1; }
+.modal-card__body { padding: var(--sp-5); }
+.modal-card__foot {
+	display: flex; justify-content: flex-end; gap: var(--sp-2);
+	padding: var(--sp-4) var(--sp-5); border-top: 1px solid var(--line);
+}
+
+/* ── 登录页 ───────────────────────────────────────────── */
+.auth-wrap {
+	min-height: 100vh; display: flex; align-items: center; justify-content: center;
+	background: var(--bg-app); padding: var(--sp-4);
+}
+.auth-card {
+	width: 100%; max-width: 380px; background: var(--bg-surface);
+	border: 1px solid var(--line); border-radius: var(--r-xl);
+	padding: var(--sp-6) var(--sp-6) var(--sp-5); box-shadow: var(--shadow-2);
+}
+.auth-logo {
+	width: 44px; height: 44px; border-radius: var(--r-lg); margin-bottom: var(--sp-4);
+	background: var(--brand-600); color: #fff; display: flex; align-items: center;
+	justify-content: center; font-size: 22px; font-weight: 700;
+}
+.auth-card h1 { font-size: var(--fs-18); margin-bottom: var(--sp-1); }
+.auth-card .sub { color: var(--fg-muted); font-size: var(--fs-13); margin-bottom: var(--sp-5); }
+.auth-card .field input { width: 100%; }
+.auth-hint {
+	margin-top: var(--sp-4); font-size: var(--fs-12); color: var(--fg-faint);
+	line-height: 1.7; background: var(--bg-sunken); border-radius: var(--r-md);
+	padding: var(--sp-3) var(--sp-4);
+}
+
+/* ── 场景卡网格 ───────────────────────────────────────── */
+.scene-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--sp-3); }
+.scene-card {
+	display: block; background: var(--bg-surface); border: 1px solid var(--line);
+	border-radius: var(--r-lg); padding: var(--sp-4); cursor: pointer; text-align: left;
+	color: inherit; transition: border-color .15s, box-shadow .15s;
+}
+.scene-card:hover { border-color: var(--brand-400); box-shadow: var(--shadow-2); }
+.scene-card__icon { font-size: 22px; }
+.scene-card h3 { font-size: var(--fs-14); margin: var(--sp-2) 0 4px; color: var(--fg-strong); }
+.scene-card p { font-size: var(--fs-12); color: var(--fg-muted); line-height: 1.6; }
+.scene-card__meta { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-3); }
+
+/* ── 文件图标与产物行 ─────────────────────────────────── */
+.file-ic { font-size: 16px; flex: none; }
+.artifact-row {
+	display: flex; align-items: center; gap: var(--sp-2);
+	padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line);
+	border-radius: var(--r-md); background: var(--bg-surface);
+}
+.artifact-row__name {
+	flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+	font-size: var(--fs-13); color: var(--fg-strong);
+}
+.artifact-row__size { font-size: var(--fs-12); color: var(--fg-faint); flex: none; }
+
+/* ── 会话：事件时间线 ─────────────────────────────────── */
+.timeline { display: flex; flex-direction: column; gap: var(--sp-2); }
+.tl-item {
+	display: flex; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3);
+	border-radius: var(--r-md); background: var(--bg-surface); border: 1px solid var(--line);
+}
+.tl-item--ok { border-left: 3px solid var(--ok-fg); }
+.tl-item--run { border-left: 3px solid var(--run-fg); }
+.tl-item--err { border-left: 3px solid var(--err-fg); }
+.tl-item--warn { border-left: 3px solid var(--warn-fg); }
+.tl-item__icon { flex: none; font-size: 15px; line-height: 1.5; }
+.tl-item__main { flex: 1; min-width: 0; }
+.tl-item__action { font-size: var(--fs-13); color: var(--fg-strong); }
+.tl-item__detail { font-size: var(--fs-12); color: var(--fg-muted); margin-top: 2px; }
+.tl-item__time { font-size: var(--fs-11); color: var(--fg-faint); flex: none; }
+
+/* 用户插话气泡 */
+.chat-bubble {
+	background: var(--brand-50); border: 1px solid var(--brand-200);
+	color: var(--fg); border-radius: var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg);
+	padding: var(--sp-2) var(--sp-3); font-size: var(--fs-13); max-width: 80%;
+}
+:root[data-theme="dark"] .chat-bubble { background: var(--info-bg); border-color: var(--info-line); }
+
+/* 确认动作卡 */
+.confirm-card {
+	border: 1px solid var(--warn-line); background: var(--warn-bg);
+	border-radius: var(--r-lg); padding: var(--sp-4);
+}
+.confirm-card__t { color: var(--warn-fg); font-weight: 600; font-size: var(--fs-14); margin-bottom: 4px; }
+.confirm-card__r { font-size: var(--fs-13); color: var(--fg); margin-bottom: var(--sp-3); }
+
+/* 会话头部状态摘要 */
+.session-summary { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; font-size: var(--fs-12); color: var(--fg-muted); }
+.kv { display: inline-flex; gap: 4px; }
+.kv b { color: var(--fg-strong); font-weight: 600; }
+
+/* 表格（管理后台） */
+.tbl { width: 100%; border-collapse: collapse; font-size: var(--fs-13); }
+.tbl th, .tbl td { text-align: left; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line); }
+.tbl th { color: var(--fg-muted); font-weight: 600; font-size: var(--fs-12); }
+.tbl.num td:not(:first-child), .tbl.num th:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* 指标卡 */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-3); }
+.stat { background: var(--bg-surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: var(--sp-4); }
+.stat__v { font-size: var(--fs-22, 22px); font-weight: 700; color: var(--fg-strong); }
+.stat__l { font-size: var(--fs-12); color: var(--fg-muted); margin-top: 2px; }
+
+/* 通用小工具 */
+.muted { color: var(--fg-muted); }
+.faint { color: var(--fg-faint); }
+.mono { font-family: var(--font-mono); font-size: var(--fs-12); }
+.row-gap { display: flex; flex-direction: column; gap: var(--sp-3); }
+.inline-gap { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.spin { display: inline-block; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 移动端会话复用 */
+.m-chat { display: flex; flex-direction: column; gap: var(--sp-3); }
+.m-composer { display: flex; gap: var(--sp-2); align-items: flex-end; }
+.m-composer textarea { flex: 1; }

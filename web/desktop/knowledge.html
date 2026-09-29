@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知识资产 · 办公 Agent 平台</title>
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/web.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主内容</a>
+<div class="app">
+  <div data-sidenav="knowledge"></div>
+  <div class="main">
+    <header class="topbar">
+      <h1>知识资产</h1>
+      <span class="topbar__sub">任务可引用的工作区资料文件</span>
+      <span class="topbar__spacer"></span>
+      <button class="iconbtn" data-theme-toggle type="button">☾</button>
+    </header>
+
+    <main class="page" id="main">
+      <section class="section">
+        <div class="section__head"><h2>资料库</h2>
+          <span class="section__desc">上传 Excel / Word / PDF，发起任务时在场景表单中直接引用</span></div>
+        <div class="card"><div class="card__body">
+          <input type="file" id="upInput" multiple
+                 accept=".xlsx,.xls,.csv,.docx,.doc,.pdf,.txt">
+          <p class="hint" style="margin:var(--sp-2) 0 0">文件保存在你所在工作区的隔离目录内，其他租户/工作区不可见。同名文件不会互相覆盖。</p>
+        </div></div>
+      </section>
+
+      <section class="section">
+        <div class="card"><div class="card__body" style="padding:var(--sp-2)">
+          <div id="fileList" class="row-gap" style="gap:var(--sp-2)"></div>
+          <div class="empty" id="empty" hidden>
+            <div class="empty__icon">📂</div><h3>资料库还是空的</h3>
+            <p>先上传几份常用材料（台账、对账单、模板、制度文件），后续场景任务即可直接选用。</p>
+          </div>
+        </div></div>
+      </section>
+
+      <section class="section">
+        <div class="banner banner--info">
+          <span aria-hidden="true">ℹ️</span>
+          <div><strong>关于语义检索与口径资产</strong>
+          <div style="margin-top:2px;font-size:var(--fs-12)">
+            向量语义检索、模板与口径库、修改意见回写的内核能力已就绪，其独立的落盘库与
+            Web 管理界面在后续版本开放。当前版本先提供工作区文件级资料库：上传的文件
+            可被各办公工具直接读取处理，满足「带材料发起任务」的主链路。
+          </div></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script src="/assets/core.js"></script>
+<script>
+(function () {
+	App.bootstrap("knowledge").then(load);
+
+	async function load() {
+		var r = await App.api("GET", "/api/files");
+		if (!r.ok) { App.Toast.show("加载资料库失败", r.data.error, "err"); return; }
+		var files = r.data.files || [];
+		document.getElementById("empty").hidden = files.length > 0;
+		document.getElementById("fileList").innerHTML = files.map(function (f) {
+			// 点击时才换一次性票据下载，href 不暴露长期令牌
+			return '<div class="artifact-row">' + App.fileIcon(f.name) +
+				'<span class="artifact-row__name">' + App.esc(f.name) + "</span>" +
+				'<span class="artifact-row__size">' + App.fmtBytes(f.sizeBytes) + " · " + App.ago(f.modifiedAt) + "</span>" +
+				'<a class="btn btn--sm" href="#" data-ticket-download="file" data-name="' +
+				App.esc(f.name) + '">下载</a></div>';
+		}).join("");
+	}
+
+	document.getElementById("upInput").addEventListener("change", async function () {
+		var files = Array.prototype.slice.call(this.files || []);
+		this.value = "";
+		for (const file of files) {
+			var r = await App.upload("/api/files", file, "file");
+			if (r.ok) App.Toast.show("已上传", r.data.name, "ok");
+			else App.Toast.show("上传失败：" + file.name, r.data.error, "err");
+		}
+		load();
+	});
+})();
+</script>
+</body>
+</html>
