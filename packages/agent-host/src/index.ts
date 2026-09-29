@@ -11,6 +11,8 @@ export {
 	createModelRuntime,
 	type ModelEndpoint,
 	type ModelRuntime,
+	type ModelRuntimeOptions,
+	type ModelTier,
 } from "./model-runtime.ts";
 export {
 	EventSequencer,

@@ -191,3 +191,71 @@ describe("配置摘要里的单价", () => {
 		expect(text).toContain("已配置");
 	});
 });
+
+describe("M5-5 轻量档模型配置", () => {
+	it("三项全配时正确解析轻量档", () => {
+		const { config, errors } = load({
+			MODEL_LITE_BASE_URL: "https://lite.example/v1",
+			MODEL_LITE_API_KEY: "kl",
+			MODEL_LITE_NAME: "lite-model",
+		});
+		expect(errors).toHaveLength(0);
+		expect(config.modelLiteName).toBe("lite-model");
+		expect(config.modelLiteBaseUrl).toBe("https://lite.example/v1");
+	});
+
+	it("三项全空时轻量档回落旗舰（字段为 undefined，不报错）", () => {
+		const { config, errors } = load();
+		expect(errors).toHaveLength(0);
+		expect(config.modelLiteName).toBeUndefined();
+	});
+
+	it("只配一部分被一次性拦成启动错误", () => {
+		const { errors } = load({ MODEL_LITE_NAME: "lite-model" });
+		expect(errorFor(errors, "MODEL_LITE_BASE_URL")).toBeDefined();
+		expect(errorFor(errors, "MODEL_LITE_API_KEY")).toBeDefined();
+	});
+
+	it("轻量档 URL 非法报错", () => {
+		const { errors } = load({
+			MODEL_LITE_BASE_URL: "not-a-url",
+			MODEL_LITE_API_KEY: "k",
+			MODEL_LITE_NAME: "m",
+		});
+		expect(errorFor(errors, "MODEL_LITE_BASE_URL")).toBeDefined();
+	});
+
+	it("启用轻量档 + 金额配额但缺轻量单价 → 报错（堵金额熔断后门）", () => {
+		const { errors } = load({
+			MODEL_INPUT_PRICE: "2", MODEL_OUTPUT_PRICE: "8",
+			QUOTA_MAX_COST_YUAN: "10",
+			MODEL_LITE_BASE_URL: "https://l/v1", MODEL_LITE_API_KEY: "k", MODEL_LITE_NAME: "lite",
+		});
+		expect(errorFor(errors, "MODEL_LITE_INPUT_PRICE")).toBeDefined();
+		expect(errorFor(errors, "MODEL_LITE_OUTPUT_PRICE")).toBeDefined();
+	});
+
+	it("轻量档与旗舰档同名 → 启动报错（价格表按键查价会互相覆盖）", () => {
+		const { errors } = load({
+			MODEL_NAME: "same-model",
+			MODEL_LITE_BASE_URL: "https://l/v1",
+			MODEL_LITE_API_KEY: "k",
+			MODEL_LITE_NAME: "same-model",
+		});
+		const err = errorFor(errors, "MODEL_LITE_NAME");
+		expect(err).toBeDefined();
+		expect(err?.reason).toContain("相同");
+		expect(err?.advice).toContain("不同");
+	});
+
+	it("两档模型名不同 → 不因同名报错", () => {
+		const { errors } = load({
+			MODEL_NAME: "flag-model",
+			MODEL_LITE_BASE_URL: "https://l/v1",
+			MODEL_LITE_API_KEY: "k",
+			MODEL_LITE_NAME: "lite-model",
+		});
+		expect(errorFor(errors, "MODEL_LITE_NAME")).toBeUndefined();
+	});
+});
+

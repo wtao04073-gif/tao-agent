@@ -15,6 +15,8 @@
  *     所以此处不吞异常、不做「出错就放行」的兜底。
  */
 
+import { statSync } from "node:fs";
+import { basename } from "node:path";
 import {
 	AgentHarness,
 	type AgentHarnessTool,
@@ -40,6 +42,7 @@ import {
 	translate,
 	type TranslatorContext,
 } from "./event-translator.ts";
+import { TenantTaskGate, type ReleaseReservation } from "./tenant-gate.ts";
 
 /** 宿主运行所需的外部依赖。全部注入 —— 便于测试与私有化部署替换。 */
 export interface HostRuntime {
@@ -47,8 +50,39 @@ export interface HostRuntime {
 	createSession(sessionId: string): Promise<Session>;
 	/** 模型清单与 provider。 */
 	models: ReturnType<typeof createModels>;
-	/** 本次会话使用的模型。 */
-	model: Model<Api>;
+	/**
+	 * 默认（旗舰）模型。与 {@link HostRuntime.modelForTier} 二选一：
+	 * 单模型装配继续给 model；多档位装配给 modelForTier。
+	 */
+	model?: Model<Api>;
+	/**
+	 * 按档位取模型（M5-5）。多档位时由它决定每次 run 用哪个模型；
+	 * 省略则所有 run 都用 {@link HostRuntime.model}。
+	 */
+	modelForTier?: (tier: "flagship" | "lite") => Model<Api>;
+	/**
+	 * 出网前配额预检（M5-5）。在 Runner.prompt() 发起**第一次模型调用之前**
+	 * 执行，知道租户与档位。返回 ok:false 时 prompt 直接抛错（编排器把任务转
+	 * FAILED），**零字节出网、零模型消耗**。返回 undefined 或 ok:true 放行。
+	 */
+	preflightModel?: (input: {
+		tenant: RunnerSpec["tenant"];
+		taskId: string;
+		tier: "flagship" | "lite";
+		/**
+		 * 进入预检临界区时该租户**已预留但尚未结束**的在途任务数，含本次任务
+		 * （等于 inflightTaskIds.length）。仅保留作计数便利；maxTasks 判定须以
+		 * inflightTaskIds 与已落账 taskId 集合的**并集去重**为准，不能把它直接
+		 * 加到 totals.taskCount 上 —— 已落首轮用量的在途任务会被重复计数。
+		 */
+		inflightCount: number;
+		/**
+		 * 临界区时刻「此前在途任务 ∪ 本次任务」的 taskId 集合（含本次 taskId）。
+		 * maxTasks 须比较「本周期已落账 usage 的 taskId 集合 ∪ 本集合」的大小，
+		 * 使已落账但尚未结束的任务在两个集合里只算一次。
+		 */
+		inflightTaskIds: readonly string[];
+	}) => Promise<import("@tao/core").QuotaVerdict | undefined>;
 	/** 取当前时间。注入以便测试可控。 */
 	now?: () => number;
 	/**
@@ -67,10 +101,45 @@ export interface HostRuntime {
 	onMeterError?: (error: Error, taskId: string) => void;
 }
 
+/** 按产物扩展名推断 MIME；未知类型回退为通用二进制（不影响下载，仅用于展示）。 */
+function mimeFor(fileName: string): string {
+	const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+	const table: Record<string, string> = {
+		xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		xls: "application/vnd.ms-excel",
+		csv: "text/csv",
+		docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		doc: "application/msword",
+		pdf: "application/pdf",
+		pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		txt: "text/plain",
+		json: "application/json",
+	};
+	return table[ext] ?? "application/octet-stream";
+}
+
+/**
+ * 从工具结果里取出产物文件的绝对路径。
+ *
+ * 约定：办公类工具把产物路径放在 `details.outputPath`（office/doc 两套 toolset
+ * 都这么返回）。不是所有工具都产文件（read_table/search_knowledge 等），
+ * 取不到就返回 undefined —— 这些工具不产 artifact 事件。
+ */
+function extractOutputPath(details: unknown): string | undefined {
+	if (typeof details !== "object" || details === null) return undefined;
+	const p = (details as { outputPath?: unknown }).outputPath;
+	return typeof p === "string" && p !== "" ? p : undefined;
+}
+
 /** 把平台工具适配成内核工具。参数 schema 与执行签名在此转换。 */
 function toKernelTool(
 	tool: PlatformTool,
-	ctx: { taskId: string; tenant: RunnerSpec["tenant"]; emitDetail: (detail: string) => void },
+	ctx: {
+		taskId: string;
+		tenant: RunnerSpec["tenant"];
+		emitDetail: (detail: string) => void;
+		emitArtifact: (path: string) => Promise<void>;
+	},
 ): AgentHarnessTool<undefined> {
 	return {
 		name: tool.name,
@@ -88,6 +157,12 @@ function toKernelTool(
 				// 内核通过 context 传递中止信号；没有则给一个永不中止的
 				signal: context.abortSignal ?? new AbortController().signal,
 			});
+			// 成功产出文件时发 artifact 事件（失败结果不发，避免把坏文件当可交付物）。
+			// 这是「取产物」全链路的数据源：编排器据此累积任务产物、前端据此给下载入口。
+			if (outcome.isError !== true) {
+				const outputPath = extractOutputPath(outcome.details);
+				if (outputPath !== undefined) await ctx.emitArtifact(outputPath);
+			}
 			return {
 				content: [{ type: "text", text: outcome.text }],
 				details: outcome.details,
@@ -118,6 +193,11 @@ class InProcessRunner implements Runner {
 	private readonly session: Session;
 	private readonly lane: AgentLane;
 	private readonly spec: RunnerSpec;
+	/**
+	 * 进入「出网前配额预检临界区」并预留任务席位（工厂按本 runner 的租户/档位
+	 * 绑定）；undefined 表示该部署无配额、不预检。返回值是席位释放函数。
+	 */
+	private enterPreflight: (() => Promise<ReleaseReservation | undefined>) | undefined;
 
 	constructor(
 		sessionId: string,
@@ -126,7 +206,9 @@ class InProcessRunner implements Runner {
 		spec: RunnerSpec,
 		now: () => number,
 		model: string,
+		enterPreflight?: () => Promise<ReleaseReservation | undefined>,
 	) {
+		this.enterPreflight = enterPreflight;
 		this.sessionId = sessionId;
 		this.session = session;
 		this.lane = lane;
@@ -186,13 +268,60 @@ class InProcessRunner implements Runner {
 		this.runFailure = reason;
 	}
 
+	/**
+	 * 工具产出文件后发 artifact 事件。
+	 *
+	 * 大小取自文件系统；取不到（文件刚被移走等极端情况）按 0 计而不是抛错 ——
+	 * 产物已生成，不该因展示字段拿不到而打断任务。`final` 恒为 true：平台的
+	 * 办公工具一次性落最终文件，没有「流式草稿→定稿」两段式产物。
+	 */
+	async emitArtifact(absPath: string): Promise<void> {
+		const name = basename(absPath);
+		let sizeBytes = 0;
+		try {
+			sizeBytes = statSync(absPath).size;
+		} catch {
+			sizeBytes = 0;
+		}
+		await this.emit((base) => ({
+			...base,
+			type: "artifact",
+			// artifactId 用相对/绝对路径：下载接口按任务工作区解析它，取 basename 展示
+			artifactId: absPath,
+			name,
+			mimeType: mimeFor(name),
+			sizeBytes,
+			final: true,
+		}));
+	}
+
 	async prompt(text: string): Promise<void> {
 		this.assertOpen();
 		this.runFailure = undefined;
-		await this.lane.prompt(text, [], BACKGROUND_CONTEXT);
-		// 内核不会因生成失败而让 prompt reject，所以这里必须显式检查。
-		// 抛出去让编排层把任务转入 FAILED —— 静默成功比报错难查得多。
-		if (this.runFailure !== undefined) throw new Error(this.runFailure);
+
+		/**
+		 * 出网前配额闸（M5-5）。在第一次模型调用之前 await —— 超配额则直接
+		 * 抛出、不触碰 lane.prompt，因此**零字节出网、零模型消耗**。这道闸
+		 * 与 before_tool 闸共用同一份配额状态，但落点提前到生成之前，从而拦得住
+		 * 「一次工具都不调、只生成长文本」的运行。
+		 *
+		 * 预检在**租户临界区**内执行并预留任务席位（见 TenantTaskGate）：同租户
+		 * 并发 prompt 不会再共享过期用量快照，maxTasks 也不会被并发突破。临界区
+		 * 在预检通过、席位预留后即释放，模型执行在锁外并发；席位在 finally 归还。
+		 */
+		let release: ReleaseReservation | undefined;
+		try {
+			if (this.enterPreflight !== undefined) {
+				release = await this.enterPreflight();
+			}
+
+			await this.lane.prompt(text, [], BACKGROUND_CONTEXT);
+			// 内核不会因生成失败而让 prompt reject，所以这里必须显式检查。
+			// 抛出去让编排层把任务转入 FAILED —— 静默成功比报错难查得多。
+			if (this.runFailure !== undefined) throw new Error(this.runFailure);
+		} finally {
+			release?.();
+		}
 	}
 
 	async steer(text: string): Promise<void> {
@@ -287,6 +416,11 @@ function installGate(
 /** 进程内 Runner 工厂。 */
 export class InProcessRunnerFactory implements RunnerFactory {
 	private readonly runtime: HostRuntime;
+	/**
+	 * 按租户串行化预检临界区并预留任务席位。所有 Runner 共享同一个门：
+	 * 并发是否能突破 maxTasks，取决于门里是否有全部在途任务的计数。
+	 */
+	private readonly tenantGate = new TenantTaskGate();
 
 	constructor(runtime: HostRuntime) {
 		this.runtime = runtime;
@@ -335,14 +469,30 @@ export class InProcessRunnerFactory implements RunnerFactory {
 		};
 
 		const tools = spec.tools.map((tool) =>
-			toKernelTool(tool, { taskId: spec.taskId, tenant: spec.tenant, emitDetail }),
+			toKernelTool(tool, {
+				taskId: spec.taskId,
+				tenant: spec.tenant,
+				emitDetail,
+				emitArtifact: (path) => runnerRef?.emitArtifact(path) ?? Promise.resolve(),
+			}),
 		);
+
+		// 按档位选本次运行的模型。多档位装配用 modelForTier，单模型装配回落到 model。
+		// 整次 run 用同一模型：lane 配置在 run 内不按规划/执行轮动态切换，
+		// 这样计量落账的模型名与实际调用永远一致，不会按错档位单价收费。
+		const tier = spec.tier ?? "flagship";
+		const selectedModel =
+			this.runtime.modelForTier?.(tier) ??
+			this.runtime.model ??
+			(() => {
+				throw new Error("模型运行时未提供任何模型（model / modelForTier 均缺省）");
+			})();
 
 		const { harness } = await AgentHarness.create(
 			{
 				session,
 				models: this.runtime.models,
-				model: this.runtime.model,
+				model: selectedModel,
 				systemPrompt: spec.systemPrompt,
 				tools,
 				// 白名单让工具在模型侧不可见；权限门在执行侧兜底。两层叠加。
@@ -354,8 +504,38 @@ export class InProcessRunnerFactory implements RunnerFactory {
 		);
 
 		const lane = await harness.lane("main", BACKGROUND_CONTEXT);
-		const modelName = this.runtime.model.id;
-		const runner = new InProcessRunner(spec.sessionId, session, lane, spec, now, modelName);
+		// 模型名取自本次实际选中的模型 —— 轻量档的用量必须按轻量档名入账，
+		// 否则 estimateCost 按名查价会系统性错账（且测试不易发现）。
+		const modelName = selectedModel.id;
+		const runner = new InProcessRunner(
+			spec.sessionId,
+			session,
+			lane,
+			spec,
+			now,
+			modelName,
+			this.runtime.preflightModel === undefined
+				? undefined
+				: () =>
+						// 在租户临界区内预检并预留席位；在途 taskId 集合（含本次）
+						// 由门注入，供 main.ts 与已落账 taskId 集合取并集去重判定。
+						this.tenantGate.reserve(
+							spec.tenant.tenantId,
+							spec.taskId,
+							async (inflightTaskIds) => {
+							const verdict = await this.runtime.preflightModel?.({
+								tenant: spec.tenant,
+								taskId: spec.taskId,
+								tier,
+								inflightCount: inflightTaskIds.length,
+								inflightTaskIds,
+							});
+							if (verdict !== undefined && !verdict.ok) {
+								// 临界区内抛出 → 不预留席位，prompt 直接失败
+								throw new Error(verdict.reason);
+							}
+						}),
+		);
 		runnerRef = runner;
 
 		// 接线：内核事件 → 平台事件

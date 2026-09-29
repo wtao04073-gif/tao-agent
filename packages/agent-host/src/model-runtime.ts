@@ -61,27 +61,37 @@ export interface ModelEndpoint {
 	readonly cacheReadCostPerMillion?: number;
 }
 
-export interface ModelRuntime {
-	readonly models: ReturnType<typeof createModels>;
-	readonly model: Model<Api>;
+/** 模型档位（M5-5）。词汇与 @tao/core RunnerSpec.tier 对齐。 */
+export type ModelTier = "flagship" | "lite";
+
+/** 多端点装配入参：旗舰档必填，轻量档可选（缺省回退到旗舰）。 */
+export interface ModelRuntimeOptions {
+	readonly flagship: ModelEndpoint;
+	readonly lite?: ModelEndpoint;
 }
 
-/** 平台内部的 provider id。用固定值，便于日志与排查时辨认。 */
-export const SELF_HOSTED_PROVIDER_ID = "tao-openai-compat";
+export interface ModelRuntime {
+	readonly models: ReturnType<typeof createModels>;
+	/** 默认（旗舰）模型，保留旧字段，兼容既有单模型装配。 */
+	readonly model: Model<Api>;
+	/** 按档位取模型；未配置轻量档时 lite 回落到旗舰。 */
+	readonly modelForTier: (tier: ModelTier) => Model<Api>;
+}
 
-/**
- * 装配模型运行时。
- *
- * 默认窗口取 32K、输出 4K：国产模型的普遍下限。客户用长上下文模型时
- * 可通过配置调高。
- */
-export function createModelRuntime(endpoint: ModelEndpoint): ModelRuntime {
-	const model = {
+/** 平台内部的 provider id。两档若 baseUrl/key 不同，必须各用一个 provider。 */
+export const SELF_HOSTED_PROVIDER_ID = "tao-openai-compat";
+function providerId(tier: ModelTier): string {
+	return tier === "lite" ? `${SELF_HOSTED_PROVIDER_ID}-lite` : `${SELF_HOSTED_PROVIDER_ID}-flagship`;
+}
+
+/** 由一个端点构造内核模型对象。 */
+function buildModelObject(endpoint: ModelEndpoint, tier: ModelTier): Model<Api> {
+	return {
 		id: endpoint.modelName,
 		name: endpoint.modelName,
 		// api 与 provider 是内核查表与选协议的依据，缺了就 model_unavailable
 		api: "openai-completions",
-		provider: SELF_HOSTED_PROVIDER_ID,
+		provider: providerId(tier),
 		baseUrl: endpoint.baseUrl,
 		input: ["text"],
 		contextWindow: endpoint.contextWindow ?? 32_768,
@@ -89,9 +99,7 @@ export function createModelRuntime(endpoint: ModelEndpoint): ModelRuntime {
 		/**
 		 * 单价。**不能省** —— 内核在算 usage 成本时直接读 `cost.tiers`，
 		 * 字段缺失会让第一次生成就抛 `reading 'tiers'`。
-		 *
-		 * 这是第二处「手搓模型对象缺字段」的缺陷，同样只有真实启动 +
-		 * 提交任务才暴露（假 provider 不走这条计费路径）。
+		 * 平台自己的计量另有按名查表的单价表，这里给一份供内核计费。
 		 */
 		cost: {
 			input: endpoint.inputCostPerMillion ?? 2,
@@ -100,11 +108,8 @@ export function createModelRuntime(endpoint: ModelEndpoint): ModelRuntime {
 			cacheWrite: 0,
 		},
 		/**
-		 * 兼容性开关按**最保守**取值。
-		 *
-		 * 多数国产模型与自建 vLLM 不支持 store、developer 角色、strict 模式。
-		 * 开着的后果是 provider 报 400，而错误信息通常是英文的协议细节 ——
-		 * 客户 IT 看不懂，会当成产品 bug 报过来。
+		 * 兼容性开关按**最保守**取值。多数国产模型与自建 vLLM 不支持
+		 * store、developer 角色、strict 模式；开着 provider 会报 400。
 		 */
 		compat: {
 			supportsStore: false,
@@ -113,35 +118,65 @@ export function createModelRuntime(endpoint: ModelEndpoint): ModelRuntime {
 			supportsStrictMode: false,
 		},
 	} as unknown as Model<Api>;
+}
+
+/**
+ * 装配模型运行时（支持旗舰 / 轻量双档）。
+ *
+ * 两档 baseUrl 或 apiKey 不同时必须用两个 provider：provider 的 auth/baseUrl
+ * 是 provider 级、且按 model.provider 解析，单一 provider 无法为两档给不同
+ * 凭证与地址。轻量档省略时，两档位都解析到旗舰端点（仅注册一个 provider）。
+ */
+export function createModelRuntime(options: ModelEndpoint | ModelRuntimeOptions): ModelRuntime {
+	// 兼容旧签名：直接传单端点 = 仅旗舰档
+	const opts: ModelRuntimeOptions =
+		"flagship" in options ? options : { flagship: options as ModelEndpoint };
 
 	const models = createModels();
-	models.setProvider(
-		createProvider({
-			id: SELF_HOSTED_PROVIDER_ID,
-			name: "自建/兼容 OpenAI 协议的模型服务",
-			baseUrl: endpoint.baseUrl,
-			/**
-			 * 凭证直接给定，不走环境变量探测。
-			 *
-			 * vendor 内置 provider 用 `envApiKeyAuth` 从固定的环境变量名读取
-			 * （如 `DEEPSEEK_API_KEY`），但平台的配置项是统一的
-			 * `MODEL_API_KEY` —— 让客户按不同服务商改环境变量名
-			 * 会直接拖垮「2 小时装成」的目标。
-			 */
-			auth: {
-				apiKey: {
-					name: "模型服务 API Key",
-					// 平台自己管配置，不需要交互式登录，所以不实现 login
-					resolve: async () => ({
-						auth: { apiKey: endpoint.apiKey },
-						source: "MODEL_API_KEY",
-					}),
-				},
-			},
-			models: [model],
-			api: openAICompletionsApi(),
-		}) as never,
-	);
+	const tiers: ReadonlyArray<{ tier: ModelTier; endpoint: ModelEndpoint }> = [
+		{ tier: "flagship", endpoint: opts.flagship },
+		{ tier: "lite", endpoint: opts.lite ?? opts.flagship },
+	];
+	const byTier = new Map<ModelTier, Model<Api>>();
 
-	return { models, model };
+	// 出网前配额闸不在这里包 provider：内核把 AssistantMessageEventStream
+	// 仅以类型导出，宿主无法自行构造终止流。闸落在 Runner.prompt() 第一次模型
+	// 调用之前（见 in-process-runner.preflightModel），同样零字节出网，且拿得到
+	// 租户与档位，是更干净的接缝。
+	for (const { tier, endpoint } of tiers) {
+		const model = buildModelObject(endpoint, tier);
+		byTier.set(tier, model);
+		models.setProvider(
+			createProvider({
+				id: providerId(tier),
+				name:
+					tier === "lite"
+						? "轻量档 · 兼容 OpenAI 协议的模型服务"
+						: "旗舰档 · 兼容 OpenAI 协议的模型服务",
+				baseUrl: endpoint.baseUrl,
+				/**
+				 * 凭证直接给定，不走环境变量探测 —— 平台配置项统一为
+				 * 各档自己的 API Key，不让客户按服务商改环境变量名。
+				 */
+				auth: {
+					apiKey: {
+						name: "模型服务 API Key",
+						resolve: async () => ({
+							auth: { apiKey: endpoint.apiKey },
+							source: "MODEL_API_KEY",
+						}),
+					},
+				},
+				models: [model],
+				api: openAICompletionsApi(),
+			}) as never,
+		);
+	}
+
+	const flagship = byTier.get("flagship") as Model<Api>;
+	return {
+		models,
+		model: flagship,
+		modelForTier: (tier) => byTier.get(tier) ?? flagship,
+	};
 }

@@ -27,6 +27,8 @@ export interface TaskRecord {
 	readonly tenant: TenantContext;
 	/** 创建任务时的会话标识。恢复时用于判断能否续跑。 */
 	readonly sessionId: string;
+	/** 发起任务的场景卡 id（M5-3）。自由对话等非场景入口缺省。 */
+	readonly scenarioId?: string;
 	readonly status: TaskStatus;
 	/** 面向用户的失败/取消原因。终态非成功时必须有值。 */
 	readonly reason?: string;
@@ -64,6 +66,14 @@ export interface SubmitOptions {
 	readonly tenant: TenantContext;
 	readonly taskId: string;
 	readonly sessionId: string;
+	/** 场景卡 id。自由对话等非场景入口可省略。 */
+	readonly scenarioId?: string;
+	/**
+	 * 模型档位（M5-5）。显式选路入口：`"flagship"`（默认）或 `"lite"`，
+	 * 透传到 factory.createRunner 的 RunnerSpec.tier，决定本次 run 用哪个模型。
+	 * 这是最小的显式入口；按场景卡自动分档留待后续，不在此做隐式推断。
+	 */
+	readonly tier?: RunnerSpec["tier"];
 	readonly prompt: string;
 	readonly systemPrompt: string;
 	readonly tools: RunnerSpec["tools"];
@@ -99,14 +109,66 @@ export class TaskOrchestrator {
 	 * 不给就是纯内存编排器（测试与开发态）。
 	 */
 	private readonly store: TaskStore | undefined;
+	/**
+	 * 事件 / 产物等**非状态机关键**持久化失败时的告警回调（磁盘满、只读文件系统等）。
+	 *
+	 * 这类失败只告警、不中断任务：内存事件日志与内存态照常推进，SSE / UI 不受影响。
+	 * 没注入时退化为写 stderr，绝不静默 —— Runner 的 publish 会吞掉监听器异常，
+	 * 若不在编排器内显式上报，落盘失败将无任何痕迹。
+	 */
+	private readonly onPersistenceError: ((error: Error, taskId: string) => void) | undefined;
 
 	constructor(
 		factory: RunnerFactory,
-		options: { now?: () => number; store?: TaskStore } = {},
+		options: {
+			now?: () => number;
+			store?: TaskStore;
+			onPersistenceError?: (error: Error, taskId: string) => void;
+		} = {},
 	) {
 		this.factory = factory;
 		this.now = options.now ?? (() => Date.now());
 		this.store = options.store;
+		this.onPersistenceError = options.onPersistenceError;
+	}
+
+	/**
+	 * 上报非状态机关键的持久化失败，保证不静默且不阻断调用方的内存态推进。
+	 *
+	 * 本方法**自身保证不抛**：ingest 的事件落盘 catch 会调用它，Runner 的
+	 * publish 会吞掉监听器抛出的异常 —— 若注入的 onPersistenceError 自己
+	 * 抛错，异常会从 ingest 冒泡出监听器，后续 fanout 与 tool_decision 派生
+	 * 的 AWAIT_CONFIRM 转换全部被跳过，任务会停在错误状态。因此告警回调的
+	 * 异常必须在此隔离：回调抛错时退化为 stderr 记录；stderr 理论上也可能
+	 * 抛（极端 IO 故障），再用最外层兜底吞掉。
+	 */
+	private reportPersistenceError(error: unknown, taskId: string): void {
+		const err = error instanceof Error ? error : new Error(String(error));
+		try {
+			if (this.onPersistenceError !== undefined) {
+				try {
+					this.onPersistenceError(err, taskId);
+				} catch (callbackError) {
+					// 告警实现自身故障：退化为 stderr，不能让它中断业务控制流
+					this.writePersistenceAlert(
+						`[持久化] 任务 ${taskId} 事件/产物落盘失败：${err.message}；且告警回调抛错：${
+							callbackError instanceof Error ? callbackError.message : String(callbackError)
+						}\n`,
+					);
+				}
+			} else {
+				this.writePersistenceAlert(
+					`[持久化] 任务 ${taskId} 事件/产物落盘失败：${err.message}\n`,
+				);
+			}
+		} catch {
+			// 兜底：连 stderr 都写失败时也不能让告警路径抛出
+		}
+	}
+
+	/** stderr 告警单独成方法，集中表达「此处任何异常都由调用方兜底」。 */
+	private writePersistenceAlert(message: string): void {
+		process.stderr.write(message);
 	}
 
 	/** 订阅全部任务的事件。返回取消订阅函数。 */
@@ -136,14 +198,28 @@ export class TaskOrchestrator {
 		for (const stored of all) {
 			const events = this.store.events(stored.taskId);
 			this.eventLog.set(stored.taskId, [...events]);
-			const maxSeq = events.reduce((m, e) => Math.max(m, e.seq), 0);
+			const eventMaxSeq = events.reduce((m, e) => Math.max(m, e.seq), 0);
+			// 游标必须取事件流与变更流的最大 seq，不能只看事件流：appendEvent
+			// 是 best-effort（磁盘满等只告警不阻断），可能存在「同 seq 的状态
+			// 变更已落盘、事件也已实时 fanout 给客户端，但事件流落盘失败」的
+			// 缺口，此时事件流最大 seq 小于真实已分配过的 seq。只按事件流恢复
+			// 游标，就会为 RUNNING→INTERRUPTED 再次分配已使用的序号，携带该
+			// Last-Event-ID 重连的客户端会把恢复事件按「已收过」过滤掉，变更流
+			// 也出现重复 seq。变更流对状态事件是关键落盘，其最大 seq 即「真正
+			// 已分配过」的下界。
+			//
+			// eventLog 仅由事件流重建，故其长度可能小于游标（中间有未落盘事件）。
+			// 这是允许的：游标只决定「下一个 seq」，缺号事件无法补造也不应补造
+			// （客户端本就没收到），只要新事件 seq 严格大于任何已发过的号即可；
+			// events(afterSeq) 与 SSE 按数值单向过滤，缺号不影响正确性。
+			const changeMaxSeq = this.store.maxChangeSeq(stored.taskId);
+			const maxSeq = Math.max(eventMaxSeq, changeMaxSeq);
 			this.seqCursor.set(stored.taskId, maxSeq);
 
 			if (stored.status === TaskStatus.Running) {
 				// 落一条 RUNNING → INTERRUPTED 的变更，让恢复结果也持久化，
 				// 下次重启不会重复判定
 				const at = this.now();
-				const seq = maxSeq + 1;
 				const reason = "服务重启，任务中断，可从最后成功检查点重试";
 				const recovered: TaskRecord = {
 					...stored,
@@ -152,16 +228,26 @@ export class TaskOrchestrator {
 					updatedAt: at,
 				};
 				this.tasks.set(stored.taskId, recovered);
-				this.store.appendChange({
-					taskId: stored.taskId,
-					tenant: stored.tenant,
-					sessionId: stored.sessionId,
-					seq,
-					at,
-					from: TaskStatus.Running,
-					to: TaskStatus.Interrupted,
-					reason,
-				});
+				// 这条变更同时是一条 status 事件，必须走统一入库路径 ingest：
+				// 它会基于上面设置的 maxSeq 游标分配 seq=maxSeq+1，把事件写入
+				// 事件流、把变更写入变更流，并把 seqCursor 推进到该序号。
+				// 三者缺一不可 —— 只写变更不写事件，SSE 重连永远收不到
+				// RUNNING→INTERRUPTED，且游标停在 maxSeq 会让后续事件复用同一序号。
+				// 不调 emitStatus：恢复期间没有订阅者，也不应借 fanout 重放 SSE。
+				// best-effort：单任务落盘异常不应中断整批恢复（游标与内存事件已就绪）。
+				this.ingest(
+					stored.taskId,
+					{
+						taskId: stored.taskId,
+						tenant: stored.tenant,
+						at,
+						type: "status",
+						from: TaskStatus.Running,
+						to: TaskStatus.Interrupted,
+						reason,
+					},
+					{ statusPersistence: "best-effort" },
+				);
 				interrupted.push(stored.taskId);
 			} else {
 				this.tasks.set(stored.taskId, { ...stored });
@@ -202,6 +288,7 @@ export class TaskOrchestrator {
 			taskId: options.taskId,
 			tenant: options.tenant,
 			sessionId: options.sessionId,
+			...(options.scenarioId === undefined ? {} : { scenarioId: options.scenarioId }),
 			status: TaskStatus.Queued,
 			artifacts: [],
 			createdAt: at,
@@ -210,24 +297,40 @@ export class TaskOrchestrator {
 		this.tasks.set(options.taskId, record);
 		this.eventLog.set(options.taskId, []);
 		this.seqCursor.set(options.taskId, 0);
-		// 变更随首条状态事件一起落盘（见 emitStatus），先于事件对外发送
+		// 变更随首条状态事件一起落盘（见 emitStatus），先于事件对外发送。
+		// 首事件落盘失败保持原有语义：submit 直接失败（此时还未创建 Runner，
+		// 不会留下无执行器的持久化任务）
 		await this.emitStatus(record, null, TaskStatus.Queued);
 
-		const runner = await this.factory.createRunner({
-			tenant: options.tenant,
-			taskId: options.taskId,
-			sessionId: options.sessionId,
-			systemPrompt: options.systemPrompt,
-			tools: options.tools,
-			gate: options.gate,
-			...(options.activeTools === undefined ? {} : { activeTools: options.activeTools }),
-		});
+		let runner: Runner;
+		try {
+			runner = await this.factory.createRunner({
+				tenant: options.tenant,
+				taskId: options.taskId,
+				sessionId: options.sessionId,
+				systemPrompt: options.systemPrompt,
+				tools: options.tools,
+				gate: options.gate,
+				...(options.activeTools === undefined ? {} : { activeTools: options.activeTools }),
+				// 档位显式透传；缺省由 Runner 侧回落旗舰（RunnerSpec.tier 默认）
+				...(options.tier === undefined ? {} : { tier: options.tier }),
+			});
+		} catch (error) {
+			// QUEUED 记录此刻已落内存并落盘，而 runners 中没有执行器。
+			// 必须补偿：把任务迁移到 FAILED 终态，否则它会以 QUEUED 永久残留，
+			// 重启恢复也原样保留，且没有任何入口会再次为它创建 Runner。
+			await this.failAfterCreateRunnerError(options.taskId, error);
+			throw error;
+		}
 		this.runners.set(options.taskId, runner);
 
 		// Runner 的事件转投给编排器的订阅者，并落到事件日志。
 		// Runner 有自己从 1 开始的序号空间，直接入库会与状态事件的序号撞车，
 		// 因此这里统一重新编号（见 ingest）
 		runner.subscribe(async (event) => {
+			// ingest 内部已把「内存事件日志推进」与「落盘」解耦：磁盘写失败只经
+			// onPersistenceError 告警，不抛错。这样 Runner 的 publish 不会因监听器
+			// 异常吞掉后续处理，fanout 与派生状态迁移也不会被落盘失败跳过。
 			const stamped = this.ingest(options.taskId, event);
 			// 先投递本事件再处理派生状态：派生出的状态事件 seq 更大，若晚于它
 			// 送达，客户端的重连锚点（Last-Event-ID / afterSeq）就会停在更大的
@@ -243,21 +346,41 @@ export class TaskOrchestrator {
 					artifacts: [...r.artifacts, stamped.artifactId],
 				}));
 				// 产物追加也进变更流（状态不变，仅累积 artifacts），
-				// 否则重启后当前态的产物列表会丢
-				this.store?.appendChange({
-					taskId: options.taskId,
-					tenant: withArtifact.tenant,
-					sessionId: withArtifact.sessionId,
-					seq: stamped.seq,
-					at: this.now(),
-					from: withArtifact.status,
-					to: withArtifact.status,
-					artifacts: [stamped.artifactId],
-				});
+				// 否则重启后当前态的产物列表会丢。产物落盘失败同样只告警不中断。
+				try {
+					this.store?.appendChange({
+						taskId: options.taskId,
+						tenant: withArtifact.tenant,
+						sessionId: withArtifact.sessionId,
+						seq: stamped.seq,
+						at: this.now(),
+						from: withArtifact.status,
+						to: withArtifact.status,
+						artifacts: [stamped.artifactId],
+					});
+				} catch (error) {
+					this.reportPersistenceError(error, options.taskId);
+				}
 			}
 		});
 
 		return this.tasks.get(options.taskId) as TaskRecord;
+	}
+
+	/**
+	 * createRunner 失败后的补偿：把已落盘的 QUEUED 任务迁移到 FAILED 终态。
+	 *
+	 * 不删除记录而是改为 FAILED —— 终态任务重启不会复活，审计上也能看到失败原因。
+	 * 迁移本身的落盘若仍失败（如磁盘满），记录保留在内存 FAILED 态并尽力告警，
+	 * 不覆盖原始的 createRunner 错误。
+	 */
+	private async failAfterCreateRunnerError(taskId: string, cause: unknown): Promise<void> {
+		const reason = `执行器创建失败：${cause instanceof Error ? cause.message : String(cause)}`;
+		try {
+			await this.transition(taskId, TaskStatus.Failed, reason);
+		} catch (persistError) {
+			this.reportPersistenceError(persistError, taskId);
+		}
 	}
 
 	/**
@@ -349,7 +472,35 @@ export class TaskOrchestrator {
 			status: to,
 			...(reason === undefined ? {} : { reason }),
 		}));
-		await this.emitStatus(updated, from, to, reason);
+		try {
+			await this.emitStatus(updated, from, to, reason, "critical");
+		} catch (error) {
+			// 关键状态迁移落盘失败（磁盘满 / 只读文件系统等）：不能让任务停在
+			// 一个磁盘上并不存在、重启后会回退的状态上。内存态改写为可诊断的
+			// FAILED 并上报，随后把异常抛给调用方（run 的 catch 对 FAILED 是
+			// 幂等的，不会再二次迁移或刷屏）。
+			const detail = error instanceof Error ? error.message : String(error);
+			const failed = this.updateRecord(taskId, (r) => ({
+				...r,
+				status: TaskStatus.Failed,
+				reason: `状态迁移 ${from} → ${to} 落盘失败：${detail}`,
+			}));
+			this.reportPersistenceError(error, taskId);
+			// 尽力通知订阅者任务已失败：事件以 best-effort 入库（磁盘此刻可能
+			// 仍不可写，但内存事件日志与 fanout 不受影响），不让这里再抛错
+			try {
+				await this.emitStatus(
+					failed,
+					from,
+					TaskStatus.Failed,
+					failed.reason,
+					"best-effort",
+				);
+			} catch {
+				// 通知失败也不能掩盖原始的落盘异常
+			}
+			throw error;
+		}
 		return updated;
 	}
 
@@ -361,21 +512,34 @@ export class TaskOrchestrator {
 		return updated;
 	}
 
+	/**
+	 * @param persistence status 变更落盘的失败策略。
+	 * - `"critical"`（默认）：用于状态机迁移（含 submit 的 QUEUED 首事件），
+	 *   变更流必须落盘，失败要抛出 —— submit 时直接失败（此时还没 Runner，
+	 *   不留僵尸），运行中迁移失败则由 transition 改写为可诊断的 FAILED；
+	 * - `"best-effort"`：用于重启恢复补写的 INTERRUPTED 事件、以及关键迁移
+	 *   失败后向订阅者补发的 FAILED 通知，失败只告警不抛出。
+	 */
 	private async emitStatus(
 		record: TaskRecord,
 		from: TaskStatus | null,
 		to: TaskStatus,
 		reason?: string,
+		persistence: "critical" | "best-effort" = "critical",
 	): Promise<void> {
-		const event = this.ingest(record.taskId, {
-			taskId: record.taskId,
-			tenant: record.tenant,
-			at: this.now(),
-			type: "status",
-			from,
-			to,
-			...(reason === undefined ? {} : { reason }),
-		});
+		const event = this.ingest(
+			record.taskId,
+			{
+				taskId: record.taskId,
+				tenant: record.tenant,
+				at: this.now(),
+				type: "status",
+				from,
+				to,
+				...(reason === undefined ? {} : { reason }),
+			},
+			{ statusPersistence: persistence },
+		);
 		await this.fanout(event);
 	}
 
@@ -390,8 +554,21 @@ export class TaskOrchestrator {
 	 * Runner 原有的 seq / eventId 在此被丢弃（`TaskEvent` 上二者是 readonly，
 	 * 故以展开方式构造新对象）。Runner 侧序号只用于其内部排序与回放比对，
 	 * 跨层后不再有意义。
+	 *
+	 * @param options.statusPersistence status 事件对应**变更流**落盘的失败策略：
+	 * - `"critical"`（默认）用于状态机迁移 —— 变更流落盘失败必须抛出，交给
+	 *   transition 把任务转入可诊断的 FAILED，不能让磁盘态落后于内存态；
+	 * - `"best-effort"` 用于提交瞬间的 QUEUED 首事件与重启恢复 —— 只告警不抛。
+	 *
+	 * 事件流（appendEvent）的落盘失败一律只告警：它影响的是断线重连的历史，
+	 * 不应阻断内存事件日志、fanout 以及 await_confirm / artifact 等派生处理。
 	 */
-	private ingest(taskId: string, draft: EventDraft): TaskEvent {
+	private ingest(
+		taskId: string,
+		draft: EventDraft,
+		options: { statusPersistence?: "critical" | "best-effort" } = {},
+	): TaskEvent {
+		const statusPersistence = options.statusPersistence ?? "critical";
 		const seq = (this.seqCursor.get(taskId) ?? 0) + 1;
 		this.seqCursor.set(taskId, seq);
 
@@ -402,24 +579,36 @@ export class TaskOrchestrator {
 			eventId: `${taskId}-${seq}`,
 		} as TaskEvent;
 
+		// 内存事件日志先推进：它是 SSE / events() 的唯一来源，绝不能被磁盘拖垮
+		const log = this.eventLog.get(taskId) ?? [];
+		log.push(event);
+		this.eventLog.set(taskId, log);
+
 		// 状态事件同时是一条持久化变更（当前态折叠自这条流）
 		if (event.type === "status") {
 			const r = this.tasks.get(taskId);
 			if (r !== undefined) {
-				this.persistChange(
-					r,
-					event.from,
-					seq,
-					event.reason === undefined ? undefined : { reason: event.reason },
-				);
+				try {
+					this.persistChange(
+						r,
+						event.from,
+						seq,
+						event.reason === undefined ? undefined : { reason: event.reason },
+					);
+				} catch (error) {
+					if (statusPersistence === "critical") throw error;
+					this.reportPersistenceError(error, taskId);
+				}
 			}
 		}
 
-		const log = this.eventLog.get(taskId) ?? [];
-		log.push(event);
-		this.eventLog.set(taskId, log);
-		// 事件流落盘（含 step/usage 等非状态事件），供重启后断线重连
-		this.store?.appendEvent(event);
+		// 事件流落盘（含 step/usage 等非状态事件），供重启后断线重连。
+		// 失败只告警：事件已在内存日志里，fanout 与派生状态迁移照常进行。
+		try {
+			this.store?.appendEvent(event);
+		} catch (error) {
+			this.reportPersistenceError(error, taskId);
+		}
 		return event;
 	}
 
@@ -439,6 +628,8 @@ export class TaskOrchestrator {
 			taskId: record.taskId,
 			tenant: record.tenant,
 			sessionId: record.sessionId,
+			// 场景归属是任务静态属性，只随首条（create）变更落盘
+			...(from === null && record.scenarioId !== undefined ? { scenarioId: record.scenarioId } : {}),
 			seq,
 			at: record.updatedAt,
 			from,

@@ -8,6 +8,9 @@
  * 同时验证 M0 三条约束在代码层面真的生效，而非仅写在注释里。
  */
 
+import { rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
 import { MemoryStorage } from "../../../vendor/pi/agent/src/harness/session/memory.ts";
@@ -675,6 +678,51 @@ describe("RunnerAdapter 适配层", () => {
 			 * 为此造场景的成本高于收益 —— 两项单价接近，写串的账目偏差很小。
 			 * 若将来接入按缓存计费差异大的模型，这里要补一条同会话多轮的断言。
 			 */
+		});
+
+		it("工具成功且 details.outputPath 存在时发出 artifact 事件", async () => {
+			const { factory, faux } = createRuntime();
+			const outPath = join(tmpdir(), `tao-artifact-${Date.now()}-${Math.random()}.xlsx`);
+			writeFileSync(outPath, "PK-fake-bytes");
+
+			const producer: PlatformTool = {
+				name: "make_report",
+				label: "生成报告",
+				description: "产出一个文件",
+				parameters: { type: "object", properties: {} },
+				async execute() {
+					return { text: "已生成", details: { outputPath: outPath, validation: { ok: true } } };
+				},
+			};
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-art",
+				sessionId: "session-art",
+				systemPrompt: "s",
+				tools: [producer],
+				gate: () => allowAll,
+			});
+			const events: TaskEvent[] = [];
+			runner.subscribe((e) => void events.push(e));
+
+			faux.setResponses([
+				fauxAssistantMessage([fauxToolCall("make_report", {})]),
+				fauxAssistantMessage("done"),
+			]);
+			await runner.prompt("生成报告");
+
+			const artifacts = events.filter((e) => e.type === "artifact") as Array<
+				Extract<TaskEvent, { type: "artifact" }>
+			>;
+			expect(artifacts).toHaveLength(1);
+			expect(artifacts[0]?.artifactId).toBe(outPath);
+			expect(artifacts[0]?.final).toBe(true);
+			expect(artifacts[0]?.sizeBytes).toBe(Buffer.byteLength("PK-fake-bytes"));
+			expect(artifacts[0]?.mimeType).toContain("spreadsheet");
+
+			rmSync(outPath, { force: true });
+			await runner.close();
 		});
 	});
 });

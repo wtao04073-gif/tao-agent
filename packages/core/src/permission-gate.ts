@@ -43,6 +43,11 @@ export interface GateConfig {
 	readonly workspace: string;
 	/** 用户或管理员显式授权的目录。 */
 	readonly grantedDirs?: readonly string[];
+	/**
+	 * 文件级白名单（绝对路径）。仅放行精确命中的文件，不按目录前缀扩权，
+	 * 用于任务表单实际引用的上传输入文件。
+	 */
+	readonly allowedFiles?: readonly string[];
 	/** 审计回调。**每一次**决策都会调用，不只是拒绝。 */
 	readonly audit?: (entry: AuditEntry) => void | Promise<void>;
 }
@@ -107,7 +112,12 @@ export function createPermissionGate(config: GateConfig): PermissionGate {
 
 		// 路径参数逐个按 D 级黑名单校验
 		for (const path of extractPaths(request.args, policy.pathParams ?? [])) {
-			const verdict = checkPath(path, config.workspace, config.grantedDirs ?? []);
+			const verdict = checkPath(
+				path,
+				config.workspace,
+				config.grantedDirs ?? [],
+				config.allowedFiles ?? [],
+			);
 			if (!verdict.allowed) {
 				return audit(
 					{ kind: "block", reason: verdict.reason ?? `路径不可访问：${path}` },

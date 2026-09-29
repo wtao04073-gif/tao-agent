@@ -45,6 +45,8 @@ COPY --from=builder --chown=node:node /build/node_modules ./node_modules
 COPY --from=builder --chown=node:node /build/packages ./packages
 COPY --from=builder --chown=node:node /build/vendor ./vendor
 COPY --from=builder --chown=node:node /build/scripts ./scripts
+# 同源托管的 Web 前端（M5-3/4，纯静态零构建）
+COPY --from=builder --chown=node:node /build/web ./web
 
 # 工作区目录。提前建好并给对属主 ——
 # 否则首次启动时以非 root 身份建目录会失败

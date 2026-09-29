@@ -34,6 +34,13 @@ export interface StoredTask {
 	readonly tenant: TenantContext;
 	/** 创建该任务时的会话标识。恢复后用于判断能否续跑（M5-1 不续跑会话）。 */
 	readonly sessionId: string;
+	/**
+	 * 发起任务所用的场景卡 id（M5-3）。
+	 *
+	 * 可选：早期数据与非场景入口（自由对话）没有它。任务中心据此显示场景标题，
+	 * 缺失时退化为显示任务摘要而非报错。
+	 */
+	readonly scenarioId?: string;
 	readonly status: TaskStatus;
 	/** 终态非成功时面向用户的原因。 */
 	readonly reason?: string;
@@ -52,6 +59,11 @@ export interface TaskChange {
 	readonly taskId: string;
 	readonly tenant: TenantContext;
 	readonly sessionId: string;
+	/**
+	 * 场景卡 id。仅在首条变更（from=null 的 create）上携带，是任务的静态属性；
+	 * 折叠当前态时从首条读取。后续迁移省略。
+	 */
+	readonly scenarioId?: string;
 	/** 变更序号，在任务内从 1 单调递增；即事件流里 status 事件的 seq。 */
 	readonly seq: number;
 	readonly at: number;
@@ -100,6 +112,15 @@ export interface TaskStore {
 	get(taskId: string): StoredTask | undefined;
 	/** 取某任务事件流，可指定从某 seq 之后开始（断线重连）。 */
 	events(taskId: string, afterSeq?: number): readonly TaskEvent[];
+	/**
+	 * 取某任务**变更流**已使用的最大 seq；任务不存在（无任何变更）时返回 0。
+	 *
+	 * 与事件流的最大 seq 区分：事件流落盘是 best-effort，可能因磁盘满等原因
+	 * 缺号，而对应状态变更（status 事件同时写两条流）可能已成功落盘。重启
+	 * 恢复分配新序号时必须取两条流的最大值，否则会复用「变更流已占用、事件
+	 * 也已实时发给客户端」的序号，导致 SSE 重连把新事件误判成已收过。
+	 */
+	maxChangeSeq(taskId: string): number;
 }
 
 /**

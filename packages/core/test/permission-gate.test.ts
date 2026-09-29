@@ -68,6 +68,28 @@ describe("权限门 · 路径参数校验", () => {
 		expect((await ask("read_table", { path: "../../etc/passwd" })).kind).toBe("block");
 	});
 
+	it("文件级白名单命中的输入文件放行，同目录其他文件不放行", async () => {
+		const audit: AuditEntry[] = [];
+		const gate = createPermissionGate({
+			policies,
+			// workspace 收窄到任务专属产物目录
+			workspace: "/ws/artifacts/task-1",
+			allowedFiles: ["/ws/我方台账.xlsx"],
+			audit: (entry) => void audit.push(entry),
+		});
+		const ask = (path: string) => gate({ toolName: "read_table", args: { path }, tenant: TENANT, taskId: "task-1" });
+
+		// 表单引用的上传输入文件：精确白名单命中
+		expect((await ask("/ws/我方台账.xlsx")).kind).toBe("allow");
+		// 同目录另一个未引用的上传文件：不扩权
+		expect((await ask("/ws/供应商账单.xlsx")).kind).toBe("block");
+		// 其他任务的产物目录：既不在本任务 workspace 子树、也不在白名单
+		expect((await ask("/ws/artifacts/task-2/报告.xlsx")).kind).toBe("block");
+		// 本任务自己的产物：workspace 子树内放行
+		expect((await ask("/ws/artifacts/task-1/报告.xlsx")).kind).toBe("allow");
+		expect(audit.filter((e) => e.decision === "blocked")).toHaveLength(2);
+	});
+
 	it("数组形态的路径参数逐个校验", async () => {
 		// 「多表核对」这类工具接收路径数组，只查第一个是不够的
 		const { ask } = gateWith([{ tool: "compare", pathParams: ["files"] }]);

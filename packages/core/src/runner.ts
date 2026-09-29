@@ -90,6 +90,17 @@ export interface RunnerSpec {
 	 * 省略则激活全部已注册工具。
 	 */
 	readonly activeTools?: readonly string[];
+	/**
+	 * 模型档位（M5-5）。词汇留在平台层，不泄漏任何内核类型。
+	 *
+	 * - `"flagship"`（默认）：能力强、单价高，用于任务规划与结果裁决这类
+	 *   对质量敏感的运行（一期主任务默认走旗舰，保证产出质量）；
+	 * - `"lite"`：单价低、速度快，用于常规执行与子 Agent 的并行子任务。
+	 *
+	 * 档位在创建 Runner 时选定，整次运行使用同一模型 —— 内核的 lane 配置
+	 * 在一次 run 内不按「规划轮/执行轮」动态换模型，避免计量模型名错标。
+	 */
+	readonly tier?: "flagship" | "lite";
 	readonly gate: PermissionGate;
 	/** 步数上限，超出转 EXCEEDED。 */
 	readonly maxSteps?: number;

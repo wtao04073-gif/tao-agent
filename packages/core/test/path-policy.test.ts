@@ -13,8 +13,10 @@ import { checkPath, PATH_RULES } from "../src/path-policy.ts";
 
 const WORKSPACE = "/workspace/task-1";
 
-const allow = (p: string, granted: string[] = []) => checkPath(p, WORKSPACE, granted).allowed;
-const verdict = (p: string, granted: string[] = []) => checkPath(p, WORKSPACE, granted);
+const allow = (p: string, granted: string[] = [], files: string[] = []) =>
+	checkPath(p, WORKSPACE, granted, files).allowed;
+const verdict = (p: string, granted: string[] = [], files: string[] = []) =>
+	checkPath(p, WORKSPACE, granted, files);
 
 describe("路径策略 · 正常放行", () => {
 	it("工作区内的相对与绝对路径都放行", () => {
@@ -34,6 +36,44 @@ describe("路径策略 · 正常放行", () => {
 		// 不能因为名字撞了就拒绝 —— 那会让产品在真实数据上频繁误报。
 		expect(allow(`${WORKSPACE}/vendor/供应商名录.xlsx`)).toBe(true);
 		expect(allow(`${WORKSPACE}/sessions/会议记录.docx`)).toBe(true);
+	});
+});
+
+describe("路径策略 · 文件级白名单 allowedFiles", () => {
+	it("精确命中授权文件才放行", () => {
+		expect(allow("/mnt/data/我方台账.xlsx", [], ["/mnt/data/我方台账.xlsx"])).toBe(true);
+	});
+
+	it("授权单个文件绝不放开同目录的其他文件（不按目录前缀扩权）", () => {
+		// 这是文件级白名单存在的意义：任务表单只引用了 a.xlsx，
+		// 同目录的 b.xlsx 与其他任务产物都不能读。
+		expect(allow("/mnt/data/供应商账单.xlsx", [], ["/mnt/data/我方台账.xlsx"])).toBe(false);
+		expect(allow("/mnt/data/sub/我方台账.xlsx", [], ["/mnt/data/我方台账.xlsx"])).toBe(false);
+	});
+
+	it("授权文件不产生目录前缀：/mnt/data/a 不放开 /mnt/data/ab", () => {
+		expect(allow("/mnt/data/我方台账备份.xlsx", [], ["/mnt/data/我方台账.xlsx"])).toBe(false);
+	});
+
+	it("授权文件之外的路径仍按 outside_workspace 拒绝", () => {
+		const result = verdict("/mnt/data/别人的.xlsx", [], ["/mnt/data/我方台账.xlsx"]);
+		expect(result.allowed).toBe(false);
+		expect(result.rule).toBe("outside_workspace");
+	});
+
+	it("白名单中的凭据文件仍被凭据规则拦（不留配置口子）", () => {
+		// 即使表单「引用」了一个 .pem，也不允许读取
+		expect(allow("/mnt/data/deploy.pem", [], ["/mnt/data/deploy.pem"])).toBe(false);
+	});
+
+	it("相对/穿越写法不能借白名单洗白：规范化后不等于授权文件即拒", () => {
+		expect(allow("/mnt/data/../data/我方台账.xlsx", [], ["/mnt/data/我方台账.xlsx"])).toBe(true);
+		expect(allow("/mnt/data/../etc/我方台账.xlsx", [], ["/mnt/data/我方台账.xlsx"])).toBe(false);
+	});
+
+	it("不传 allowedFiles 时行为与旧版完全一致（向后兼容）", () => {
+		expect(allow("/mnt/share/x.xlsx", ["/mnt/share"])).toBe(true);
+		expect(allow("/mnt/other/x.xlsx")).toBe(false);
 	});
 });
 

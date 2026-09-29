@@ -9,10 +9,10 @@
  *  - taskId 白名单挡住路径穿越。
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskStatus, type StoredAuditEntry, type TaskChange, type TaskEvent, type TenantContext } from "@tao/core";
 import {
 	auditShardName,
@@ -20,6 +20,26 @@ import {
 	FileTaskStore,
 	isSafeTaskId,
 } from "../src/index.ts";
+import { writeFullySync } from "../src/file-task-store.ts";
+
+/**
+ * ESM 命名导出不可重新定义（vi.spyOn 对 node:fs 会抛 "not configurable"），
+ * 因此用 hoisted 局部 mock 给 writeSync 开一个可控缝：未注入实现时完全委托
+ * 真实 writeSync，只在两条 appendLine 测试里临时替换为短写 / 抛错桩。
+ */
+const writeSyncMock = vi.hoisted(() => ({
+	current: null as null | ((...args: unknown[]) => unknown),
+}));
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		writeSync: (...args: unknown[]) =>
+			writeSyncMock.current !== null
+				? writeSyncMock.current(...args)
+				: (actual.writeSync as (...a: unknown[]) => unknown)(...args),
+	};
+});
 
 const TENANT: TenantContext = { tenantId: "t1", workspaceId: "w1", userId: "u1" };
 const OTHER: TenantContext = { tenantId: "t2", workspaceId: "w2", userId: "u2" };
@@ -111,12 +131,233 @@ describe("文件任务存储", () => {
 		expect(store.get("t-a")?.status).toBe(TaskStatus.Succeeded);
 	});
 
+	it("变更流末尾是无换行半截行时，追加新记录会先隔离坏行再写入", () => {
+		const store = new FileTaskStore({ dir });
+		store.create(change({ taskId: "t-a", seq: 1, to: TaskStatus.Queued }));
+		// 模拟 kill -9：末行没写完且没有换行符。新记录若直接拼到尾上，
+		// 会与半截内容连成同一坏行，回放时被整体跳过
+		writeFileSync(join(dir, "tasks", "t-a.jsonl"), '{"seq":2,"to":"RUNNIN', { flag: "a" });
+		store.appendChange(
+			change({ taskId: "t-a", seq: 3, from: TaskStatus.Queued, to: TaskStatus.Succeeded }),
+		);
+
+		const restored = new FileTaskStore({ dir });
+		const got = restored.get("t-a");
+		// 坏行被跳过，新记录完整生效
+		expect(got?.status).toBe(TaskStatus.Succeeded);
+		const raw = readFileSync(join(dir, "tasks", "t-a.jsonl"), "utf8");
+		// 坏行与新行之间必须有换行隔离
+		expect(raw).toContain('{"seq":2,"to":"RUNNIN\n');
+	});
+
+	it("事件流末尾是无换行半截行时，appendEvent 的新事件仍可完整回放", () => {
+		const store = new FileTaskStore({ dir });
+		store.create(change({ taskId: "t-a", seq: 1, to: TaskStatus.Queued }));
+		writeFileSync(join(dir, "events", "t-a.jsonl"), '{"seq":1,"type":"ste', { flag: "a" });
+		store.appendEvent({
+			eventId: "t-a-2",
+			taskId: "t-a",
+			tenant: TENANT,
+			at: 2000,
+			seq: 2,
+			type: "status",
+			from: TaskStatus.Queued,
+			to: TaskStatus.Running,
+		} satisfies TaskEvent);
+
+		const restored = new FileTaskStore({ dir });
+		const events = restored.events("t-a");
+		expect(events).toHaveLength(1);
+		expect(events[0]?.seq).toBe(2);
+	});
+
+	it("审计分片末尾是无换行半截行时，append 的新条目仍可查出", () => {
+		const store = new FileAuditStore({ dir });
+		const at = Date.UTC(2026, 8, 10, 3, 0, 0);
+		const shard = auditShardName(at);
+		store.append({
+			at,
+			tenantId: TENANT.tenantId,
+			workspaceId: TENANT.workspaceId,
+			userId: TENANT.userId,
+			taskId: "t-a",
+			tool: "write_document",
+			decision: "allowed",
+			args: {},
+		});
+		writeFileSync(join(dir, "audit", shard), '{"at":2,"tenantId":"t1",', { flag: "a" });
+		store.append({
+			at: at + 1,
+			tenantId: TENANT.tenantId,
+			workspaceId: TENANT.workspaceId,
+			userId: TENANT.userId,
+			taskId: "t-a",
+			tool: "send_email",
+			decision: "denied",
+			args: {},
+		});
+
+		const got = new FileAuditStore({ dir }).list("t1", at, at + 86_400_000);
+		expect(got.map((e) => e.tool)).toEqual(["write_document", "send_email"]);
+	});
+
+	it("create 对已存在（含半截内容）的变更文件幂等拒绝，不覆盖坏文件", () => {
+		const store = new FileTaskStore({ dir });
+		store.create(change({ taskId: "t-a", seq: 1, to: TaskStatus.Queued }));
+		writeFileSync(join(dir, "tasks", "t-a.jsonl"), '{"seq":9,"to":"FAI', { flag: "a" });
+		// 文件已存在 → create 拒绝（安全追加路径不会在 create 上误覆盖）
+		expect(store.create(change({ taskId: "t-a", seq: 1, to: TaskStatus.Queued }))).toBe(false);
+		// 全新任务的 create 仍正常，首行可回放
+		expect(store.create(change({ taskId: "t-b", seq: 1, to: TaskStatus.Queued }))).toBe(true);
+		expect(new FileTaskStore({ dir }).get("t-b")?.status).toBe(TaskStatus.Queued);
+	});
+
 	it("taskId 白名单挡住路径分隔符", () => {
 		const store = new FileTaskStore({ dir });
 		expect(isSafeTaskId("task-1")).toBe(true);
 		expect(isSafeTaskId("../evil")).toBe(false);
 		expect(isSafeTaskId("a/b")).toBe(false);
 		expect(() => store.create(change({ taskId: "../evil", seq: 1, to: TaskStatus.Queued }))).toThrow();
+	});
+
+	it("maxChangeSeq：只看变更流，事件流缺失也不影响其最大值", () => {
+		const store = new FileTaskStore({ dir });
+		expect(store.maxChangeSeq("t-a")).toBe(0);
+		store.create(change({ taskId: "t-a", seq: 1, to: TaskStatus.Queued }));
+		store.appendChange(change({ taskId: "t-a", seq: 2, from: TaskStatus.Queued, to: TaskStatus.Running }));
+		store.appendChange(change({ taskId: "t-a", seq: 4, from: TaskStatus.Running, to: TaskStatus.Succeeded }));
+		// 只落 seq=1..3 的事件（含 seq=3 非状态事件），刻意与变更流错号
+		store.appendEvent({
+			eventId: "t-a-1",
+			taskId: "t-a",
+			tenant: TENANT,
+			at: 1000,
+			seq: 1,
+			type: "status",
+			from: null,
+			to: TaskStatus.Queued,
+		} satisfies TaskEvent);
+		store.appendEvent({
+			eventId: "t-a-2",
+			taskId: "t-a",
+			tenant: TENANT,
+			at: 2000,
+			seq: 2,
+			type: "status",
+			from: TaskStatus.Queued,
+			to: TaskStatus.Running,
+		} satisfies TaskEvent);
+		store.appendEvent({
+			eventId: "t-a-3",
+			taskId: "t-a",
+			tenant: TENANT,
+			at: 3000,
+			seq: 3,
+			type: "step",
+			step: 1,
+			action: "执行中",
+			phase: "started",
+		} satisfies TaskEvent);
+		expect(store.maxChangeSeq("t-a")).toBe(4);
+		// 重启后新实例口径一致
+		expect(new FileTaskStore({ dir }).maxChangeSeq("t-a")).toBe(4);
+	});
+});
+
+describe("writeFullySync · 短写必须可感知", () => {
+	it("底层一次只写部分字节时循环续写到写满，偏移按已写字节严格推进", () => {
+		const chunks: Array<{ offset: number; length: number }> = [];
+		const buf = Buffer.from("0123456789", "utf8");
+		// 每次写最多 3 字节，制造多次短写
+		const write = vi.fn((_fd: number, _buffer: Buffer, offset: number, length: number) => {
+			const n = Math.min(3, length);
+			chunks.push({ offset, length: n });
+			return n;
+		});
+		writeFullySync(write, 7, buf);
+		expect(write.mock.calls.length).toBe(4); // 3 + 3 + 3 + 1
+		expect(chunks.map((c) => c.length)).toEqual([3, 3, 3, 1]);
+		expect(chunks.map((c) => c.offset)).toEqual([0, 3, 6, 9]);
+	});
+
+	it("底层返回 0 字节（无法推进）时抛错，绝不静默成功", () => {
+		const write = vi.fn(() => 0);
+		expect(() => writeFullySync(write, 1, Buffer.from("abc"))).toThrow(/同步写入未完成/);
+		expect(write.mock.calls.length).toBe(1);
+	});
+
+	it("底层写入抛错时原样向上抛", () => {
+		const write = vi.fn(() => {
+			throw new Error("ENOSPC: 磁盘已满");
+		});
+		expect(() => writeFullySync(write, 1, Buffer.from("abc"))).toThrow(/磁盘已满/);
+	});
+
+	it("空 Buffer 不触发任何写入", () => {
+		const write = vi.fn(() => 1);
+		writeFullySync(write, 1, Buffer.alloc(0));
+		expect(write.mock.calls.length).toBe(0);
+	});
+
+	it("appendLine 遇到短写仍写出完整文件：补换行与正文都循环写满", async () => {
+		const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+		const store = new FileTaskStore({ dir });
+		store.create(change({ taskId: "t-a", seq: 1, to: TaskStatus.Queued }));
+		// 末行无换行的半截坏尾，迫使 appendLine 先补 1 字节换行
+		writeFileSync(join(dir, "tasks", "t-a.jsonl"), '{"seq":2,"to":"RUNNIN', { flag: "a" });
+		const next = change({
+			taskId: "t-a",
+			seq: 3,
+			from: TaskStatus.Queued,
+			to: TaskStatus.Succeeded,
+		});
+
+		// 桩住 writeSync：正文（长度 > 2 的写入）第一次只落 2 字节制造短写，
+		// 补换行（1 字节）及其后续续写都委托真实写入写满
+		let bodyShortWritten = false;
+		writeSyncMock.current = (fd: number, data: unknown, offset?: unknown, length?: unknown) => {
+			const buffer =
+				typeof data === "string"
+					? Buffer.from(data)
+					: Buffer.isBuffer(data)
+						? data
+						: Buffer.from(data as Uint8Array);
+			const off = typeof offset === "number" ? offset : 0;
+			const len = typeof length === "number" ? length : buffer.length - off;
+			if (len > 2 && !bodyShortWritten) {
+				bodyShortWritten = true;
+				return actual.writeSync(fd, buffer, off, 2, null);
+			}
+			return actual.writeSync(fd, buffer, off, len, null);
+		};
+		try {
+			store.appendChange(next);
+		} finally {
+			writeSyncMock.current = null;
+		}
+
+		const raw = readFileSync(join(dir, "tasks", "t-a.jsonl"), "utf8");
+		// 文件以完整新行结尾，且整行就是本次写入的 JSON（短写后续传补齐）
+		expect(raw.endsWith(`${JSON.stringify(next)}\n`)).toBe(true);
+		const restored = new FileTaskStore({ dir });
+		expect(restored.get("t-a")?.status).toBe(TaskStatus.Succeeded);
+		expect(restored.maxChangeSeq("t-a")).toBe(3);
+	});
+
+	it("appendLine 在 writeSync 抛错时把异常传给调用方，不返回成功", () => {
+		writeSyncMock.current = () => {
+			throw new Error("ENOSPC: 磁盘已满");
+		};
+		try {
+			const store = new FileTaskStore({ dir });
+			expect(() =>
+				store.appendChange(
+					change({ taskId: "t-a", seq: 1, from: null, to: TaskStatus.Queued }),
+				),
+			).toThrow(/磁盘已满/);
+		} finally {
+			writeSyncMock.current = null;
+		}
 	});
 });
 

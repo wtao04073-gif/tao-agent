@@ -25,10 +25,15 @@
 
 import {
 	appendFileSync,
+	closeSync,
 	existsSync,
+	fstatSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
+	readSync,
 	readdirSync,
+	writeSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
@@ -103,6 +108,82 @@ function isAudit(v: unknown): v is StoredAuditEntry {
 	return typeof a.at === "number" && typeof a.tenantId === "string" && typeof a.tool === "string";
 }
 
+/**
+ * 向已打开的 fd 同步写满整个 Buffer。
+ *
+ * 抽成纯函数并把底层写入器作为参数注入，是为了可直接单测短写场景：
+ * 磁盘紧张 / 管道 / 信号中断时底层写入可能一次只接受部分字节甚至返回 0，
+ * 此时必须按已写字节推进偏移继续写，直到全部落盘；未写满前写入器抛错则
+ * 原样向上抛。**绝不能在只写了一部分时静默返回** —— 调用方会据此认为
+ * 状态/事件已完整持久化，回放时却只能读到半行。
+ *
+ * @param write 底层写入器，签名对齐 fs.writeSync(fd, buffer, offset, length, position)
+ * @param fd 已打开的文件描述符
+ * @param buffer 待写内容
+ */
+export function writeFullySync(
+	write: (
+		fd: number,
+		buffer: Buffer,
+		offset: number,
+		length: number,
+		position: number | null,
+	) => number,
+	fd: number,
+	buffer: Buffer,
+): void {
+	let offset = 0;
+	while (offset < buffer.length) {
+		// position 传 null：fd 以 O_APPEND 打开，每次写都原子落在文件尾，
+		// 不能显式给位置，否则短写续传会覆盖而不是追加
+		const written = write(fd, buffer, offset, buffer.length - offset, null);
+		// 返回非正数（0 字节 / 负值）说明无法继续推进，继续循环只会空转；
+		// 当作写入失败抛出，避免静默留下半行
+		if (!Number.isFinite(written) || written <= 0) {
+			throw new Error(`同步写入未完成：期望 ${buffer.length} 字节，实际写入 ${offset} 字节`);
+		}
+		offset += written;
+	}
+}
+
+/**
+ * 安全追加一行 JSONL。
+ *
+ * 进程在一次 appendFileSync 中途被 kill 时，文件尾可能留下一行没写完的
+ * 半截 JSON。读取侧（parseLines）会逐行容错跳过它，但若直接把新记录拼到
+ * 这个坏尾后面，新记录会与半截内容连成同一坏行，在下次回放时被整体跳过 ——
+ * 持久化的新状态/事件就此丢失。
+ *
+ * 因此追加前先读文件最后一个字节：文件非空且末尾不是 `\n` 时，先补一个
+ * `\n` 把半截坏行隔离成独立一行，再写新记录。
+ *
+ * 用 fd + fstat 定位只读末 1 字节，而不是 readFileSync 整个文件：任务事件流
+ * 会持续增长，整文件读入在追加热点上不可接受；末字节读取的开销与文件大小
+ * 无关。O_APPEND 保证两个写入都落在文件尾。
+ *
+ * 补换行与正文都走 {@link writeFullySync} 循环写满：短写 / 返回 0 字节 /
+ * 抛错都会向上传播，调用方据此感知持久化不完整，绝不会静默成功。
+ */
+function appendLine(path: string, line: string): void {
+	// 用 "a+" 而非 "a"：O_APPEND 只保证写在文件尾，读末字节需要读权限，
+	// "a"（O_WRONLY）上 readSync 会抛 EBADF
+	const fd = openSync(path, "a+");
+	try {
+		const { size } = fstatSync(fd);
+		if (size > 0) {
+			const last = Buffer.alloc(1);
+			// 显式定位到 size-1 读取末字节（O_APPEND 只约束写入位置，不影响读）
+			const bytes = readSync(fd, last, 0, 1, size - 1);
+			if (bytes === 1 && last[0] !== 0x0a) {
+				writeFullySync(writeSync, fd, Buffer.from("\n"));
+			}
+		}
+		writeFullySync(writeSync, fd, Buffer.from(line));
+	} finally {
+		closeSync(fd);
+	}
+}
+
 export interface FileTaskStoreOptions {
 	readonly dir: string;
 	/** 发现坏行时的回调（不静默，但也不抛异常拖垮读取）。 */
@@ -140,7 +221,7 @@ export class FileTaskStore implements TaskStore {
 		if (this.known.has(change.taskId) || existsSync(this.changePath(change.taskId))) {
 			return false;
 		}
-		appendFileSync(this.changePath(change.taskId), `${JSON.stringify(change)}\n`);
+		appendLine(this.changePath(change.taskId), `${JSON.stringify(change)}\n`);
 		appendFileSync(this.eventPath(change.taskId), "");
 		this.known.add(change.taskId);
 		return true;
@@ -148,12 +229,12 @@ export class FileTaskStore implements TaskStore {
 
 	appendChange(change: TaskChange): void {
 		if (!isSafeTaskId(change.taskId)) throw new Error(`非法 taskId：${change.taskId}`);
-		appendFileSync(this.changePath(change.taskId), `${JSON.stringify(change)}\n`);
+		appendLine(this.changePath(change.taskId), `${JSON.stringify(change)}\n`);
 	}
 
 	appendEvent(event: TaskEvent): void {
 		if (!isSafeTaskId(event.taskId)) throw new Error(`非法 taskId：${event.taskId}`);
-		appendFileSync(this.eventPath(event.taskId), `${JSON.stringify(event)}\n`);
+		appendLine(this.eventPath(event.taskId), `${JSON.stringify(event)}\n`);
 	}
 
 	private readChanges(taskId: string): TaskChange[] {
@@ -180,6 +261,7 @@ export class FileTaskStore implements TaskStore {
 			taskId: first.taskId,
 			tenant: first.tenant,
 			sessionId: first.sessionId,
+			...(first.scenarioId === undefined ? {} : { scenarioId: first.scenarioId }),
 			status: first.to,
 			...(first.reason === undefined ? {} : { reason: first.reason }),
 			artifacts: first.artifacts ? [...first.artifacts] : [],
@@ -221,6 +303,13 @@ export class FileTaskStore implements TaskStore {
 		if (skipped > 0) this.onCorruptLine?.({ file: this.eventPath(taskId), skipped });
 		return rows.filter((e) => e.seq > afterSeq).sort((a, b) => a.seq - b.seq);
 	}
+
+	maxChangeSeq(taskId: string): number {
+		if (!isSafeTaskId(taskId)) return 0;
+		// 复用逐行容错的变更流读取：即便尾行截断，前面已落盘的最大 seq 仍有效。
+		// 恢复每任务只调一次，解析整文件的开销与 list/get 折叠相同。
+		return this.readChanges(taskId).reduce((m, c) => Math.max(m, c.seq), 0);
+	}
 }
 
 export class FileAuditStore implements AuditStore {
@@ -235,7 +324,7 @@ export class FileAuditStore implements AuditStore {
 
 	append(entry: StoredAuditEntry): void {
 		const shard = auditShardName(entry.at);
-		appendFileSync(join(this.dir, shard), `${JSON.stringify(entry)}\n`);
+		appendLine(join(this.dir, shard), `${JSON.stringify(entry)}\n`);
 	}
 
 	list(tenantId: string, from: number, to: number): readonly StoredAuditEntry[] {

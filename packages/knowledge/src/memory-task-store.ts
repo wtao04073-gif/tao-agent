@@ -33,6 +33,7 @@ function seed(change: TaskChange): StoredTask {
 		taskId: change.taskId,
 		tenant: change.tenant,
 		sessionId: change.sessionId,
+		...(change.scenarioId === undefined ? {} : { scenarioId: change.scenarioId }),
 		status: change.to,
 		...(change.reason === undefined ? {} : { reason: change.reason }),
 		artifacts: change.artifacts ? [...change.artifacts] : [],
@@ -83,6 +84,12 @@ export class MemoryTaskStore implements TaskStore {
 
 	events(taskId: string, afterSeq = 0): readonly TaskEvent[] {
 		return (this.eventLog.get(taskId) ?? []).filter((e) => e.seq > afterSeq);
+	}
+
+	maxChangeSeq(taskId: string): number {
+		// 与文件版同一口径：只看变更流，与可能缺号的事件流无关。
+		// 恢复路径每任务只调一次，直接在数组上折叠。
+		return (this.changes.get(taskId) ?? []).reduce((m, c) => Math.max(m, c.seq), 0);
 	}
 
 	listAll(): readonly StoredTask[] {

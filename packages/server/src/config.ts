@@ -30,6 +30,16 @@ export interface AppConfig {
 	readonly modelOutputPriceYuan: number | undefined;
 	/** 缓存命中的输入单价。留空时按输入价计。 */
 	readonly modelCacheReadPriceYuan: number | undefined;
+	/**
+	 * 轻量档模型（M5-5）。三项要么全配（启用轻量档），要么全空（回落旗舰）。
+	 * 用于常规执行 / 子 Agent 并行子任务，单价通常远低于旗舰。
+	 */
+	readonly modelLiteBaseUrl: string | undefined;
+	readonly modelLiteApiKey: string | undefined;
+	readonly modelLiteName: string | undefined;
+	readonly modelLiteInputPriceYuan: number | undefined;
+	readonly modelLiteOutputPriceYuan: number | undefined;
+	readonly modelLiteCacheReadPriceYuan: number | undefined;
 	readonly maxConcurrentTasks: number;
 	readonly maxSubtaskConcurrency: number;
 	readonly logLevel: "debug" | "info" | "warn" | "error";
@@ -197,6 +207,40 @@ export function loadConfig(env: Record<string, string | undefined>): {
 		});
 	}
 
+	/**
+	 * 轻量档（M5-5）。三项要么全配，要么全空 —— 只配一半无法发起轻量请求，
+	 * 还会让「以为启用了省钱档、实际仍走旗舰」这种静默偏差发生，故一次性报错。
+	 * 全空时回落旗舰档（私有化最常见形态：只有一个模型）。
+	 */
+	const liteBaseUrl = (env.MODEL_LITE_BASE_URL ?? "").trim() || undefined;
+	const liteApiKey = (env.MODEL_LITE_API_KEY ?? "").trim() || undefined;
+	const liteName = (env.MODEL_LITE_NAME ?? "").trim() || undefined;
+	const liteFilled = [liteBaseUrl, liteApiKey, liteName].filter((v) => v !== undefined).length;
+	if (liteFilled !== 0 && liteFilled !== 3) {
+		const missing: string[] = [];
+		if (liteBaseUrl === undefined) missing.push("MODEL_LITE_BASE_URL");
+		if (liteApiKey === undefined) missing.push("MODEL_LITE_API_KEY");
+		if (liteName === undefined) missing.push("MODEL_LITE_NAME");
+		errors.push({
+			key: missing.join(" / "),
+			reason: "轻量档模型只配了一部分，无法启用",
+			advice:
+				"三项要么全部填写以启用轻量档，要么全部留空以回落到旗舰档。" +
+				"轻量档用于常规执行与子任务，单价更低；不启用时所有任务都走旗舰模型。",
+		});
+	}
+	if (liteBaseUrl !== undefined) {
+		try {
+			new URL(liteBaseUrl);
+		} catch {
+			errors.push({
+				key: "MODEL_LITE_BASE_URL",
+				reason: `不是合法的 URL：${liteBaseUrl}`,
+				advice: "要带协议头，如 https://dashscope.aliyuncs.com/compatible-mode",
+			});
+		}
+	}
+
 	const logLevelRaw = (env.LOG_LEVEL ?? "info").trim();
 	if (!LOG_LEVELS.has(logLevelRaw)) {
 		errors.push({
@@ -223,6 +267,16 @@ export function loadConfig(env: Record<string, string | undefined>): {
 		modelCacheReadPriceYuan: parseOptionalPrice(
 			"MODEL_CACHE_READ_PRICE",
 			env.MODEL_CACHE_READ_PRICE,
+			errors,
+		),
+		modelLiteBaseUrl: liteBaseUrl,
+		modelLiteApiKey: liteApiKey,
+		modelLiteName: liteName,
+		modelLiteInputPriceYuan: parseOptionalPrice("MODEL_LITE_INPUT_PRICE", env.MODEL_LITE_INPUT_PRICE, errors),
+		modelLiteOutputPriceYuan: parseOptionalPrice("MODEL_LITE_OUTPUT_PRICE", env.MODEL_LITE_OUTPUT_PRICE, errors),
+		modelLiteCacheReadPriceYuan: parseOptionalPrice(
+			"MODEL_LITE_CACHE_READ_PRICE",
+			env.MODEL_LITE_CACHE_READ_PRICE,
 			errors,
 		),
 		maxConcurrentTasks: parseInteger("MAX_CONCURRENT_TASKS", env.MAX_CONCURRENT_TASKS, 3, errors, {
@@ -253,6 +307,24 @@ export function loadConfig(env: Record<string, string | undefined>): {
 	};
 
 	/**
+	 * 双档同名必须拒绝启动。
+	 *
+	 * 价格表以 modelName 为键（见 main.ts 的 modelPrices），双档同名时
+	 * 后入表的轻量价会覆盖旗舰价，旗舰任务被按轻量单价计费 —— 账目系统性偏差。
+	 * 不在价格表结构上做文章（改动面大），而是在启动期直接消除「同名双档」
+	 * 这个歧义来源：两档要么用不同模型名，要么删除轻量档回落旗舰。
+	 */
+	if (config.modelLiteName !== undefined && config.modelLiteName === config.modelName) {
+		errors.push({
+			key: "MODEL_LITE_NAME",
+			reason: `轻量档模型名与旗舰档相同（${config.modelLiteName}），价格表按模型名查价时两档会互相覆盖`,
+			advice:
+				"两档使用不同的模型名（轻量档填真正的轻量模型 id），" +
+				"或清空 MODEL_LITE_BASE_URL / MODEL_LITE_API_KEY / MODEL_LITE_NAME 删除轻量档",
+		});
+	}
+
+	/**
 	 * 金额上限与模型单价必须成对出现。
 	 *
 	 * 缺单价时折算出来的金额恒为 0（用量被记成「未配价」），金额熔断
@@ -272,6 +344,21 @@ export function loadConfig(env: Record<string, string | undefined>): {
 					`在 .env 里按服务商价格页填 ${missing.join(" 与 ")}，单位「元 / 百万 token」；` +
 					"不想按金额限量就删掉 QUOTA_MAX_COST_YUAN，改用 QUOTA_MAX_TOKENS 限 token 数",
 			});
+		}
+		// 启用了轻量档，它的用量会按其模型名进金额折算；缺价会被归入
+		// unpricedModels 而不计入金额，等于给轻量档开了金额熔断的后门。
+		if (config.modelLiteName !== undefined) {
+			const liteMissing = [
+				config.modelLiteInputPriceYuan === undefined ? "MODEL_LITE_INPUT_PRICE" : undefined,
+				config.modelLiteOutputPriceYuan === undefined ? "MODEL_LITE_OUTPUT_PRICE" : undefined,
+			].filter((key) => key !== undefined);
+			if (liteMissing.length > 0) {
+				errors.push({
+					key: liteMissing.join(" / "),
+					reason: "启用了轻量档且配了金额配额，但轻量档单价缺失，金额熔断对轻量任务不生效",
+					advice: `补齐 ${liteMissing.join(" 与 ")}，或删除 QUOTA_MAX_COST_YUAN 改用 token 限量`,
+				});
+			}
 		}
 	}
 
@@ -302,7 +389,8 @@ export function describeConfig(config: AppConfig): string {
 		`  端口          ${config.port}`,
 		`  工作区        ${config.workspaceDir}`,
 		`  模型服务      ${config.modelBaseUrl}`,
-		`  模型          ${config.modelName}`,
+		`  旗舰模型      ${config.modelName}`,
+		`  轻量模型      ${config.modelLiteName ?? "未配置（回落旗舰）"}`,
 		`  API Key       ${config.modelApiKey === "" ? "未配置" : "已配置"}`,
 		`  模型单价      ${describePrices(config)}`,
 		`  任务并发上限   ${config.maxConcurrentTasks}`,

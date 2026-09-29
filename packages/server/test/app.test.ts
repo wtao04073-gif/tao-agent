@@ -234,6 +234,38 @@ describe("任务接口", () => {
 		expect(body.error).toContain("场景标识");
 	});
 
+	it("tier 缺省按 flagship 透传", async () => {
+		const { port, calls } = await serve();
+		await call(port, "/api/tasks", {
+			method: "POST",
+			body: JSON.stringify({ scenarioId: "univ.official-notice", fields: {} }),
+		});
+		const passed = calls.submitTask?.[0] as { input: { tier?: string } };
+		expect(passed.input.tier).toBe("flagship");
+	});
+
+	it("tier=lite 被接受并透传", async () => {
+		const { port, calls } = await serve();
+		await call(port, "/api/tasks", {
+			method: "POST",
+			body: JSON.stringify({ scenarioId: "univ.official-notice", fields: {}, tier: "lite" }),
+		});
+		const passed = calls.submitTask?.[0] as { input: { tier?: string } };
+		expect(passed.input.tier).toBe("lite");
+	});
+
+	it("tier 非法值回 400 且不创建任务", async () => {
+		const { port, calls } = await serve();
+		for (const bad of ["pro", "LITE", 123, { x: 1 }, true]) {
+			const { status } = await call(port, "/api/tasks", {
+				method: "POST",
+				body: JSON.stringify({ scenarioId: "univ.official-notice", fields: {}, tier: bad }),
+			});
+			expect(status, String(bad)).toBe(400);
+		}
+		expect(calls.submitTask).toBeUndefined();
+	});
+
 	it("请求体不是 JSON 时回 400 而非 500", async () => {
 		const { port } = await serve();
 		const { status, body } = await call(port, "/api/tasks", {

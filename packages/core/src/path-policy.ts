@@ -92,11 +92,15 @@ function segments(path: string): string[] {
  * @param candidate 待判定路径。可以是相对或绝对。
  * @param workspace 任务工作区绝对路径。候选路径必须落在其内（或落在授权目录内）。
  * @param grantedDirs 用户/管理员显式授权的目录（绝对路径）。
+ * @param allowedFiles 文件级白名单（绝对路径）：仅放行与其中某条**精确相等**
+ *        的路径，绝不按目录前缀扩权 —— 授权了 `…/a.xlsx` 不代表能读同目录的
+ *        `…/b.xlsx`。用于任务表单实际引用的上传输入文件。
  */
 export function checkPath(
 	candidate: string,
 	workspace: string,
 	grantedDirs: readonly string[] = [],
+	allowedFiles: readonly string[] = [],
 ): PathVerdict {
 	// 1. 规范化。必须先做，否则 ../ 穿越能绕过所有前缀匹配。
 	const absolute = isAbsolute(candidate) ? normalize(candidate) : resolve(workspace, candidate);
@@ -148,6 +152,12 @@ export function checkPath(
 
 	// 6. 必须落在工作区或授权目录内
 	if (insideWorkspace) return ALLOWED;
+
+	// 文件级白名单：只认规范化后的精确相等，绝不以前缀匹配，因此授权一个文件
+	// 不会顺带放开其同目录（或任何前缀相似）的其他文件。
+	for (const allowed of allowedFiles) {
+		if (absolute === normalize(allowed)) return ALLOWED;
+	}
 
 	for (const granted of grantedDirs) {
 		const normalizedGrant = normalize(granted);

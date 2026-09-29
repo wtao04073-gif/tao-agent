@@ -45,9 +45,26 @@ export {
 	readJsonBody,
 	sendError,
 	sendJson,
+	ticketResource,
 	type AppDeps,
 	type Principal,
 } from "./app.ts";
+
+export {
+	DEFAULT_TICKET_TTL_MS,
+	TicketService,
+	type ConsumeTicketInput,
+	type IssueTicketInput,
+	type TicketKind,
+} from "./tickets.ts";
+
+export {
+	isSafeTaskId,
+	resolveRegisteredArtifact,
+	taskArtifactDir,
+} from "./artifacts.ts";
+
+export { assertSubmissionValid } from "./submission.ts";
 
 /**
  * 角色枚举的再导出。

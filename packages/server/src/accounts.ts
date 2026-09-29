@@ -14,7 +14,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { Role, type Role as RoleType, type TenantContext } from "@tao/core";
 
 /** 一个用户账号。 */
@@ -69,9 +69,43 @@ export function defaultAccounts(): AccountDirectory {
 	};
 }
 
+/**
+ * 单段安全标识判定（tenantId / workspaceId / userId 共用）。
+ *
+ * 这三个值会被直接拼进文件系统路径，accounts.json 又允许运维编辑，必须按不可信
+ * 输入处理。只放行字母、数字、连字符、下划线：白名单天然挡掉路径分隔符
+ * （`/`、`\`）、点段（`.`、`..`）、空白与控制符，从源头消除目录逃逸，也避免
+ * 「a/b + c」与「a + b/c」这类多段标识碰撞到同一目录。
+ */
+export function isSafeSegment(value: unknown): value is string {
+	return typeof value === "string" && /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+/**
+ * 解析某账号的工作区目录，并兜底保证它仍在工作区根之内。
+ *
+ * 账号校验已用 isSafeSegment 拦过多段 / 点段标识，这里再做一次边界断言属于
+ * defense-in-depth：即便有标识绕过校验直接到达路径拼接处，`..` 之类的输入也
+ * 无法把目录解析到工作区根之外。越界直接抛错，调用方不得据此 mkdir。
+ */
+export function resolveWorkspaceDir(root: string, tenantId: string, workspaceId: string): string {
+	const base = resolve(root);
+	const target = resolve(base, tenantId, workspaceId);
+	if (target !== base && !target.startsWith(`${base}${sep}`)) {
+		throw new Error(`工作区路径越界：${tenantId}/${workspaceId} 解析到工作区根之外`);
+	}
+	return target;
+}
+
 /** 逐账号校验，返回人类可读的错误清单（坏配置要在启动时拦住）。 */
 export function validateAccounts(dir: AccountDirectory): readonly string[] {
 	const errors: string[] = [];
+	// 空目录会让服务照常启动，但 authenticateToken 对任何 token 都查不到账号，
+	// 所有受保护接口永久 401 —— 这正是本应在启动时拦住的坏配置。
+	if (!Array.isArray(dir.accounts) || dir.accounts.length === 0) {
+		errors.push("accounts 至少需要一个账号，否则没有人能登录");
+		return errors;
+	}
 	const tokens = new Set<string>();
 	for (const [i, a] of dir.accounts.entries()) {
 		const where = `第 ${i + 1} 个账号（${a.name ?? "未命名"}）`;
@@ -82,7 +116,11 @@ export function validateAccounts(dir: AccountDirectory): readonly string[] {
 		if (tokens.has(a.token)) errors.push(`${where}：token 与其它账号重复`);
 		tokens.add(a.token);
 		for (const k of ["tenantId", "workspaceId", "userId"] as const) {
-			if (typeof a[k] !== "string" || a[k].trim() === "") errors.push(`${where}：${k} 为空`);
+			if (typeof a[k] !== "string" || a[k].trim() === "") {
+				errors.push(`${where}：${k} 为空`);
+			} else if (!isSafeSegment(a[k])) {
+				errors.push(`${where}：${k} 必须是单段安全标识，只允许字母、数字、连字符、下划线（不能含 /、\\、空白，也不能是 . 或 ..）`);
+			}
 		}
 		if (!Object.values(Role).includes(a.role)) {
 			errors.push(`${where}：role 非法（${String(a.role)}）`);
