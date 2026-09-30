@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理后台 · 办公 Agent 平台</title>
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/web.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主内容</a>
+<div class="app">
+  <div data-sidenav="admin"></div>
+  <div class="main">
+    <header class="topbar">
+      <h1>管理后台</h1>
+      <span class="topbar__sub">用量看板、配额与审计日志（仅租户管理员）</span>
+      <span class="topbar__spacer"></span>
+      <button class="iconbtn" data-theme-toggle type="button">☾</button>
+    </header>
+
+    <main class="page" id="main">
+      <div id="forbidden" class="empty" hidden>
+        <div class="empty__icon">🔒</div><h3>需要租户管理员权限</h3>
+        <p>当前账号不是管理员。如确认应当有权限，请联系平台管理员在 accounts.json 中调整角色。</p>
+      </div>
+
+      <div id="panel" class="row-gap" hidden>
+        <section class="section">
+          <div class="section__head"><h2>用量概览（本月）</h2><span class="spacer"></span>
+            <span class="muted" id="period" style="font-size:var(--fs-12)"></span></div>
+          <div class="stat-grid" id="stats"></div>
+          <div id="quotaBox" style="margin-top:var(--sp-3)"></div>
+          <div id="unpriced" hidden style="margin-top:var(--sp-3)"></div>
+        </section>
+
+        <section class="section">
+          <div class="section__head"><h2>按用户下钻</h2></div>
+          <div class="card"><div class="card__body" style="padding:0">
+            <table class="tbl num"><thead><tr><th>用户</th><th>Token</th><th>任务</th><th>费用（元）</th><th>占比</th></tr></thead>
+            <tbody id="byUser"></tbody></table>
+          </div></div>
+        </section>
+
+        <section class="section">
+          <div class="section__head"><h2>按模型下钻</h2></div>
+          <div class="card"><div class="card__body" style="padding:0">
+            <table class="tbl num"><thead><tr><th>模型</th><th>Token</th><th>任务</th><th>费用（元）</th></tr></thead>
+            <tbody id="byModel"></tbody></table>
+          </div></div>
+        </section>
+
+        <section class="section">
+          <div class="section__head"><h2>审计日志（本月）</h2></div>
+          <div class="card"><div class="card__body" style="padding:0">
+            <table class="tbl"><thead><tr><th>时间</th><th>用户</th><th>工具</th><th>决策</th><th>原因</th></tr></thead>
+            <tbody id="audit"></tbody></table>
+            <div class="empty" id="auditEmpty" hidden><p>本月暂无审计记录。</p></div>
+          </div></div>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="/assets/core.js"></script>
+<script>
+(function () {
+	App.bootstrap("admin").then(function (me) {
+		if (!me) return;
+		if (me.role !== "TENANT_ADMIN" && me.role !== "PLATFORM_ADMIN") {
+			document.getElementById("forbidden").hidden = false;
+			return;
+		}
+		document.getElementById("panel").hidden = false;
+		loadUsage(); loadAudit();
+	});
+
+	function yuan(micro) { return (micro / 1_000_000).toFixed(2); }
+
+	async function loadUsage() {
+		var r = await App.api("GET", "/api/admin/usage");
+		if (!r.ok) { App.Toast.show("加载用量失败", r.data.error, "err"); return; }
+		var d = r.data;
+		var t = d.totals || {};
+		document.getElementById("period").textContent =
+			new Date(d.period.from).toLocaleDateString("zh-CN") + " — " + new Date(d.period.to).toLocaleDateString("zh-CN");
+		document.getElementById("stats").innerHTML =
+			stat(t.totalTokens || 0, "总 Token") +
+			stat((t.inputTokens || 0) + " / " + (t.outputTokens || 0), "输入 / 输出") +
+			stat(t.taskCount || 0, "任务数") +
+			stat(yuan(d.costMicroYuan || 0), "估算费用（元）");
+
+		// 配额
+		var qb = document.getElementById("quotaBox");
+		if (d.quota && d.quota.limits && d.quota.limits.length) {
+			qb.innerHTML = d.quota.limits.map(function (l) {
+				var pct = Math.min(100, Math.round((l.ratio || 0) * 100));
+				var cls = pct >= 100 ? " progress--err" : pct >= 80 ? " progress--warn" : "";
+				return '<div style="margin:6px 0"><div class="inline-gap" style="justify-content:space-between;font-size:var(--fs-12)">' +
+					"<span>" + App.esc(l.label) + "</span><span>" + App.esc(l.usedText) + " / " + App.esc(l.limitText) +
+					"（" + pct + "%）</span></div>" +
+					'<div class="progress' + cls + '" style="margin-top:2px"><div class="progress__fill" style="width:' + pct + '%"></div></div></div>';
+			}).join("");
+		} else {
+			qb.innerHTML = '<p class="muted" style="font-size:var(--fs-12)">未配置配额上限（私有化默认形态，不限量）。</p>';
+		}
+
+		var up = document.getElementById("unpriced");
+		if ((d.unpricedModels || []).length) {
+			up.hidden = false;
+			up.innerHTML = '<div class="banner banner--warn"><span aria-hidden="true">⚠</span><div>' +
+				"以下模型未配置单价，其费用未计入金额统计：<b>" + App.esc(d.unpricedModels.join("、")) +
+				"</b>。金额相关结论不完整，请在部署配置中补 MODEL_INPUT_PRICE / MODEL_OUTPUT_PRICE。</div></div>";
+		}
+
+		document.getElementById("byUser").innerHTML = breakdownRows(d.byUser, true);
+		document.getElementById("byModel").innerHTML = breakdownRows(d.byModel, false);
+	}
+
+	function stat(v, l) {
+		return '<div class="stat"><div class="stat__v">' + (typeof v === "number" ? v.toLocaleString() : App.esc(v)) +
+			'</div><div class="stat__l">' + App.esc(l) + "</div></div>";
+	}
+	function breakdownRows(rows, withShare) {
+		if (!rows || !rows.length) return '<tr><td colspan="5" class="muted" style="padding:var(--sp-3)">暂无数据</td></tr>';
+		return rows.map(function (b) {
+			return "<tr><td>" + App.esc(b.label) + "</td><td>" + (b.totalTokens || 0).toLocaleString() + "</td>" +
+				"<td>" + (b.taskCount || 0) + "</td><td>" + yuan(b.costMicroYuan || 0) + "</td>" +
+				(withShare ? "<td>" + Math.round((b.share || 0) * 100) + "%</td>" : "") + "</tr>";
+		}).join("");
+	}
+
+	async function loadAudit() {
+		var r = await App.api("GET", "/api/admin/audit");
+		if (!r.ok) { if (r.status !== 403) App.Toast.show("加载审计失败", r.data.error, "err"); return; }
+		var entries = (r.data.entries || []).slice().sort(function (a, b) { return b.at - a.at; });
+		document.getElementById("auditEmpty").hidden = entries.length > 0;
+		var meta = { allowed: ["允许", "tag--ok"], blocked: ["拦截", "tag--err"], await_confirm: ["待确认", "tag--warn"] };
+		document.getElementById("audit").innerHTML = entries.slice(0, 200).map(function (e) {
+			var m = meta[e.decision] || [e.decision, ""];
+			return "<tr><td class='mono'>" + new Date(e.at).toLocaleString("zh-CN") + "</td><td>" +
+				App.esc(e.userId || "") + "</td><td>" + App.esc(e.tool) + "</td>" +
+				'<td><span class="tag ' + m[1] + '">' + m[0] + "</span></td><td>" + App.esc(e.reason || "") + "</td></tr>";
+		}).join("");
+	}
+})();
+</script>
+</body>
+</html>

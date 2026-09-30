@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>任务会话（移动端）· 办公 Agent 平台</title>
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/web.css">
+</head>
+<body class="mobile">
+<div class="m-app">
+  <header class="m-topbar">
+    <a class="m-back" href="/mobile/tasks.html" aria-label="返回任务列表">←</a>
+    <h1 id="mTitle">任务</h1>
+    <button class="m-back" data-theme-toggle type="button">☾</button>
+  </header>
+
+  <div class="m-body m-body--stream">
+    <div id="status" style="display:flex;align-items:center;gap:var(--sp-2)"></div>
+
+    <div id="confirmZone" class="confirm-card" hidden style="margin:0">
+      <div class="confirm-card__t">⚠ 需要你确认</div>
+      <div class="confirm-card__r" id="confirmReason" style="font-size:var(--fs-13)"></div>
+      <div class="btn-row">
+        <button class="btn btn--primary btn--sm" type="button" id="btnConfirm">确认执行</button>
+        <button class="btn btn--danger btn--sm" type="button" id="btnReject">拒绝</button>
+      </div>
+    </div>
+
+    <div id="fail" class="banner banner--err" hidden>
+      <span aria-hidden="true">⚠</span><span id="failText"></span>
+    </div>
+
+    <div class="m-chat" id="timeline"></div>
+
+    <div id="artifacts" style="display:grid;gap:var(--sp-2)"></div>
+  </div>
+
+  <footer style="padding:var(--sp-3);border-top:1px solid var(--line);background:var(--bg-surface)">
+    <div id="steerBox" class="m-composer">
+      <textarea id="steerText" rows="1" placeholder="执行中可继续追问（当前步骤完成后送达）"></textarea>
+      <button class="btn btn--primary" type="button" id="btnSteer">发送</button>
+    </div>
+    <button class="btn btn--danger btn--sm btn--block" id="btnCancel" style="margin-top:8px" hidden>取消任务</button>
+  </footer>
+</div>
+
+<script src="/assets/core.js"></script>
+<script>
+(function () {
+	var taskId = new URLSearchParams(location.search).get("task");
+	if (!taskId) { location.href = "/mobile/tasks.html"; return; }
+	var task = null, events = [], seen = new Set(), artifacts = [], sub = null;
+
+	App.bootstrap("tasks").then(function () { loadTask(); openStream(); setInterval(refresh, 6000); });
+
+	async function loadTask() {
+		var r = await App.api("GET", "/api/tasks/" + encodeURIComponent(taskId));
+		if (!ok(r)) { if (r.status === 404) location.href = "/mobile/tasks.html"; return; }
+		task = r.data;
+		render();
+	}
+	function ok(r) { return r.ok; }
+	async function refresh() {
+		var r = await App.api("GET", "/api/tasks/" + encodeURIComponent(taskId));
+		if (r.ok) { task = r.data; syncArts(); render(); }
+	}
+	function openStream() {
+		sub = App.subscribe(taskId, { onEvent: onEvent });
+	}
+	function onEvent(ev) {
+		if (!ev || seen.has(ev.seq)) return;
+		seen.add(ev.seq); events.push(ev);
+		if (ev.type === "artifact") {
+			var n = ev.name;
+			if (!artifacts.some(function (a) { return a.name === n; })) artifacts.push(ev);
+		}
+		if (ev.type === "status") task = Object.assign({}, task || {}, { status: ev.to, reason: ev.reason });
+		syncArts(); render();
+	}
+	function syncArts() {
+		(task && task.artifacts || []).forEach(function (p) {
+			var name = String(p).split(/[\\/]/).pop();
+			if (name && !artifacts.some(function (a) { return a.name === name; })) artifacts.push({ name: name, sizeBytes: 0 });
+		});
+	}
+
+	function render() {
+		if (!task) return;
+		document.getElementById("mTitle").textContent = task.scenarioTitle || "任务";
+		document.getElementById("status").innerHTML = App.statusTag(task.status) +
+			'<span class="muted" style="font-size:var(--fs-12)">' + App.ago(task.updatedAt) + "</span>";
+
+		var live = task.status === "RUNNING" || task.status === "QUEUED";
+		document.getElementById("steerBox").style.display = live ? "flex" : "none";
+		document.getElementById("btnCancel").hidden = !(live || task.status === "AWAIT_CONFIRM");
+		document.getElementById("confirmZone").hidden = task.status !== "AWAIT_CONFIRM";
+		if (task.status === "AWAIT_CONFIRM") {
+			var dec = events.slice().reverse().find(function (e) { return e.type === "tool_decision" && e.decision === "await_confirm"; });
+			document.getElementById("confirmReason").textContent = (dec && dec.reason) || task.reason || "该动作需确认。";
+		}
+		var fail = document.getElementById("fail");
+		fail.hidden = task.status !== "FAILED";
+		if (!fail.hidden) document.getElementById("failText").textContent = task.reason || "执行失败";
+
+		var sorted = events.slice().sort(function (a, b) { return a.seq - b.seq; });
+		document.getElementById("timeline").innerHTML = sorted.map(item).join("");
+
+		document.getElementById("artifacts").innerHTML = artifacts.map(function (a) {
+			return '<a class="artifact-row" href="#" data-ticket-download="artifact"' +
+				' data-task="' + App.esc(String(taskId)) + '" data-name="' + App.esc(a.name) + '">' +
+				App.fileIcon(a.name) +
+				'<span class="artifact-row__name">' + App.esc(a.name) + "</span>" +
+				(a.sizeBytes ? '<span class="artifact-row__size">' + App.fmtBytes(a.sizeBytes) + "</span>" : "") +
+				'<span class="artifact-row__size">下载 ↓</span></a>';
+		}).join("");
+	}
+
+	function item(ev) {
+		var icon, text, sub2 = "", cls = "";
+		if (ev.type === "step") {
+			icon = ev.phase === "failed" ? "✕" : ev.phase === "finished" ? "✓" : "▸";
+			text = "第 " + ev.step + " 步 · " + App.esc(ev.action); sub2 = ev.detail; cls = ev.phase === "failed" ? "tl-item--err" : "tl-item--run";
+		} else if (ev.type === "status") {
+			icon = { RUNNING: "▶", QUEUED: "⏳", AWAIT_CONFIRM: "❓", SUCCEEDED: "✓", FAILED: "✕", CANCELLED: "⊘" }[ev.to] || "•";
+			text = App.STATUS[ev.to] ? App.STATUS[ev.to].label : ev.to; sub2 = ev.reason;
+			cls = ev.to === "FAILED" || ev.to === "CANCELLED" ? "tl-item--err" : ev.to === "SUCCEEDED" ? "tl-item--ok" : "tl-item--run";
+		} else if (ev.type === "tool_decision") {
+			icon = ev.decision === "await_confirm" ? "❓" : ev.decision === "blocked" ? "⛔" : "✓";
+			text = (ev.decision === "await_confirm" ? "待确认 " : ev.decision === "blocked" ? "已拦截 " : "允许 ") + App.esc(ev.toolName);
+			sub2 = ev.reason; cls = ev.decision === "blocked" ? "tl-item--err" : ev.decision === "await_confirm" ? "tl-item--warn" : "";
+		} else if (ev.type === "user_message") {
+			return '<div style="display:flex;justify-content:flex-end"><div class="chat-bubble">' + App.esc(ev.text) + "</div></div>";
+		} else if (ev.type === "usage") {
+			icon = "∑"; text = "模型用量 " + App.esc(ev.model); sub2 = "输入 " + ev.inputTokens + " / 输出 " + ev.outputTokens;
+		} else if (ev.type === "artifact") {
+			icon = "📎"; text = "产出 " + App.esc(ev.name); cls = "tl-item--ok";
+		} else return "";
+		return '<div class="tl-item ' + cls + '"><span class="tl-item__icon">' + icon + '</span>' +
+			'<div class="tl-item__main"><div class="tl-item__action">' + text + "</div>" +
+			(sub2 ? '<div class="tl-item__detail">' + App.esc(sub2) + "</div>" : "") + "</div></div>";
+	}
+	function act(action, payload) {
+		return async function () {
+			var r = await App.api("POST", "/api/tasks/" + encodeURIComponent(taskId) + "/" + action, payload || {});
+			if (r.ok) { App.Toast.show("已提交", "", "ok"); setTimeout(refresh, 500); }
+			else App.Toast.show("操作失败", r.data.error, "err");
+		};
+	}
+	document.getElementById("btnConfirm").addEventListener("click", act("confirm", {}));
+	document.getElementById("btnReject").addEventListener("click", act("reject", { reason: "用户拒绝了该高危动作" }));
+	document.getElementById("btnCancel").addEventListener("click", function () {
+		if (confirm("确认取消该任务？")) act("cancel", { reason: "用户在移动端取消" })();
+	});
+	document.getElementById("btnSteer").addEventListener("click", async function () {
+		var ta = document.getElementById("steerText");
+		var text = ta.value.trim();
+		if (!text) return;
+		var r = await App.api("POST", "/api/tasks/" + encodeURIComponent(taskId) + "/steer", { text: text });
+		if (r.ok) { ta.value = ""; App.Toast.show("已收到", r.data.message || "当前步骤完成后送达", "ok"); }
+		else App.Toast.show("发送失败", r.data.error, "err");
+	});
+})();
+</script>
+</body>
+</html>

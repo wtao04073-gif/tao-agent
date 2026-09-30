@@ -1,0 +1,728 @@
+/**
+ * RunnerAdapter 适配层测试
+ *
+ * 这些测试跑**真实的内核**（用假模型，全程离线），因为适配层里有几处
+ * `as never` 断言绕过了内核类型 —— 编译通过不代表运行时正确，
+ * 只有真跑一遍才知道接线对不对。
+ *
+ * 同时验证 M0 三条约束在代码层面真的生效，而非仅写在注释里。
+ */
+
+import { rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
+import { MemoryStorage } from "../../../vendor/pi/agent/src/harness/session/memory.ts";
+import { StorageBackedSession } from "../../../vendor/pi/agent/src/harness/session/session.ts";
+import type { PlatformTool, TaskEvent, TenantContext, ToolDecision } from "@tao/core";
+import { afterEach, describe, expect, it } from "vitest";
+import { InProcessRunnerFactory } from "../src/in-process-runner.ts";
+
+const TENANT: TenantContext = {
+	tenantId: "tenant-1",
+	workspaceId: "workspace-1",
+	userId: "user-1",
+};
+
+const openSessions: StorageBackedSession[] = [];
+
+/** 建一个隔离的运行时：独立存储 + 独立假模型。 */
+function createRuntime() {
+	const faux = fauxProvider();
+	const models = createModels();
+	models.setProvider(faux.provider);
+
+	let clock = 1_000;
+	const factory = new InProcessRunnerFactory({
+		async createSession(sessionId) {
+			const session = new StorageBackedSession(
+				{ id: sessionId, createdAt: 1, storageVersion: 1 },
+				new MemoryStorage(),
+			);
+			openSessions.push(session);
+			return session;
+		},
+		models,
+		model: faux.getModel(),
+		// 固定时钟：事件时间戳可预测，断言不受真实时间影响
+		now: () => (clock += 1),
+	});
+
+	return { factory, faux };
+}
+
+/** 一个可观测的结构化工具。 */
+function spyTool(name: string, label: string) {
+	const calls: unknown[] = [];
+	const tool: PlatformTool = {
+		name,
+		label,
+		description: `test tool ${name}`,
+		parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+		async execute({ args, report }) {
+			calls.push(args);
+			report("处理了 100 行");
+			return { text: `${name} 完成` };
+		},
+	};
+	return { tool, calls };
+}
+
+const allowAll: ToolDecision = { kind: "allow" };
+
+describe("RunnerAdapter 适配层", () => {
+	afterEach(async () => {
+		for (const s of openSessions.splice(0)) await s.close(BACKGROUND_CONTEXT).catch(() => {});
+	});
+
+	it("端到端：工具被调用，事件带 taskId 与租户标识", async () => {
+		const { factory, faux } = createRuntime();
+		const { tool, calls } = spyTool("reconcile", "核对对账表");
+
+		const runner = await factory.createRunner({
+			tenant: TENANT,
+			taskId: "task-1",
+			sessionId: "session-1",
+			systemPrompt: "你是对账助手",
+			tools: [tool],
+			gate: () => allowAll,
+		});
+
+		const events: TaskEvent[] = [];
+		runner.subscribe((e) => void events.push(e));
+
+		faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("reconcile", { value: "两张表" })]),
+			fauxAssistantMessage("核对完成"),
+		]);
+
+		await runner.prompt("核对这两张表");
+
+		// 工具真的被调用了（证明适配层的 execute 接线正确）
+		expect(calls).toEqual([{ value: "两张表" }]);
+
+		// 每一个事件都带 taskId 与完整租户上下文 ——
+		// M0 确认内核事件不带会话标识，打标是宿主的责任
+		expect(events.length).toBeGreaterThan(0);
+		for (const event of events) {
+			expect(event.taskId).toBe("task-1");
+			expect(event.tenant).toEqual(TENANT);
+		}
+
+		await runner.close();
+	});
+
+	it("步骤事件用业务语言，不泄漏工具名", async () => {
+		const { factory, faux } = createRuntime();
+		const { tool } = spyTool("reconcile_tables_v2", "核对供应商对账表");
+
+		const runner = await factory.createRunner({
+			tenant: TENANT,
+			taskId: "task-2",
+			sessionId: "session-2",
+			systemPrompt: "s",
+			tools: [tool],
+			gate: () => allowAll,
+		});
+
+		const steps: string[] = [];
+		runner.subscribe((e) => {
+			if (e.type === "step") steps.push(e.action);
+		});
+
+		faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("reconcile_tables_v2", { value: "x" })]),
+			fauxAssistantMessage("done"),
+		]);
+		await runner.prompt("go");
+
+		// 用户看到的是业务语言
+		expect(steps).toContain("核对供应商对账表");
+		// 而不是工具名 —— 前端不该认识工具名
+		expect(steps.join("|")).not.toContain("reconcile_tables_v2");
+
+		await runner.close();
+	});
+
+	it("步骤序号单调递增，事件 seq 连续无缺口", async () => {
+		const { factory, faux } = createRuntime();
+		const a = spyTool("step_a", "第一步");
+		const b = spyTool("step_b", "第二步");
+
+		const runner = await factory.createRunner({
+			tenant: TENANT,
+			taskId: "task-3",
+			sessionId: "session-3",
+			systemPrompt: "s",
+			tools: [a.tool, b.tool],
+			gate: () => allowAll,
+		});
+
+		const events: TaskEvent[] = [];
+		runner.subscribe((e) => void events.push(e));
+
+		faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("step_a", { value: "1" })]),
+			fauxAssistantMessage([fauxToolCall("step_b", { value: "2" })]),
+			fauxAssistantMessage("done"),
+		]);
+		await runner.prompt("两步");
+
+		// seq 必须连续 —— 前端靠它断线重连拉增量，有缺口就会误判丢事件
+		const seqs = events.map((e) => e.seq);
+		expect(seqs).toEqual([...seqs].sort((x, y) => x - y));
+		expect(new Set(seqs).size).toBe(seqs.length); // 无重复
+
+		// 两个工具产生两个不同的步骤号
+		const startedSteps = events
+			.filter((e) => e.type === "step" && e.phase === "started")
+			.map((e) => (e.type === "step" ? e.step : 0));
+		expect(startedSteps).toEqual([1, 2]);
+
+		await runner.close();
+	});
+
+	it("权限门拒绝时工具不执行，并产生审计事件", async () => {
+		const { factory, faux } = createRuntime();
+		const { tool, calls } = spyTool("dangerous", "危险操作");
+
+		const runner = await factory.createRunner({
+			tenant: TENANT,
+			taskId: "task-4",
+			sessionId: "session-4",
+			systemPrompt: "s",
+			tools: [tool],
+			gate: () => ({ kind: "block", reason: "未授权的操作" }),
+		});
+
+		const decisions: TaskEvent[] = [];
+		runner.subscribe((e) => {
+			if (e.type === "tool_decision") decisions.push(e);
+		});
+
+		faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("dangerous", { value: "x" })]),
+			fauxAssistantMessage("done"),
+		]);
+		await runner.prompt("do it");
+
+		// 零次执行 —— 不是「返回错误」
+		expect(calls).toEqual([]);
+		// 决策被审计
+		expect(decisions).toHaveLength(1);
+		const decision = decisions[0];
+		expect(decision?.type === "tool_decision" ? decision.decision : undefined).toBe("blocked");
+		expect(decision?.type === "tool_decision" ? decision.reason : undefined).toBe("未授权的操作");
+
+		await runner.close();
+	});
+
+	it("权限门返回 confirm 时同样拦下执行，审计为 await_confirm", async () => {
+		const { factory, faux } = createRuntime();
+		const { tool, calls } = spyTool("needs_ok", "需确认的操作");
+
+		const runner = await factory.createRunner({
+			tenant: TENANT,
+			taskId: "task-5",
+			sessionId: "session-5",
+			systemPrompt: "s",
+			tools: [tool],
+			gate: () => ({ kind: "confirm", reason: "该操作将对外发送，请确认" }),
+		});
+
+		const decisions: Extract<TaskEvent, { type: "tool_decision" }>[] = [];
+		runner.subscribe((e) => {
+			if (e.type === "tool_decision") decisions.push(e);
+		});
+
+		faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("needs_ok", { value: "x" })]),
+			fauxAssistantMessage("done"),
+		]);
+		await runner.prompt("send it");
+
+		expect(calls).toEqual([]);
+		expect(decisions[0]?.decision).toBe("await_confirm");
+		expect(decisions[0]?.reason).toContain("请确认");
+
+		await runner.close();
+	});
+
+	it("权限门抛异常时 fail-closed（拒绝而非放行）", async () => {
+		// 这是安全上最关键的一条：权限逻辑有 bug 时行为必须是拒绝。
+		const { factory, faux } = createRuntime();
+		const { tool, calls } = spyTool("guarded", "受保护操作");
+
+		const runner = await factory.createRunner({
+			tenant: TENANT,
+			taskId: "task-6",
+			sessionId: "session-6",
+			systemPrompt: "s",
+			tools: [tool],
+			gate: () => {
+				throw new Error("权限判定崩了");
+			},
+		});
+
+		faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("guarded", { value: "x" })]),
+			fauxAssistantMessage("done"),
+		]);
+		await runner.prompt("go");
+
+		expect(calls).toEqual([]);
+		await runner.close();
+	});
+
+	it("steer 产生「当前步骤完成后送达」的事件，不打断执行", async () => {
+		const { factory, faux } = createRuntime();
+		const { tool } = spyTool("slow", "慢操作");
+
+		const runner = await factory.createRunner({
+			tenant: TENANT,
+			taskId: "task-7",
+			sessionId: "session-7",
+			systemPrompt: "s",
+			tools: [tool],
+			gate: () => allowAll,
+		});
+
+		const messages: Extract<TaskEvent, { type: "user_message" }>[] = [];
+		runner.subscribe((e) => {
+			if (e.type === "user_message") messages.push(e);
+		});
+
+		faux.setResponses([fauxAssistantMessage("第一轮完成")]);
+		await runner.prompt("第一个问题");
+		await runner.steer("顺便帮我看另一件事");
+
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.text).toBe("顺便帮我看另一件事");
+		// 口径必须是「排队等当前步骤完成」，不能承诺打断 ——
+		// 内核 steering 永不取消执行中的工具
+		expect(messages[0]?.delivery).toBe("queued_after_current_step");
+
+		await runner.close();
+	});
+
+	it("两个 Runner 并发：会话存储与事件流互不串台", async () => {
+		// M0 Spike 1 在内核层验过隔离；这里验适配层没有把它破坏掉
+		// （例如误用了共享的 sequencer 或共享的 listener 集合）。
+		const a = createRuntime();
+		const b = createRuntime();
+		const toolA = spyTool("tool_a", "A 的操作");
+		const toolB = spyTool("tool_b", "B 的操作");
+
+		const runnerA = await a.factory.createRunner({
+			tenant: { ...TENANT, tenantId: "tenant-A" },
+			taskId: "task-A",
+			sessionId: "session-A",
+			systemPrompt: "s",
+			tools: [toolA.tool],
+			gate: () => allowAll,
+		});
+		const runnerB = await b.factory.createRunner({
+			tenant: { ...TENANT, tenantId: "tenant-B" },
+			taskId: "task-B",
+			sessionId: "session-B",
+			systemPrompt: "s",
+			tools: [toolB.tool],
+			gate: () => allowAll,
+		});
+
+		const eventsA: TaskEvent[] = [];
+		const eventsB: TaskEvent[] = [];
+		runnerA.subscribe((e) => void eventsA.push(e));
+		runnerB.subscribe((e) => void eventsB.push(e));
+
+		a.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("tool_a", { value: "secret-A" })]),
+			fauxAssistantMessage("A done"),
+		]);
+		b.faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("tool_b", { value: "secret-B" })]),
+			fauxAssistantMessage("B done"),
+		]);
+
+		await Promise.all([runnerA.prompt("A 的任务"), runnerB.prompt("B 的任务")]);
+
+		// 每条事件流只含自己租户的 taskId
+		expect(eventsA.every((e) => e.taskId === "task-A")).toBe(true);
+		expect(eventsB.every((e) => e.taskId === "task-B")).toBe(true);
+		expect(eventsA.every((e) => e.tenant.tenantId === "tenant-A")).toBe(true);
+		expect(eventsB.every((e) => e.tenant.tenantId === "tenant-B")).toBe(true);
+
+		// 各自的工具只收到自己的参数
+		expect(toolA.calls).toEqual([{ value: "secret-A" }]);
+		expect(toolB.calls).toEqual([{ value: "secret-B" }]);
+
+		await runnerA.close();
+		await runnerB.close();
+	});
+
+	it("close 幂等，关闭后再操作报错", async () => {
+		const { factory } = createRuntime();
+		const runner = await factory.createRunner({
+			tenant: TENANT,
+			taskId: "task-8",
+			sessionId: "session-8",
+			systemPrompt: "s",
+			tools: [],
+			gate: () => allowAll,
+		});
+
+		await runner.close();
+		await runner.close(); // 幂等，不应抛错
+
+		await expect(runner.prompt("x")).rejects.toThrow(/已关闭/);
+	});
+
+	it("事件监听器抛异常不影响任务执行", async () => {
+		// 进度上报失败不等于任务失败 —— 否则一个前端 bug 能让所有任务挂掉。
+		const { factory, faux } = createRuntime();
+		const { tool, calls } = spyTool("work", "干活");
+
+		const runner = await factory.createRunner({
+			tenant: TENANT,
+			taskId: "task-9",
+			sessionId: "session-9",
+			systemPrompt: "s",
+			tools: [tool],
+			gate: () => allowAll,
+		});
+
+		runner.subscribe(() => {
+			throw new Error("监听器坏了");
+		});
+		const received: TaskEvent[] = [];
+		runner.subscribe((e) => void received.push(e));
+
+		faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("work", { value: "x" })]),
+			fauxAssistantMessage("done"),
+		]);
+		await runner.prompt("go");
+
+		// 工具照常执行，另一个监听器照常收到事件
+		expect(calls).toHaveLength(1);
+		expect(received.length).toBeGreaterThan(0);
+
+		await runner.close();
+	});
+	/**
+	 * 内核的生成失败不走异常，走 `run_end{status:"failed"}` 事件。
+	 *
+	 * 这一组测试的存在理由：曾经真的漏接了这个事件，后果是
+	 * **任务被报成成功、模型一次未被调用、零产出**，而日志里看不出任何异常。
+	 * 用户视角就是「显示完成但没有文件」。
+	 */
+	describe("内核运行失败必须冒泡", () => {
+		it("模型响应耗尽（provider 报错）时 prompt 抛错", async () => {
+			const { factory, faux } = createRuntime();
+			const { tool } = spyTool("work", "干活");
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-fail-1",
+				sessionId: "session-fail-1",
+				systemPrompt: "s",
+				tools: [tool],
+				gate: () => allowAll,
+			});
+
+			// 一条响应都不排 → faux 返回 "No more faux responses queued" 错误
+			faux.setResponses([]);
+
+			await expect(runner.prompt("go")).rejects.toThrow();
+			await runner.close();
+		});
+
+		it("失败信息里带上内核给的原因，便于定位", async () => {
+			const { factory, faux } = createRuntime();
+			const { tool } = spyTool("work", "干活");
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-fail-2",
+				sessionId: "session-fail-2",
+				systemPrompt: "s",
+				tools: [tool],
+				gate: () => allowAll,
+			});
+			faux.setResponses([]);
+
+			// 报错内容要能指向根因，而不是一句泛泛的「失败了」
+			await expect(runner.prompt("go")).rejects.toThrow(/内核运行失败/);
+			await runner.close();
+		});
+
+		it("上一次失败不影响下一次成功执行", async () => {
+			// 失败原因必须在每次 prompt 开始时清空，否则一次失败会让
+			// 后续所有执行都被误报为失败
+			const { factory, faux } = createRuntime();
+			const { tool } = spyTool("work", "干活");
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-fail-3",
+				sessionId: "session-fail-3",
+				systemPrompt: "s",
+				tools: [tool],
+				gate: () => allowAll,
+			});
+
+			faux.setResponses([]);
+			await expect(runner.prompt("第一次")).rejects.toThrow();
+
+			faux.setResponses([fauxAssistantMessage("这次好了")]);
+			await expect(runner.prompt("第二次")).resolves.toBeUndefined();
+
+			await runner.close();
+		});
+
+		it("activeTools 含未注册工具时在创建阶段就报错", async () => {
+			// 内核对此的处理是整个运行失败。提前报错才能给出「是哪个名字错了」
+			const { factory } = createRuntime();
+			const { tool } = spyTool("read_table", "读取表格");
+
+			await expect(
+				factory.createRunner({
+					tenant: TENANT,
+					taskId: "task-fail-4",
+					sessionId: "session-fail-4",
+					systemPrompt: "s",
+					tools: [tool],
+					gate: () => allowAll,
+					activeTools: ["read_table", "write_document"],
+				}),
+			).rejects.toThrow(/write_document/);
+		});
+
+		it("activeTools 是已注册工具的子集时正常工作", async () => {
+			const { factory, faux } = createRuntime();
+			const a = spyTool("read_table", "读取表格");
+			const b = spyTool("reconcile_tables", "核对");
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-ok",
+				sessionId: "session-ok",
+				systemPrompt: "s",
+				tools: [a.tool, b.tool],
+				gate: () => allowAll,
+				activeTools: ["read_table"],
+			});
+
+			faux.setResponses([fauxAssistantMessage("好")]);
+			await expect(runner.prompt("go")).resolves.toBeUndefined();
+			await runner.close();
+		});
+	});
+
+	describe("用量事件", () => {
+		it("usage 事件带真实模型名，不是 unknown", async () => {
+			/**
+			 * 这条断言是**真实服务跑通后补的**，而不是设计时就有的。
+			 *
+			 * 第一版翻译层从 `event.row.model` 读模型名，实测恒为 undefined ——
+			 * 内核的 `UsageRow` 只有 `{id, seq, usage, entryId, adjustment}`，
+			 * `Usage` 里也没有模型标识。模型名必须由宿主从配置注入。
+			 *
+			 * 缺陷有多隐蔽：用量事件照常上报、token 数完全正确，只有模型名
+			 * 是 "unknown"。而 M4-1 的 `estimateCost` 按模型名查单价 ——
+			 * 全归到 unknown 等于**全部未配价**，账面金额恒为 0。
+			 * 当时 764 项测试全绿，因为没有一条断言检查过模型名。
+			 */
+			const { factory, faux } = createRuntime();
+			const usages: Array<{ model: string; inputTokens: number }> = [];
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-usage",
+				sessionId: "session-usage",
+				systemPrompt: "s",
+				tools: [],
+				gate: () => allowAll,
+			});
+			runner.subscribe((event) => {
+				if (event.type === "usage") {
+					usages.push({ model: event.model, inputTokens: event.inputTokens });
+				}
+			});
+
+			faux.setResponses([fauxAssistantMessage("答复")]);
+			await runner.prompt("问题");
+			await runner.close();
+
+			expect(usages.length).toBeGreaterThanOrEqual(1);
+			// 关键：不是 "unknown"，而是真实配置的模型名
+			expect(usages[0]?.model).not.toBe("unknown");
+			expect(usages[0]?.model).toBe(faux.getModel().id);
+		});
+
+		it("用量落账拿到的模型名与事件一致", async () => {
+			// 事件用于展示、落账用于收费。两者模型名不一致会让看板与账单对不上
+			const { factory, faux } = createRuntime();
+			const metered: Array<{ model: string }> = [];
+			const eventModels: string[] = [];
+
+			const models = createModels();
+			models.setProvider(faux.provider);
+			const withMeter = new InProcessRunnerFactory({
+				async createSession(sessionId) {
+					const session = new StorageBackedSession(
+						{ id: sessionId, createdAt: 1, storageVersion: 1 },
+						new MemoryStorage(),
+					);
+					openSessions.push(session);
+					return session;
+				},
+				models,
+				model: faux.getModel(),
+				now: () => 1_700_000_000_000,
+				meter: (record) => void metered.push({ model: record.model }),
+			});
+
+			const runner = await withMeter.createRunner({
+				tenant: TENANT,
+				taskId: "task-meter",
+				sessionId: "session-meter",
+				systemPrompt: "s",
+				tools: [],
+				gate: () => allowAll,
+			});
+			runner.subscribe((event) => {
+				if (event.type === "usage") eventModels.push(event.model);
+			});
+
+			faux.setResponses([fauxAssistantMessage("答复")]);
+			await runner.prompt("问题");
+			// 落账是异步的，等它跑完
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await runner.close();
+
+			expect(metered.length).toBeGreaterThanOrEqual(1);
+			expect(metered[0]?.model).toBe(eventModels[0]);
+			expect(metered[0]?.model).not.toBe("unknown");
+		});
+
+		it("用量的 token 数逐项对应，不串字段", async () => {
+			// input/output/cacheRead/cacheWrite 写串了会让账目偏差而功能正常
+			const { factory, faux } = createRuntime();
+			const usages: Array<{
+				inputTokens: number;
+				outputTokens: number;
+				cacheReadTokens: number;
+				cacheWriteTokens: number;
+			}> = [];
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-tokens",
+				sessionId: "session-tokens",
+				systemPrompt: "s",
+				tools: [],
+				gate: () => allowAll,
+			});
+			runner.subscribe((event) => {
+				if (event.type === "usage") {
+					usages.push({
+						inputTokens: event.inputTokens,
+						outputTokens: event.outputTokens,
+						cacheReadTokens: event.cacheReadTokens,
+						cacheWriteTokens: event.cacheWriteTokens,
+					});
+				}
+			});
+
+			/**
+			 * 让 input 与 output 明显不等 —— 否则写串测不出来。
+			 *
+			 * faux provider 按**提示词与回复的实际长度**算 usage（忽略手填的
+			 * usage 字段），所以用一个很短的提问配一段很长的回复：
+			 * input 会远小于 output。
+			 */
+			const longReply = "这是一段很长的回复。".repeat(40);
+			faux.setResponses([fauxAssistantMessage(longReply)]);
+			await runner.prompt("短问");
+			await runner.close();
+
+			const usage = usages[0];
+			expect(usage).toBeDefined();
+
+			/**
+			 * 用**互不相同的值**逐项对号，不能只断言「是数字」。
+			 *
+			 * 这条断言被变异测试加强过：原版只检查四项都是 number，
+			 * 把 `inputTokens: usage.input` 与 `outputTokens: usage.output`
+			 * 互换后依然通过 —— 因为 `fauxAssistantMessage` 的 usage 全是 0，
+			 * 交换 0 和 0 没有差别。
+			 *
+			 * 而这个缺陷在生产里代价不小：输出单价通常是输入的 4 倍，
+			 * 写串会让账目系统性偏差，且功能完全正常。
+			 */
+			// 短问长答 → output 必然远大于 input。写串会让这条反过来
+			expect(usage?.outputTokens).toBeGreaterThan((usage?.inputTokens ?? 0) * 3);
+			expect(usage?.inputTokens).toBeGreaterThan(0);
+			// 四项都是数字，不会让账目出现 NaN
+			for (const value of Object.values(usage ?? {})) {
+				expect(typeof value).toBe("number");
+				expect(Number.isNaN(value)).toBe(false);
+			}
+
+			/**
+			 * **已知未覆盖**：`cacheRead` 与 `cacheWrite` 互换测不出来。
+			 *
+			 * faux provider 只在同一会话的第二轮起才产生非零缓存值，
+			 * 为此造场景的成本高于收益 —— 两项单价接近，写串的账目偏差很小。
+			 * 若将来接入按缓存计费差异大的模型，这里要补一条同会话多轮的断言。
+			 */
+		});
+
+		it("工具成功且 details.outputPath 存在时发出 artifact 事件", async () => {
+			const { factory, faux } = createRuntime();
+			const outPath = join(tmpdir(), `tao-artifact-${Date.now()}-${Math.random()}.xlsx`);
+			writeFileSync(outPath, "PK-fake-bytes");
+
+			const producer: PlatformTool = {
+				name: "make_report",
+				label: "生成报告",
+				description: "产出一个文件",
+				parameters: { type: "object", properties: {} },
+				async execute() {
+					return { text: "已生成", details: { outputPath: outPath, validation: { ok: true } } };
+				},
+			};
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-art",
+				sessionId: "session-art",
+				systemPrompt: "s",
+				tools: [producer],
+				gate: () => allowAll,
+			});
+			const events: TaskEvent[] = [];
+			runner.subscribe((e) => void events.push(e));
+
+			faux.setResponses([
+				fauxAssistantMessage([fauxToolCall("make_report", {})]),
+				fauxAssistantMessage("done"),
+			]);
+			await runner.prompt("生成报告");
+
+			const artifacts = events.filter((e) => e.type === "artifact") as Array<
+				Extract<TaskEvent, { type: "artifact" }>
+			>;
+			expect(artifacts).toHaveLength(1);
+			expect(artifacts[0]?.artifactId).toBe(outPath);
+			expect(artifacts[0]?.final).toBe(true);
+			expect(artifacts[0]?.sizeBytes).toBe(Buffer.byteLength("PK-fake-bytes"));
+			expect(artifacts[0]?.mimeType).toContain("spreadsheet");
+
+			rmSync(outPath, { force: true });
+			await runner.close();
+		});
+	});
+});

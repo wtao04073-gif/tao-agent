@@ -1,0 +1,71 @@
+# 单机部署编排
+#
+# 目标：客户 IT 人员 2 小时内独立装成（M4 验收门禁）。
+# 所以这份文件刻意保持**只有一个服务**、无外部数据库、无消息队列 ——
+# 每多一个组件就多一处装不上的可能。
+#
+# 数据全部落在挂载卷里，用 SQLite 与本地文件。客户要上规模时
+# 再换 Postgres（接口已按可替换设计），但首次交付不该让客户装数据库。
+
+services:
+  tao-agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: tao-agent:0.1.0
+    container_name: tao-agent
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    ports:
+      # 左边是宿主端口，被占用时改 .env 里的 PORT 并同步这里
+      - "${PORT:-8080}:${PORT:-8080}"
+
+    volumes:
+      # 工作区：产物、知识库、会话数据。
+      #
+      # 用具名卷而非绑定挂载，避免宿主目录权限问题 ——
+      # 绑定挂载的 root/非 root 权限不匹配是私有化部署的高频故障，
+      # 表现是任务跑完但产物文件不存在。
+      - tao-workspace:/data/workspace
+
+      # 若客户要求产物落在指定的宿主目录（例如挂了 NAS），
+      # 把上面一行换成下面这行，并确保目录属主是 uid 1000：
+      #   - /your/host/path:/data/workspace
+
+    # 资源上限。
+    #
+    # 必须设：不设的话容器能吃满宿主机内存，把同机的其他服务拖死。
+    # 也让自检脚本读到的 cgroup 限额与实际一致 ——
+    # 它优先读 cgroup 而非 os.totalmem()，否则会按宿主机内存误判通过。
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+        reservations:
+          memory: 2G
+
+    healthcheck:
+      # 用自检脚本而非简单的 ping：端口通不代表能干活。
+      # 模型 API 不可达时服务仍在监听，但所有任务都会失败。
+      test: ["CMD", "node", "scripts/doctor.mjs"]
+      interval: 60s
+      timeout: 20s
+      # start_period 给足：首次启动要建目录、初始化数据库
+      start_period: 40s
+      retries: 3
+
+    # 日志轮转。不设的话长跑几个月会把磁盘写满 ——
+    # 而磁盘满的表现是任务莫名失败，很难联想到日志
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  tao-workspace:
+    driver: local

@@ -1,0 +1,68 @@
+# 依赖
+node_modules/
+.pnp
+.pnp.js
+
+# 构建产物
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# 环境与凭据
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Pi 运行时状态（会话与凭据不入库）
+.pi/
+sessions/
+*.jsonl
+
+# 日志
+*.log
+npm-debug.log*
+logs/
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 测试与缓存
+coverage/
+.nyc_output/
+.cache/
+*.tmp
+
+# Python（脚本工具用）
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ─────────────────────────────────────────────────────────────
+# vendor/ 是产品的一部分，必须完整入库
+# 上游代码已纳入本仓库管理，是「自主可控」的基础，
+# 任何情况下都不得被忽略规则误伤。新增忽略规则时请复核此处。
+# ─────────────────────────────────────────────────────────────
+!vendor/
+!vendor/**
+
+# 但 vendor 下的依赖与构建产物仍然不入库（上面的 !vendor/** 会把它们也解除忽略）
+vendor/**/node_modules/
+vendor/**/dist/
+vendor/**/*.tsbuildinfo
+
+# 例外：模型清单数据必须入库。
+# 上游 .gitignore 排除了它（由 generate-models 联网生成），
+# 我们从发布包提取后纳入源码树，以保证离线可编译。详见 vendor/pi/README.md
+!vendor/pi/ai/src/providers/data/
+!vendor/pi/ai/src/providers/data/**
+deploy/.env
+flux/.local
+flux/changes

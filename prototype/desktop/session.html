@@ -1,0 +1,1735 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话执行 · 办公 Agent 平台原型</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主内容</a>
+
+<div class="app">
+  <div data-sidenav=""></div>
+
+  <div class="main">
+    <header class="topbar">
+      <a class="btn btn--sm btn--ghost" href="workbench.html">← 工作台</a>
+      <h1 id="sessTitle">会话执行</h1>
+      <span class="topbar__sub" id="sessMeta">Spec 4.3</span>
+      <span class="topbar__spacer"></span>
+      <a class="btn btn--sm" href="tasks.html">任务中心</a>
+      <button class="iconbtn" data-theme-toggle type="button">☾</button>
+    </header>
+
+    <div class="page page--flush">
+      <div class="session">
+        <!-- ============ 左：对话与执行流 ============ -->
+        <div class="session__main" id="main">
+          <!-- 全局进行中任务提示条：即使在会话页也强调「任务与会话分离」 -->
+          <div class="session__notice" data-taskbar></div>
+
+          <div class="session__stream" id="stream" aria-live="polite" aria-relevant="additions"></div>
+
+          <!-- 输入区：任务执行期间同样保持可用（steering 语义） -->
+          <div class="session__composer">
+            <div class="composer">
+              <label class="sr-only" for="msgInput">输入消息</label>
+              <textarea id="msgInput" rows="2"
+                placeholder="任务执行期间也可以随时输入：追加要求、提问其他事情，都不会打断正在跑的任务"></textarea>
+              <div class="composer__bar">
+                <button class="btn btn--sm" type="button" id="attachBtn">📎 附件</button>
+                <button class="btn btn--sm" type="button" id="refKbBtn">📚 引用知识库</button>
+                <span id="chips" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+                <span class="spacer"></span>
+                <span class="composer__hint" id="composerHint">输入框始终可用</span>
+                <button class="btn btn--primary btn--sm" type="button" id="sendBtn">发送</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ============ 右：上下文侧栏 ============ -->
+        <aside class="session__side" aria-label="会话上下文">
+          <div class="side-sec">
+            <h4>当前任务</h4>
+            <div class="card"><div class="card__body" style="padding:var(--sp-3)">
+              <div id="sideTask"></div>
+            </div></div>
+          </div>
+
+          <div class="side-sec">
+            <h4>本会话其他进行中任务</h4>
+            <ul class="side-list" id="sideOthers"></ul>
+          </div>
+
+          <div class="side-sec">
+            <h4>本次生效的知识资产</h4>
+            <ul class="side-list" id="sideAssets"></ul>
+          </div>
+
+          <div class="side-sec">
+            <h4>用量（以产物与任务计）</h4>
+            <dl style="margin:0" id="sideUsage"></dl>
+          </div>
+
+          <div class="side-sec">
+            <h4>模型分层路由</h4>
+            <ul class="side-list">
+              <li><b>规划与裁决</b>旗舰档 · 2 次调用</li>
+              <li><b>常规执行</b>轻量档 · 主力承载</li>
+              <li><b>上下文缓存</b>命中率 71%</li>
+            </ul>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 产出物预览（原生 Office 文件，非 Markdown） ===== -->
+<div class="modal-backdrop" id="previewModal" aria-hidden="true">
+  <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="pvTitle">
+    <div class="modal__head">
+      <div><h2 id="pvTitle">产出物预览</h2><p id="pvMeta"></p></div>
+      <span class="spacer"></span>
+      <button class="iconbtn" type="button" data-modal-close="previewModal" aria-label="关闭">×</button>
+    </div>
+    <div class="modal__body" id="pvBody"></div>
+    <div class="modal__foot">
+      <span class="hint">已通过 Microsoft Office / WPS 双端打开校验</span>
+      <span class="spacer"></span>
+      <button class="btn" type="button" data-modal-close="previewModal">关闭</button>
+      <button class="btn btn--primary" type="button" id="pvDownload">下载原文件</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 提出修改意见（触发口径回写沉淀） ===== -->
+<div class="modal-backdrop" id="feedbackModal" aria-hidden="true">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="fbTitle">
+    <div class="modal__head">
+      <div><h2 id="fbTitle">提出修改意见</h2>
+      <p>意见会被结构化留存为本单位口径约束，下次同类任务自动应用。</p></div>
+      <span class="spacer"></span>
+      <button class="iconbtn" type="button" data-modal-close="feedbackModal" aria-label="关闭">×</button>
+    </div>
+    <div class="modal__body">
+      <div class="field">
+        <label class="field__label" for="fbKind">意见类型<span class="req">*</span></label>
+        <select id="fbKind">
+          <option>字段口径不符（统计方式）</option>
+          <option>格式与版式问题</option>
+          <option>用词与行文规范</option>
+          <option>数据错误</option>
+          <option>结构与章节顺序</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="field__label" for="fbScope">生效范围<span class="req">*</span></label>
+        <select id="fbScope">
+          <option>本工作区（教务处）</option>
+          <option>本租户全部工作区</option>
+          <option>仅我个人</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="field__label" for="fbText">具体意见<span class="req">*</span></label>
+        <textarea id="fbText" placeholder="如：师生比一律按折合在校生数计算，不计入在职攻读研究生。"></textarea>
+        <p class="error-msg" role="alert" id="fbErr">请填写具体意见内容</p>
+      </div>
+    </div>
+    <div class="modal__foot">
+      <span class="spacer"></span>
+      <button class="btn" type="button" data-modal-close="feedbackModal">取消</button>
+      <button class="btn btn--primary" type="button" id="fbSubmit">提交并沉淀</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 高危动作确认卡片（不静默执行） ===== -->
+<div class="modal-backdrop" id="dangerModal" aria-hidden="true">
+  <div class="modal modal--narrow" role="dialog" aria-modal="true" aria-labelledby="dgTitle">
+    <div class="modal__head">
+      <span style="font-size:22px" aria-hidden="true">⚠️</span>
+      <div><h2 id="dgTitle">需要你确认后才会执行</h2>
+      <p>该动作属于高危操作，平台不会静默执行。</p></div>
+    </div>
+    <div class="modal__body">
+      <div class="banner banner--warn" style="margin-bottom:var(--sp-4)">
+        <span aria-hidden="true">📤</span>
+        <span id="dgDesc">动作描述</span>
+      </div>
+      <dl style="margin:0" id="dgDetail"></dl>
+    </div>
+    <div class="modal__foot">
+      <button class="btn btn--ghost" type="button" id="dgSkip">跳过此步继续</button>
+      <span class="spacer"></span>
+      <button class="btn" type="button" data-modal-close="dangerModal">稍后再说</button>
+      <button class="btn btn--primary" type="button" id="dgConfirm">确认执行</button>
+    </div>
+  </div>
+</div>
+
+<script src="../assets/app.js"></script>
+<script>
+/* =========================================================================
+   会话执行页（Spec 4.3）— 本原型最核心页面
+   演示的关键交互：
+     1. 步骤级进度：setInterval 逐步点亮步骤，显示「正在做第 N 步：具体动作」
+     2. 任务执行中输入框始终可用；用户消息标记为「已插入，将在当前步骤完成后送达」
+        —— 对应 Pi 的 steering（中途插话与排队追问）语义
+     3. 等待确认态：高危动作弹确认卡片拦截
+     4. 完成后产出物卡片：预览 / 下载 / 继续修改
+     5. 引用来源角标：点击展开引用了哪个知识库文档
+     6. 修改意见回写：提交后提示「已记录，下次同类任务将自动应用」
+     7. 失败态：显示可读原因 + 保留中间物 + 可重试
+   ========================================================================= */
+(function () {
+  var U = App.Util, Store = App.Store, Lease = App.Lease;
+
+  /* ---------------------------------------------------------- 步骤脚本 */
+  /** 每个场景的执行步骤：具体动作描述（不是转圈 loading） */
+  var STEP_PLANS = {
+    'edu-audit-report': [
+      { t: '解析上传材料与表头结构', n: '教务系统课程学时表、人事处教师结构表' },
+      { t: '检索本校知识库与历史材料', n: '命中 14 个片段，来自 3 份文档' },
+      { t: '核对教务系统与人事系统的师生比口径', n: '发现 2 处口径冲突，按本单位口径资产裁决' },
+      { t: '按指标体系拆解章节并派发子 Agent 并行撰写', n: '6 个一级指标并行，上下文隔离' },
+      { t: '汇总子 Agent 结果并统一行文口径', n: '' },
+      { t: '套用本校自评报告模板（2026版）生成 docx', n: '' },
+      { t: '打开校验：Microsoft Office 与 WPS 版式检查', n: '' }
+    ],
+    'edu-ledger': [
+      { t: '解析专家反馈意见原文', n: '' },
+      { t: '拆解为可追踪整改事项', n: '共识别 23 条问题' },
+      { t: '匹配责任部门与整改时限', n: '' },
+      { t: '与上一轮台账去重合并', n: '合并 5 条历史遗留项' },
+      { t: '生成 xlsx 台账并保留筛选与公式', n: '' },
+      { t: '打开校验', n: '' }
+    ],
+    'edu-crosscheck': [
+      { t: '解析各系统导出表结构', n: '' },
+      { t: '按主键对齐并比对字段', n: '' },
+      { t: '定位口径冲突记录', n: '' },
+      { t: '按冲突处理策略裁决', n: '' },
+      { t: '生成填报表与差异说明', n: '' },
+      { t: '打开校验', n: '' }
+    ],
+    'edu-notice': [
+      { t: '检索本校公文格式规范与往年同类通知', n: '' },
+      { t: '按公文要素组织正文结构', n: '' },
+      { t: '套用红头版式与发文字号占位', n: '' },
+      { t: '生成 docx 并打开校验', n: '' }
+    ],
+    'edu-research': [
+      { t: '解析申报指南要求项', n: '' },
+      { t: '核验已有材料齐备性', n: '' },
+      { t: '标出缺件并生成催办清单', n: '' },
+      { t: '汇总形成申报材料与附件清单', n: '' },
+      { t: '打开校验', n: '' }
+    ],
+    'mfg-8d': [
+      { t: '解析来料检验记录与客户投诉单', n: '' },
+      { t: 'D1—D2：组建团队并结构化描述问题（5W2H）', n: '' },
+      { t: 'D3：整理已实施的临时围堵措施', n: '' },
+      { t: 'D4：基于检验数据做根本原因分析', n: '鱼骨图 + 5Why 双路径' },
+      { t: 'D5—D6：拟定并验证永久纠正措施', n: '' },
+      { t: 'D7：比对 IATF16949 条款补充预防措施', n: '' },
+      { t: '生成 8D 报告 docx 与检验数据附表', n: '' },
+      { t: '打开校验', n: '' }
+    ],
+    'mfg-iso-diff': [
+      { t: '解析质量手册与程序文件全套', n: '' },
+      { t: '按条款号建立双标准映射', n: '' },
+      { t: '逐条比对差异并标注风险等级', n: '' },
+      { t: '生成差异清单 xlsx 与风险提示 docx', n: '' },
+      { t: '打开校验', n: '' }
+    ],
+    'mfg-recon': [
+      { t: '解析对账单与 ERP 收货明细', n: '' },
+      { t: '按供应商与物料号对齐', n: '' },
+      { t: '核对供应商对账明细，定位金额与数量差异', n: '超容差记录 37 条' },
+      { t: '按差异维度归类并标注可能原因', n: '' },
+      { t: '生成差异明细表 xlsx（保留公式）', n: '' },
+      { t: '打开校验', n: '' }
+    ],
+    'mfg-asset': [
+      { t: '解析设备卡片与点检维修记录', n: '' },
+      { t: '合并去重并补全缺失字段', n: '' },
+      { t: '校验校准有效期与保养周期', n: '' },
+      { t: '生成统一台账 xlsx', n: '' },
+      { t: '打开校验', n: '' }
+    ],
+    'mfg-sop': [
+      { t: '解析工艺参数表与旧版指导书', n: '' },
+      { t: '按标准作业结构拆解操作步骤', n: '' },
+      { t: '标注关键控制点与安全提示', n: '' },
+      { t: '生成 SOP docx 与随工记录表', n: '' },
+      { t: '打开校验', n: '' }
+    ],
+    'gen-report': [
+      { t: '解析数据源表格', n: '' },
+      { t: '在沙箱内执行统计代码（默认断网）', n: '' },
+      { t: '生成图表与透视表', n: '' },
+      { t: '导出 xlsx 并保留公式', n: '' },
+      { t: '打开校验', n: '' }
+    ],
+    'gen-ppt': [
+      { t: '梳理汇报主线与页面结构', n: '' },
+      { t: '提炼素材要点', n: '' },
+      { t: '套用本单位版式生成 pptx', n: '' },
+      { t: '打开校验', n: '' }
+    ]
+  };
+
+  /** 场景产出物命名（真实业务叫法，原生 Office 文件） */
+  var OUTPUTS = {
+    'edu-audit-report': [
+      { name: '2026年本科教育教学审核评估自评报告.docx', size: '1.8 MB' },
+      { name: '审核评估支撑数据汇总表.xlsx', size: '236 KB' }
+    ],
+    'edu-ledger':     [{ name: '本科教学审核评估整改台账.xlsx', size: '96 KB' }],
+    'edu-crosscheck': [{ name: '教师基本情况填报表.xlsx', size: '128 KB' },
+                       { name: '多系统数据差异说明.docx', size: '54 KB' }],
+    'edu-notice':     [{ name: '关于开展2026年秋季学期期中教学检查的通知.docx', size: '68 KB' }],
+    'edu-research':   [{ name: '科研项目申报材料汇总与缺件清单.docx', size: '112 KB' }],
+    'mfg-8d':         [{ name: '8D报告-来料尺寸超差.docx', size: '182 KB' },
+                       { name: '来料检验数据分析附表.xlsx', size: '74 KB' }],
+    'mfg-iso-diff':   [{ name: '体系文件条款比对与差异清单.xlsx', size: '142 KB' },
+                       { name: '不符合项风险提示.docx', size: '62 KB' }],
+    'mfg-recon':      [{ name: '供应商对账差异明细表.xlsx', size: '164 KB' }],
+    'mfg-asset':      [{ name: '全厂设备台账.xlsx', size: '208 KB' }],
+    'mfg-sop':        [{ name: '注塑机换模作业指导书.docx', size: '214 KB' },
+                       { name: '换模随工记录表.xlsx', size: '38 KB' }],
+    'gen-report':     [{ name: '不良品率趋势分析.xlsx', size: '118 KB' }],
+    'gen-ppt':        [{ name: '三季度质量月度分析会汇报.pptx', size: '3.2 MB' }]
+  };
+
+  /** 知识库引用（来源角标点击展开） */
+  var CITES = {
+    edu: [
+      { src: '《江城理工大学本科教学工作规程》（2024修订）第 3 章', snip: '专任教师与折合在校生比不低于 1:18，折合数按全日制本科生计 1.0、硕士生计 1.5 折算。' },
+      { src: '上轮评估专家反馈意见.docx 第 2 条', snip: '部分专业师生比数据与人事部门口径不一致，建议统一统计来源。' },
+      { src: '字段口径资产 · 师生比（工作区：教务处）', snip: '口径：不计入在职攻读研究生；分母采用折合在校生数。' }
+    ],
+    mfg: [
+      { src: 'IATF16949:2016 条款 10.2.3', snip: '组织应采用问题解决方法（如 8D），并将纠正措施的有效性验证形成文件。' },
+      { src: '质量手册-QM-2026-RevC.docx 第 8.5 节', snip: '来料不合格品处置流程：隔离标识 → 评审 → 退货/让步接收 → 供应商纠正措施要求。' },
+      { src: '来料检验记录-PN44827B.xlsx（Sheet2 第 14—37 行）', snip: '连续 24 批次外径均值 φ12.08，规格 φ12.00±0.03，Cpk 0.62。' }
+    ],
+    gen: [
+      { src: '生产日报汇总-2026Q3.xlsx', snip: '按车间与月份汇总的投入产出与不良品数量明细。' }
+    ]
+  };
+
+  /* ------------------------------------------------------- 会话初始化 */
+  var mode = U.param('mode');
+  var taskId = U.param('task');
+  var task = taskId ? Store.task(taskId) : null;
+  var pending = null;                      // 工作台刚提交的任务，需要开跑
+  var timer = null;
+  var queue = [];                         // 排队中的追问（steering）
+
+  var stream = U.$('#stream');
+
+  /* 注意：真正的启动分发放在文件末尾的 boot()，
+     必须等所有 var（cardEl / STEP_MS 等）初始化完成后再跑，
+     否则 var 提升会让 STEP_MS 为 undefined、cardEl 被后置的 null 覆盖。 */
+  function boot() {
+    if (mode === 'free') {
+      U.$('#sessTitle').textContent = '自由对话';
+      U.$('#sessMeta').textContent = 'Spec 3.1 · 场景外任务入口';
+      bootFreeChat();
+    } else if (task) {
+      U.$('#sessTitle').textContent = task.title;
+      U.$('#sessMeta').textContent = '任务 ' + task.id + ' · 来源场景：' +
+        ((App.Scenes.get(task.scene) || {}).title || '自由对话');
+      // 取走待启动标记要进跨上下文互斥区（异步），拿到结果后才知道本任务是否刚提交
+      Store.takePending(function (p) {
+        pending = p;
+        bootTask(task, pending === task.id);
+      });
+    } else {
+      bootNoTask();
+    }
+  }
+
+  /* ------------------------------------------------------------- 渲染 */
+  function push(html) {
+    var wrap = document.createElement('div');
+    wrap.innerHTML = html;
+    var node = wrap.firstElementChild;
+    stream.appendChild(node);
+    stream.scrollTop = stream.scrollHeight;
+    return node;
+  }
+
+  function msgUser(text, queued) {
+    return push('<div class="msg msg--user' + (queued ? ' msg--queued' : '') + '">' +
+      '<span class="msg__avatar" aria-hidden="true">刘</span>' +
+      '<div class="msg__body">' + U.esc(text) +
+      (queued
+        ? '<div class="queued-flag"><i class="dot dot--pulse" aria-hidden="true"></i>' +
+          '已插入，将在当前步骤完成后送达</div>'
+        : '<div class="msg__meta">' + U.clock() + '</div>') +
+      '</div></div>');
+  }
+
+  function msgAgent(html, cites) {
+    var id = 'c' + Math.random().toString(36).slice(2, 8);
+    var body = html;
+    if (cites && cites.length) {
+      body += ' ' + cites.map(function (_, i) {
+        return '<button class="cite" type="button" data-cite="' + id + '" ' +
+          'aria-label="查看引用来源 ' + (i + 1) + '">' + (i + 1) + '</button>';
+      }).join('');
+      body += '<div class="cite-panel" id="' + id + '" hidden>' +
+        '<strong>本段内容引用的知识库来源</strong><ol>' +
+        cites.map(function (c) {
+          return '<li><span class="src">' + U.esc(c.src) + '</span><br>' +
+            '<span class="snip">' + U.esc(c.snip) + '</span></li>';
+        }).join('') + '</ol>' +
+        '<p class="hint" style="margin-top:var(--sp-2)">检索强制携带租户与权限过滤，不会召回其他租户内容。</p>' +
+        '</div>';
+    }
+    return push('<div class="msg msg--agent">' +
+      '<span class="msg__avatar" aria-hidden="true">AI</span>' +
+      '<div class="msg__body">' + body + '</div></div>');
+  }
+
+  function msgSystem(text) {
+    return push('<div class="msg msg--system"><div class="msg__body">' + U.esc(text) + '</div></div>');
+  }
+
+  /* --------------------------------------------- 任务执行进度卡渲染 */
+  var cardEl = null;
+
+  function taskCardHTML(t, plan) {
+    return '<div class="taskcard" id="taskCard">' +
+      '<div class="taskcard__head">' +
+        '<i class="dot dot--pulse" aria-hidden="true"></i>' +
+        '<span class="taskcard__title" id="tcTitle">任务执行中</span>' +
+        '<span class="taskcard__id">' + U.esc(t.id) + '</span>' +
+        '<span class="spacer"></span>' +
+        '<span id="tcTag">' + App.statusTag(t.status) + '</span>' +
+        '<button class="btn btn--sm" type="button" id="tcCancel">取消任务</button>' +
+      '</div>' +
+      '<div class="taskcard__body">' +
+        '<div class="taskcard__now" id="tcNow">' +
+          '<span class="spinner" aria-hidden="true"></span>' +
+          '<span id="tcNowText">准备执行环境…</span>' +
+        '</div>' +
+        '<div class="progress" style="margin-bottom:var(--sp-4)" role="progressbar" ' +
+          'aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="tcBar">' +
+          '<div class="progress__fill" style="width:0%"></div></div>' +
+        '<ol class="steps" id="tcSteps">' +
+          plan.map(function (s, i) {
+            return '<li data-state="todo"><span class="step__mark">' + (i + 1) + '</span>' +
+              '<span class="step__text"><b>' + U.esc(s.t) + '</b>' +
+              (s.n ? '<span class="step__note">' + U.esc(s.n) + '</span>' : '') +
+              '</span></li>';
+          }).join('') +
+        '</ol>' +
+        '<div class="interim" id="tcInterim" hidden>' +
+          '<div class="interim__title">已产出中间物</div>' +
+          '<div id="tcInterimList"></div>' +
+        '</div>' +
+      '</div></div>';
+  }
+
+  /* --------------------------------------------------------- 任务启动 */
+  function bootTask(t, isFresh) {
+    var plan = STEP_PLANS[t.scene] || STEP_PLANS['gen-report'];
+    var cites = CITES[t.industry] || CITES.gen;
+    // 步骤总数以执行计划为准，任务中心与移动端共享同一数字
+    if (t.stepTotal !== plan.length) Store.commit(t.id, { stepTotal: plan.length });
+
+    // 开场：把引导表单收集到的要点回显为一条用户消息
+    if (t.inputs) {
+      var lines = Object.keys(t.inputs).map(function (k) {
+        var v = t.inputs[k];
+        if (Array.isArray(v)) { if (!v.length) return null; v = v.join('、'); }
+        if (!v) return null;
+        return U.esc(String(v));
+      }).filter(Boolean);
+      push('<div class="msg msg--user"><span class="msg__avatar" aria-hidden="true">刘</span>' +
+        '<div class="msg__body"><strong>通过场景卡提交：' + U.esc(t.title) + '</strong>' +
+        '<ul style="margin:var(--sp-2) 0 0;font-size:var(--fs-13)">' +
+        lines.map(function (l) { return '<li>' + l + '</li>'; }).join('') +
+        '</ul><div class="msg__meta">' + U.clock(t.created) + ' · 未输入任何自由提示词</div></div></div>');
+    } else {
+      msgUser('（来自场景卡「' + ((App.Scenes.get(t.scene) || {}).title || '') + '」的任务）');
+    }
+
+    msgAgent('已接收任务，我会先解析材料并对齐本单位的字段口径，再分章节生成。' +
+      '任务在后台异步执行，<strong>你随时可以继续输入</strong>——追加要求会排队送达，问别的事情也不会打断它。');
+
+    if (isFresh) {
+      msgSystem('任务已创建并提交到执行队列 · 你可以关闭本页去做别的事，完成时会主动提示');
+    }
+
+    cardEl = push(taskCardHTML(t, plan));
+    bindCard(t, plan, cites);
+
+    if (t.status === 'queued') {
+      setQueuedView(t, plan, cites);
+      return;
+    }
+    if (t.status === 'waiting') { renderExisting(t, plan, cites); askDanger(t, plan, cites); return; }
+    if (t.status === 'failed')  { renderExisting(t, plan, cites); renderFailed(t); return; }
+    if (t.status === 'cancelled') {
+      renderExisting(t, plan, cites);
+      var cb0 = U.$('#tcCancel'); if (cb0) cb0.remove();
+      U.$('#tcNow').innerHTML = '<span aria-hidden="true">■</span>' +
+        '<span id="tcNowText">任务已取消，已产出的中间物保留</span>';
+      push('<div class="msg msg--system"><div class="msg__body">该任务已取消。' +
+        '如需重新执行，可回到 <a href="workbench.html">场景工作台</a> 再次发起。</div></div>');
+      return;
+    }
+    if (t.status === 'done') {
+      renderExisting(t, plan, cites);
+      var cb = U.$('#tcCancel'); if (cb) cb.remove();
+      cardEl.classList.add('taskcard--done');
+      U.$('#tcInterim').hidden = true;
+      U.$('#tcNow').innerHTML = '<span aria-hidden="true">✓</span><span id="tcNowText">' +
+        '全部 ' + plan.length + ' 个步骤已完成，交付物已通过双端打开校验</span>';
+      renderDone(t, cites);
+      return;
+    }
+
+    // running：从当前 step 开始逐步推进
+    renderExisting(t, plan, cites);
+    start(t, plan, cites);
+  }
+
+  /** 把已完成的步骤先画出来（支持从任务中心跳入中途任务） */
+  function renderExisting(t, plan, cites) {
+    var lis = U.$$('#tcSteps li');
+    for (var i = 0; i < Math.min(t.step, lis.length); i++) lis[i].setAttribute('data-state', 'done');
+    if (t.status === 'running' && lis[t.step]) lis[t.step].setAttribute('data-state', 'active');
+    if (t.status === 'failed' && lis[t.step]) lis[t.step].setAttribute('data-state', 'error');
+    paintProgress(t, plan);
+    U.$('#tcNowText').textContent = t.now;
+    if ((t.artifacts || []).length) showInterim(t.artifacts);
+  }
+
+  function paintProgress(t, plan) {
+    var pct = Math.round(t.step / plan.length * 100);
+    var bar = U.$('#tcBar');
+    bar.setAttribute('aria-valuenow', String(pct));
+    U.$('.progress__fill', bar).style.width = pct + '%';
+    U.$('#tcTag').innerHTML = App.statusTag(t.status);
+    U.$('#tcTitle').textContent =
+      t.status === 'running' ? '任务执行中（第 ' + (t.step + 1) + '/' + plan.length + ' 步）'
+      : t.status === 'done' ? '任务已完成'
+      : t.status === 'failed' ? '任务执行失败'
+      : t.status === 'waiting' ? '等待你确认'
+      : t.status === 'queued' ? '排队中'
+      : '任务已取消';
+  }
+
+  function setQueuedView(t, plan, cites) {
+    cardEl.classList.remove('taskcard--done', 'taskcard--err');
+    U.$('#tcNow').innerHTML = '<span aria-hidden="true">⏳</span><span id="tcNowText">' +
+      U.esc(t.now) + '</span>';
+    // 排队不是死路：本页盯住并发名额，名额真正空出时由本任务自己出队并开跑
+    watchSlot(t, plan, cites);
+  }
+
+  /* ------------------------------------------- 并发控制与排队出队 */
+  var CONCURRENCY_LIMIT = Lease.LIMIT;  // 档位并发上限，与任务中心 / 工作台同一口径
+  var SLOT_POLL_MS = 2000;              // 排队页查名额的节奏：名额一空出就自己出队
+  var slotTimer = null;
+  var slotWaitKey = '';                 // 上次告知用户在等哪几个任务，避免重复刷同一条提示
+  // 每个标签页一个身份：既用于申领并发名额，也用于标记谁持有任务的执行租约
+  var tabId = Lease.id();
+
+  /** 穿透 localStorage 的任务列表：判名额一律用最新值，不用本页缓存 */
+  function rawTasks() {
+    var raw = Store.readRaw();
+    return (raw && raw.tasks) ? raw.tasks : Store.tasks();
+  }
+
+  function runningCount() {
+    return rawTasks().filter(function (x) { return x.status === 'running'; }).length;
+  }
+
+  /** 正占着名额的其他运行中任务：用于向用户说明「在等什么」 */
+  function frontTasks(exceptId) {
+    return rawTasks().filter(function (x) {
+      return x.status === 'running' && x.id !== exceptId;
+    }).sort(function (a, b) { return a.created - b.created; });
+  }
+
+  /**
+   * 申领一个并发名额：数名额、queued→running 迁移与取得执行租约是同一笔提交，
+   * 整段都在跨上下文互斥区内完成（Lease.claimSlot，见 app.js 的说明）。因此两个
+   * 标签页不可能同时抢到最后一个名额，也不存在「先写后仲裁再退回」的中间态。
+   * from 是本次允许的入场状态，与名额校验同笔断言；出队与接管队首都只从 queued
+   * 入场，别的状态（含等锁期间被取消）一律申领失败。
+   * 互斥依赖异步的 Web Locks，结果经回调 done(ok) 回传；只有拿到的一方才启动执行循环。
+   */
+  function claimSlot(id, note, from, done) {
+    Lease.claimSlot(id, { now: note }, from, function (ok) {
+      Store.refresh();
+      done(!!ok);
+    });
+  }
+
+  /**
+   * 队首出队：改状态与启动执行循环在同一处完成，
+   * 不存在「状态已 running 但没人推进」的中间态。done(true) 表示无需再等名额。
+   */
+  function dequeue(t, plan, cites, done) {
+    Store.refresh();
+    var cur = Store.task(t.id);
+    if (!cur) { done(true); return; }                        // 任务已不存在
+    // 名额已由别处（任务中心、其它页面接管）判定并提升：本页收回推进权，避免两处同时跑
+    if (cur.status === 'running') {
+      msgSystem('本任务已获得并发名额，开始推进步骤');
+      runFromQueue(cur, plan, cites);
+      done(true);
+      return;
+    }
+    if (cur.status !== 'queued') { done(true); return; }     // 已取消 / 已进入其他状态
+    var waited = !!slotWaitKey;
+    claimSlot(t.id, waited ? '前序任务已释放并发，开始执行' : '并发名额充足，开始执行', 'queued',
+      function (ok) {
+        if (!ok) { done(false); return; }
+        msgSystem(waited
+          ? '前序任务已结束，并发已释放（占用 ' + runningCount() + '/' + CONCURRENCY_LIMIT +
+            '），本任务开始执行'
+          : '当前占用 ' + runningCount() + '/' + CONCURRENCY_LIMIT + ' 个名额，本任务无需排队，直接开始执行');
+        runFromQueue(Store.task(t.id), plan, cites);
+        done(true);
+      });
+  }
+
+  /** 从排队态切到执行中：既改视图也真正启动步骤推进循环，两者不分离 */
+  function runFromQueue(cur, plan, cites) {
+    stopSlotWatcher();
+    cardEl.classList.remove('taskcard--done', 'taskcard--err', 'taskcard--wait');
+    U.$('#tcNow').innerHTML = '<span class="spinner" aria-hidden="true"></span>' +
+      '<span id="tcNowText">' + U.esc(cur.now) + '</span>';
+    paintProgress(cur, plan);
+    start(cur, plan, cites);
+    refreshSide();
+    updateHint();
+  }
+
+  /**
+   * 恢复执行的统一入口：等待确认后继续、跳过此步、失败重试三条路径都走这里。
+   * 这三条都是把一个尚未占名额的任务（waiting / failed）拉回执行中，因此必须与
+   * 排队出队过同一道名额校验——claimSlot 在互斥区内数名额、迁移 status 并取租约，
+   * 名额已满时一个字段都不写；本页据此把任务落到排队态，交给统一的出队 / 接管流程
+   * 在名额释放后启动，不在这里硬起第三个执行循环。
+   * opt.mark 是必须持久化的业务标记（dangerAcked / step / retried），排队态也要一并
+   * 写入，否则接管方开跑时还会在同一处被拦下来，或从头重跑丢掉检查点。
+   * opt.from 是本路径合法的入场状态（确认 / 跳过为 waiting，重试为 failed），它随
+   * claimSlot 一起进互斥区断言：等锁期间任务被别页取消或推进，这笔申领整体不写，
+   * 已取消的任务不会被旧的恢复操作改回执行中。
+   */
+  function resumeRun(t, plan, cites, opt) {
+    if (claiming[t.id]) return;                   // 同一任务的申领已在途，不重复发起
+    var gen = runGen;
+    claiming[t.id] = true;
+    var extra = {};
+    Object.keys(opt.mark).forEach(function (k) { extra[k] = opt.mark[k]; });
+    extra.now = opt.runNow;
+    Lease.claimSlot(t.id, extra, opt.from, function (ok) {
+      delete claiming[t.id];
+      Store.refresh();
+      if (gen !== runGen) return;                 // 等锁期间任务已被取消 / 本页已收掉推进
+      if (ok) {
+        held[t.id] = true;
+        opt.onRun(Store.task(t.id) || t);
+        return;
+      }
+      // 申领失败分三类，处置完全不同：任务已被取消（本路径不受理）、任务已被别处
+      // 推进到别的状态、名额真的满了。前两类若照「退回排队」处理，会把已取消的
+      // 任务救活，或清掉新持有者的租约把它的推进循环打断
+      var cur = Store.rawTask(t.id);
+      if (cur && cur.status === 'cancelled' && !Lease.fromAllows(opt.from, 'cancelled')) {
+        msgSystem('该任务已被取消，本次恢复操作未执行；已产出的中间物保留');
+        followTask(t, plan, cites);
+        return;
+      }
+      if (!cur || !Lease.fromAllows(opt.from, cur.status)) {
+        msgSystem('该任务的状态已被其它页面改变，本页只同步显示它的最新进度');
+        followTask(t, plan, cites);
+        return;
+      }
+      queueResume(t, plan, cites, opt);
+    });
+  }
+
+  /** 名额已满时恢复执行的去处：落排队态并交给盯名额的出队流程，本页不硬启动 */
+  function queueResume(t, plan, cites, opt) {
+    var patch = {};
+    Object.keys(opt.mark).forEach(function (k) { patch[k] = opt.mark[k]; });
+    patch.status = 'queued';
+    patch.now = opt.queuedNow;
+    // 仍停在本路径的入场状态才落排队：期间被别处推进或取消则整体不写
+    Store.casCommit(t.id, {
+      status: function (v) { return Lease.fromAllows(opt.from, v); }
+    }, patch, function (wrote) {
+      Store.refresh();
+      var cur = wrote ? Store.task(t.id) : null;
+      if (!cur) {
+        var at = Store.rawTask(t.id);
+        msgSystem(at && at.status === 'cancelled' && !Lease.fromAllows(opt.from, 'cancelled')
+          ? '该任务已被取消，本次恢复操作未执行；已产出的中间物保留'
+          : '该任务的状态已被其它页面改变，本页只同步显示它的最新进度');
+        followTask(t, plan, cites);
+        return;
+      }
+      msgSystem('并发名额已占满（' + runningCount() + '/' + CONCURRENCY_LIMIT +
+        '），本任务已排队：等前序任务释放名额后会自动开始，无需守在本页。');
+      cardEl.classList.remove('taskcard--wait');
+      if (opt.onQueued) opt.onQueued(cur);
+      paintProgress(cur, plan);
+      setQueuedView(cur, plan, cites);
+    });
+  }
+
+  /** 诚实说明在等什么：等前序任务自己进入终态，本页不替它宣布完成 */
+  function noteSlotWait(t) {
+    var fronts = frontTasks(t.id);
+    var key = fronts.map(function (x) { return x.id; }).join(',');
+    if (key === slotWaitKey) return;
+    if (!slotWaitKey) {
+      push('<div class="msg msg--system"><div class="msg__body">' +
+        '当前套餐档位并发上限为 ' + CONCURRENCY_LIMIT + '，任务已进入队列。' +
+        '<a href="admin.html#quota">查看配额与升档</a></div></div>');
+    }
+    slotWaitKey = key;
+    var names = fronts.map(function (x) { return '「' + x.title + '」'; }).join('、');
+    var text = '排队中：等' + names + '进入完成 / 失败 / 取消终态后释放名额';
+    Store.commit(t.id, { now: text });
+    var nowText = U.$('#tcNowText');
+    if (nowText) nowText.textContent = text;
+    msgSystem('当前占用 ' + runningCount() + '/' + CONCURRENCY_LIMIT + ' 个名额：' + names +
+      '仍在执行；名额真正释放后本任务会自动出队，无需守在本页。');
+    refreshSide();
+  }
+
+  /** 排队不是死路：本页持续查名额，名额空出时由本任务自己出队并开跑 */
+  function watchSlot(t, plan, cites) {
+    stopSlotWatcher();
+    dequeue(t, plan, cites, function (done) {
+      if (done) return;                           // 名额已空出：立刻出队，不必先等一轮
+      noteSlotWait(t);
+      slotTimer = setInterval(function () {
+        dequeue(t, plan, cites, function (ok) {
+          if (ok) { stopSlotWatcher(); return; }
+          noteSlotWait(t);
+        });
+      }, SLOT_POLL_MS);
+    });
+  }
+  function stopSlotWatcher() { if (slotTimer) { clearInterval(slotTimer); slotTimer = null; } }
+  /* 离开本页即收掉等名额的轮询与所有推进循环，并把本页持有的租约交还：
+     不交还的话任务会一直停在 running 且无人推进，别的页面只扫 queued 就再也
+     接不回来。租约同时留着心跳时间，万一 pagehide 里的交还没能落盘（页面已卸载
+     或进程被杀），其它长驻页面仍可在 TTL 后按「租约已过期」接管。 */
+  window.addEventListener('pagehide', function () {
+    stopSlotWatcher();
+    stopTimer();
+    stopAdopted();
+    releaseAll();
+    // 在途标志一并清掉：页面卸载后这些提交的回调不会再回来，留着会让页面从
+    // 后台缓存恢复后第一拍推进被永久挡住
+    Object.keys(advancing).forEach(function (id) { delete advancing[id]; });
+  });
+
+  /** 交还本页持有的所有租约：运行中任务退回可被接管的状态，不篡改终态任务。
+      pagehide 里等不到异步回调，因此这里只发起提交；提交本身仍在互斥区内做
+      所有权校验，即使页面随后被卸载也不会覆盖别人的推进结果。没来得及落盘时
+      其它长驻页面仍会按「租约已过期」在 TTL 后接管。 */
+  function releaseAll() {
+    var ids = Object.keys(held);
+    ids.forEach(function (id) {
+      var cur = Store.rawTask(id);
+      if (!cur || cur.leaseBy !== tabId) { delete held[id]; return; }
+      if (cur.status === 'running') {
+        // 仍在执行中：交还租约并如实说明无人推进，等待其它页面接管
+        Lease.release(id, { now: '执行中：原推进页面已关闭，等待其它页面接管' });
+      } else {
+        Lease.release(id);
+      }
+      delete held[id];
+    });
+  }
+
+  /** 本任务进入终态（完成 / 失败 / 取消）时交还名额，并就地接管队首任务 */
+  function promoteQueued() {
+    App.paintNavBadges();
+    U.$$('[data-taskbar]').forEach(App.renderTaskbar);
+    scheduleQueued();
+  }
+
+  /* ------------------------------- 队首接管：不依赖目标任务自己的页面 */
+  var adopted = {};                     // 本页已接管的任务 id → 步骤推进定时器
+  var held = {};                        // 本页持有租约的任务 id（含本页自己的任务）
+  var claiming = {};                    // 已发出申领 / 接管提交、结果未回的任务 id
+  var advancing = {};                   // 已发出步骤推进提交、结果未回的任务 id（按任务隔离）
+
+  /** 队首排队任务：创建早的先出队，与任务中心的排队口径一致 */
+  function queuedHead() {
+    return rawTasks().filter(function (x) { return x.status === 'queued'; })
+      .sort(function (a, b) { return a.created - b.created; })[0] || null;
+  }
+
+  /**
+   * 名额空出时由任一存活页面接管队首任务，另外还负责把「租约已过期的运行中任务」
+   * 捡回来推进——只扫 queued 会让原推进页面关掉的任务永久卡在 running。
+   * 抢名额与抢租约仍是同一笔互斥区内的提交（claimSlot），接管不会成为绕过并发
+   * 上限的第二条路径；接管已 running 的过期任务只换 owner，不改 status，因此
+   * 并发数不变。名额是否够用由 claimSlot 在互斥区内按当次快照判定，这里的
+   * runningCount 只是省一次取锁的粗筛。
+   */
+  function scheduleQueued() {
+    adoptStale();
+    if (runningCount() >= CONCURRENCY_LIMIT) return;
+    var next = queuedHead();
+    if (!next) return;
+    if (task && next.id === task.id) return;      // 本页自己的任务走 watchSlot 出队
+    if (adopted[next.id] || claiming[next.id]) return;
+    claiming[next.id] = true;                     // 占位：避免同一任务连发多笔申领
+    claimSlot(next.id, '并发名额已释放，由其它页面接管并开始执行', 'queued', function (ok) {
+      delete claiming[next.id];
+      if (ok) adoptRun(next.id, true);
+    });
+  }
+
+  /** 捡回租约已过期的运行中任务：原推进方已离开，本页接手把它跑完 */
+  function adoptStale() {
+    Lease.staleRunning().forEach(function (st) {
+      if (adopted[st.id] || claiming[st.id]) return;
+      if (task && st.id === task.id) return;      // 本页自己的任务由 start 接回
+      claiming[st.id] = true;
+      Lease.adopt(st.id, { now: '执行中：租约已过期，由其它页面接管继续推进' }, function (ok) {
+        delete claiming[st.id];
+        if (!ok) return;
+        Store.refresh();
+        adoptRun(st.id, false);
+      });
+    });
+  }
+
+  /** 接管后的推进循环：租约已在 claimSlot / Lease.adopt 里取得，这里紧接着跑步骤 */
+  function adoptRun(id, fresh) {
+    var t = Store.task(id);
+    if (!t) return;
+    var plan = STEP_PLANS[t.scene] || STEP_PLANS['gen-report'];
+    held[id] = true;
+    if (t.stepTotal !== plan.length) Lease.renew(id, { stepTotal: plan.length });
+    msgSystem(fresh
+      ? '并发名额已释放，本页接管队首任务「' + t.title + '」并开始推进步骤'
+      : '任务「' + t.title + '」的原推进页面已离开，本页接管并继续推进步骤');
+    adopted[id] = setInterval(function () { adoptTick(id, plan); }, STEP_MS);
+    adoptTick(id, plan);
+    App.paintNavBadges();
+    U.$$('[data-taskbar]').forEach(App.renderTaskbar);
+    refreshSide();
+  }
+  function adoptStop(id) {
+    if (adopted[id]) { clearInterval(adopted[id]); delete adopted[id]; }
+  }
+  function stopAdopted() {
+    Object.keys(adopted).forEach(adoptStop);
+  }
+
+  /**
+   * 高危动作是否仍需人工确认：本页 tick、后台接管 tick 的外层闸门与两处互斥区内的
+   * 复核共用这一份口径，四处判断不会各自漂移。
+   * 只认任务快照上的 dangerAcked：页面级的确认标记只代表本标签页的操作，别的标签页
+   * 做的确认不会反映到它上面，因此互斥区内的复核不能拿它当依据。
+   */
+  function needsDangerAck(t) {
+    return !!t && t.scene === 'mfg-8d' && t.step === 4 && !t.dangerAcked;
+  }
+
+  /** 接管的任务遇到高危动作：交还租约停在待确认，由用户到它的会话页裁决 */
+  function adoptHandBackForAck(id) {
+    adoptStop(id);
+    Lease.release(id, {
+      status: 'waiting',
+      now: '等待确认：是否向供应商发送纠正措施要求邮件',
+      reason: '高危动作需人工确认：对外发送邮件'
+    }, function (wrote) {
+      delete held[id];
+      if (!wrote) return;
+      var cur = Store.rawTask(id);
+      msgSystem('接管的任务「' + ((cur && cur.title) || id) + '」遇到高危动作，已停在待确认：' +
+        '高危动作不静默执行，需到它的会话页确认');
+      App.paintNavBadges();
+      U.$$('[data-taskbar]').forEach(App.renderTaskbar);
+      refreshSide();
+    });
+  }
+
+  /**
+   * 被接管任务的后台步骤推进：只改共享状态，不动本页的任务卡。
+   * 每一拍都在跨上下文互斥区内校验「租约仍属本页」再写字段（Lease.renew 回调收到
+   * null 即已易主），因此两个标签页不会同时推进同一个任务。
+   * 业务规则与本页 tick 保持一致——高危动作停在待确认、失败留检查点；取锁等待跨过
+   * 一个 STEP_MS 时的多拍堆积同样由在途标志 + 锁内高危复核两道防护挡住。
+   */
+  function adoptTick(id, plan) {
+    if (advancing[id]) return;          // 上一拍的推进提交还没回结果，本拍不排队
+    Store.refresh();
+    var t = Store.rawTask(id);
+    if (!t || t.status !== 'running') { adoptStop(id); delete held[id]; return; }
+    // 租约已被别的页面接手（含它自己的会话页打开后接回）：本页交还推进权
+    if (t.leaseBy !== tabId) { adoptStop(id); delete held[id]; return; }
+    // 高危动作不静默执行：连同租约一起交还
+    if (needsDangerAck(t)) { adoptHandBackForAck(id); return; }
+    if (t.step >= plan.length) { adoptFinish(id, plan); return; }
+    // 步骤推进量按提交时刻的最新 step 计算；租约校验不通过则一个字段都不写
+    var ackBlocked = false;
+    advancing[id] = true;
+    Lease.renew(id, function (cur) {
+      if (cur.status !== 'running' || cur.step >= plan.length) return null;
+      // 锁内按最新快照复核：本笔排队期间 step 已被前一笔推到高危步且仍未确认，
+      // 放弃提交，交由回调把任务停在待确认
+      if (needsDangerAck(cur)) { ackBlocked = true; return null; }
+      var body = {
+        step: cur.step + 1,
+        now: '正在做第 ' + (cur.step + 1) + ' 步：' + plan[cur.step].t,
+        tokens: cur.tokens + 22000 + Math.floor(Math.random() * 9000),
+        cost: Math.round((cur.cost + 0.3 + Math.random() * 0.2) * 100) / 100
+      };
+      if (cur.step === 2 && !(cur.artifacts || []).length) {
+        body.artifacts = [{ name: '中间产物-字段口径对齐结果.xlsx', size: '31 KB', state: 'partial' }];
+      }
+      return body;
+    }, function (wrote) {
+      delete advancing[id];             // 成功、锁内放弃、租约易主三种结果都要清标志
+      if (ackBlocked) { adoptHandBackForAck(id); return; }
+      if (!wrote) { adoptStop(id); delete held[id]; return; }
+      U.$$('[data-taskbar]').forEach(App.renderTaskbar);
+      refreshSide();
+    });
+  }
+
+  /** 接管任务跑到末步：落终态并交还租约与名额，名额交还后继续接管下一个队首 */
+  function adoptFinish(id, plan) {
+    adoptStop(id);
+    var t = Store.rawTask(id);
+    if (!t) { delete held[id]; return; }
+    var title = t.title;
+    var failed = t.scene === 'edu-crosscheck' && !t.retried;
+    // 终态与交还租约是同一笔互斥区内的提交：租约已易主则整体不写，不覆盖别人的结果
+    var patch = failed
+      ? {
+          status: 'failed', step: plan.length - 1, failedStep: plan.length - 1,
+          now: '执行失败',
+          reason: '数据源解析失败：《科研系统-项目负责人清单.xlsx》存在合并单元格，表头无法定位。' +
+                  '建议拆分合并单元格后重试，或改为按「以人事系统为准」策略跳过该表。'
+        }
+      : {
+          status: 'done', step: plan.length, now: '已完成',
+          artifacts: (OUTPUTS[t.scene] || OUTPUTS['gen-report']).map(function (o) {
+            return { name: o.name, size: o.size, state: 'ready' };
+          })
+        };
+    Lease.release(id, patch, function (wrote) {
+      delete held[id];
+      if (!wrote) return;
+      if (failed) {
+        msgSystem('接管的任务「' + title + '」执行失败，中间物与检查点已保留');
+        App.Toast.show('任务执行失败', title, 'err', 6000);
+      } else {
+        msgSystem('接管的任务「' + title + '」已完成，交付物可在任务中心查看');
+        App.Toast.show('任务已完成', title, 'ok', 6000);
+      }
+      App.paintNavBadges();
+      U.$$('[data-taskbar]').forEach(App.renderTaskbar);
+      refreshSide();
+      scheduleQueued();
+    });
+  }
+
+  /* ------------------------------- 核心：分步推进 + 排队追问送达 */
+  var STEP_MS = 3200;
+  var HEARTBEAT_MS = 3000;              // 心跳节奏须明显小于 Lease.TTL，避免误判过期
+  var beat = null;
+  var runGen = 0;                       // 推进循环的代号：stopTimer 后抢到的租约不得再起循环
+
+  function start(t, plan, cites) {
+    stopTimer();
+    // 本页开始推进本任务：抢下执行租约。抢不到说明别的页面正持着有效租约在跑，
+    // 本页转为只读跟随，不起第二个推进循环（否则两处同时写 step 与产物）
+    adoptStop(t.id);
+    var gen = runGen;
+    Lease.acquire(t.id, null, function (ok) {
+      Store.refresh();
+      if (gen !== runGen) return;       // 等锁期间已被 stopTimer 收掉，不再起循环
+      if (!ok) {
+        msgSystem('该任务已有其它页面在推进，本页只同步显示它的实时进度');
+        followTask(t, plan, cites);
+        return;
+      }
+      held[t.id] = true;
+      // 心跳续期：本页持续推进期间租约不会被误判过期而被别处接管
+      beat = setInterval(function () {
+        Lease.renew(t.id, {}, function (kept) { if (!kept) stopTimer(); });
+      }, HEARTBEAT_MS);
+      timer = setInterval(function () { tick(t, plan, cites); }, STEP_MS);
+      tick(t, plan, cites);           // 立即走一步，避免首屏空等
+    });
+  }
+  function stopTimer() {
+    runGen++;
+    if (timer) { clearInterval(timer); timer = null; }
+    if (beat) { clearInterval(beat); beat = null; }
+  }
+
+  /* 只读跟随：租约在别处时本页不写任何字段，只把共享状态画到卡片上；
+     对方租约过期（页面被关掉）时本页接回推进权，进度不停在半路 */
+  var follower = null;
+  function followTask(t, plan, cites) {
+    if (follower) { clearInterval(follower); follower = null; }
+    var seen = t.step;
+    follower = setInterval(function () {
+      Store.refresh();
+      var cur = Store.task(t.id);
+      if (!cur) return;
+      if (cur.step !== seen) { seen = cur.step; flushQueue(cur, cites); }
+      renderExisting(cur, plan, cites);
+      if (cur.status === 'done' || cur.status === 'failed' || cur.status === 'cancelled' ||
+          cur.status === 'waiting') {
+        clearInterval(follower); follower = null;
+        if (cur.status === 'done') {
+          cardEl.classList.add('taskcard--done');
+          U.$('#tcInterim').hidden = true;
+          U.$('#tcNow').innerHTML = '<span aria-hidden="true">✓</span><span id="tcNowText">' +
+            '全部 ' + plan.length + ' 个步骤已完成，交付物已通过双端打开校验</span>';
+          var cb = U.$('#tcCancel'); if (cb) cb.remove();
+          renderDone(cur, cites);
+          App.Toast.show('任务已完成', cur.title, 'ok', 6000);
+        } else if (cur.status === 'failed') {
+          renderFailed(cur);
+        } else if (cur.status === 'waiting') {
+          askDanger(cur, plan, cites);
+        }
+        refreshSide();
+        return;
+      }
+      // 对方租约过期：接回推进权，任务不会卡在半路
+      if (cur.status === 'running' && Lease.expired(Store.rawTask(t.id))) {
+        clearInterval(follower); follower = null;
+        msgSystem('原推进页面已离开，本页接回推进权继续执行');
+        start(cur, plan, cites);
+      }
+    }, 1000);
+  }
+  function stopFollow() { if (follower) { clearInterval(follower); follower = null; } }
+
+  /**
+   * 高危动作不静默执行：交还租约停在待确认，并把裁决摆到用户面前。
+   * 外层闸门与互斥区内的复核都走这一个动作，两处的处置完全一致。
+   * 停在哪一步按最新快照取——堆积的前一笔可能刚把 step 推到高危步。
+   */
+  function handBackForAck(t, plan, cites) {
+    var lis = U.$$('#tcSteps li');
+    var at = Store.rawTask(t.id);
+    var i = at ? at.step : t.step;
+    if (lis[i]) lis[i].setAttribute('data-state', 'active');
+    // 待确认期间没有 tick 在跑，交还租约让任务不被误判为「无人推进的僵死租约」
+    stopTimer();
+    Lease.release(t.id, {
+      status: 'waiting',
+      now: '等待确认：是否向供应商发送纠正措施要求邮件',
+      reason: '高危动作需人工确认：对外发送邮件'
+    }, function (wrote) {
+      if (!wrote) return;
+      delete held[t.id];
+      Store.refresh();
+      cardEl.classList.add('taskcard--wait');
+      paintProgress(t, plan);
+      U.$('#tcNow').innerHTML = '<span aria-hidden="true">⚠️</span><span id="tcNowText">' +
+        U.esc(t.now) + '</span>';
+      askDanger(t, plan, cites);
+      refreshSide();
+    });
+  }
+
+  /**
+   * 本页任务的步骤推进：互斥要靠异步的 Web Locks，取锁等待可能跨过一整个
+   * STEP_MS，多拍推进会在本页的临界区队列里堆积。两道防护各管一件事：
+   * 一是按任务记在途标志，上一笔提交没回结果就不发下一笔；二是把高危确认的
+   * 判定也放进 patch 函数——它在互斥区内按提交时刻的最新快照执行，即便真有
+   * 堆积，后一笔也会读到已被推到高危步的 step 并整体放弃，不静默越过该步。
+   */
+  function tick(t, plan, cites) {
+    if (advancing[t.id]) return;        // 上一拍的推进提交还没回结果，本拍不排队
+    var lis = U.$$('#tcSteps li');
+    // 每一拍都以 localStorage 的最新快照为准：本页可能被浏览器冻结过，
+    // 手里的 t 与租约归属都可能已经过时
+    var cur = Store.rawTask(t.id);
+    if (!cur) { stopTimer(); return; }
+    // 租约已不属本页（别的页面接管了）→ 立刻停止，不写 step / 产物 / 终态
+    if (cur.leaseBy !== tabId) {
+      stopTimer();
+      delete held[t.id];
+      msgSystem('该任务已由其它页面接管推进，本页停止推进并转为同步显示');
+      followTask(t, plan, cites);
+      return;
+    }
+
+    // 步骤完成 → 此时把排队中的追问「送达」（steering 的落地时机）
+    if (cur.step > 0 && lis[cur.step - 1]) lis[cur.step - 1].setAttribute('data-state', 'done');
+    flushQueue(t, cites);
+
+    if (cur.step >= plan.length) {
+      stopTimer();
+      finish(t, plan, cites);
+      return;
+    }
+
+    // 第 5 步（mfg-8d 的 D5—D6）触发高危动作确认，演示「等待确认」态；确认过就不再拦截
+    if (needsDangerAck(cur)) {
+      handBackForAck(t, plan, cites);
+      return;
+    }
+
+    lis[cur.step].setAttribute('data-state', 'active');
+    // 步骤推进与租约续期是同一笔互斥区内的提交：校验不通过则一个字段都不写
+    var ackBlocked = false;
+    advancing[t.id] = true;
+    Lease.renew(t.id, function (at) {
+      if (at.status !== 'running' || at.step >= plan.length) return null;
+      // 锁内按最新快照复核高危边界：本笔排队期间 step 已被前一笔推到高危步且仍未
+      // 确认，则整体放弃提交，由回调统一交还租约停在待确认。这里只认快照上的
+      // dangerAcked——页面级的确认标记在互斥区内不可信，别的标签页做的确认不会
+      // 反映到本页变量上，拿它判定会把已确认与未确认两种情形混为一谈
+      if (needsDangerAck(at)) { ackBlocked = true; return null; }
+      var body = {
+        step: at.step + 1,
+        now: '正在做第 ' + (at.step + 1) + ' 步：' + plan[at.step].t,
+        tokens: at.tokens + 22000 + Math.floor(Math.random() * 9000),
+        cost: Math.round((at.cost + 0.3 + Math.random() * 0.2) * 100) / 100
+      };
+      // 中间物：到第 3 步起开始产出可见中间物
+      if (at.step === 2) {
+        body.artifacts = [{ name: '中间产物-字段口径对齐结果.xlsx', size: '31 KB', state: 'partial' }];
+      }
+      return body;
+    }, function (wrote) {
+      delete advancing[t.id];           // 成功、锁内放弃、租约易主三种结果都要清标志
+      if (ackBlocked) { handBackForAck(t, plan, cites); return; }
+      if (!wrote) {
+        stopTimer();
+        delete held[t.id];
+        msgSystem('该任务已由其它页面接管推进，本页停止推进并转为同步显示');
+        followTask(t, plan, cites);
+        return;
+      }
+      Store.refresh();
+      U.$('#tcNowText').textContent = t.now;
+      paintProgress(t, plan);
+      if (wrote.artifacts) showInterim(wrote.artifacts);
+      refreshSide();
+    });
+  }
+
+  /** 步骤边界送达排队中的追问 —— 不打断正在跑的步骤 */
+  function flushQueue(t, cites) {
+    if (!queue.length) return;
+    var items = queue.splice(0, queue.length);
+    items.forEach(function (it) {
+      // 把「排队中」样式转为已送达
+      it.node.classList.remove('msg--queued');
+      var flag = U.$('.queued-flag', it.node);
+      if (flag) flag.outerHTML = '<div class="msg__meta">' + U.clock() +
+        ' · 已在步骤边界送达，原任务未中断</div>';
+      msgSystem('追问已送达当前 Agent 上下文（步骤边界插入，原任务未重启）');
+      msgAgent(replyTo(it.text, t), /数据|口径|依据|来源|标准|条款/.test(it.text) ? cites : null);
+    });
+    updateHint();
+  }
+
+  /** 根据追问内容给出贴近业务的回应（原型用规则模拟） */
+  function replyTo(text, t) {
+    if (/什么时候|多久|进度|完成/.test(text)) {
+      return '当前在第 ' + Math.min(t.step + 1, 9) + ' 步，按目前节奏预计还需 2—4 分钟。' +
+             '完成后会在这里推送产出物卡片，任务中心也会同步更新。';
+    }
+    if (/口径|统计|怎么算|折合/.test(text)) {
+      return '已按本工作区的口径资产处理：师生比分母用折合在校生数，不计入在职攻读研究生。' +
+             '如果本次要临时改口径，我会把它作为本任务的一次性约束，不写入长期资产。';
+    }
+    if (/加|补充|再|也要|附/.test(text)) {
+      return '收到，已作为约束追加到当前任务的后续步骤中（不影响已完成步骤，不重复消耗）。' +
+             '生成阶段会一并体现。';
+    }
+    if (/取消|停/.test(text)) {
+      return '如果确定要终止，可以点执行卡右上角的「取消任务」；已产出的中间物会保留。';
+    }
+    return '已记录你的补充说明，会在后续步骤中一并考虑。原任务继续执行，不受影响。';
+  }
+
+  function showInterim(list) {
+    var box = U.$('#tcInterim');
+    if (!box) return;
+    box.hidden = false;
+    U.$('#tcInterimList').innerHTML = list.map(function (a) {
+      return '<div class="artifact">' + U.fileIcon(a.name, true) +
+        '<div class="artifact__info"><div class="artifact__name">' + U.esc(a.name) + '</div>' +
+        '<div class="artifact__meta">' + U.esc(a.size) +
+        (a.state === 'partial' ? ' · 中间物，任务失败也会保留' : ' · 草稿') + '</div></div>' +
+        '<div class="artifact__acts"><button class="btn btn--sm" type="button" data-pv="' +
+        U.esc(a.name) + '">预览</button></div></div>';
+    }).join('');
+  }
+
+  /* --------------------------------------------------- 高危动作确认 */
+  var dangerCtx = null;
+  function askDanger(t, plan, cites) {
+    dangerCtx = { t: t, plan: plan, cites: cites };
+    U.$('#dgDesc').innerHTML = '向供应商 <strong>宏昌精密</strong> 的质量联系人发送' +
+      '《纠正措施要求（SCAR）》邮件，并附 8D 报告草稿。';
+    U.$('#dgDetail').innerHTML =
+      '<div class="kv"><dt>动作类型</dt><dd>对外发送（高危）</dd></div>' +
+      '<div class="kv"><dt>收件人</dt><dd>quality@（供应商联系人，已脱敏）</dd></div>' +
+      '<div class="kv"><dt>附件</dt><dd>8D报告-来料尺寸超差.docx（草稿）</dd></div>' +
+      '<div class="kv"><dt>触发依据</dt><dd>IATF16949 条款 8.7 不合格输出控制</dd></div>';
+    msgAgent('第 ' + (t.step + 1) + ' 步需要对外发送邮件，属于高危动作，<strong>我不会静默执行</strong>。' +
+      '请确认后继续，或选择跳过此步。');
+    App.Modal.open('dangerModal');
+  }
+
+  U.$('#dgConfirm').addEventListener('click', function () {
+    App.Modal.close('dangerModal');
+    if (!dangerCtx) return;
+    var c = dangerCtx;
+    msgUser('已确认：发送纠正措施要求邮件');
+    msgSystem('高危动作已由 刘敏 确认并记入审计日志');
+    // 确认只解除拦截，不改变进度：仍从被阻塞的那一步继续，D5—D6 与 D7 依次执行
+    stopFollow();
+    var blocked = c.plan[c.t.step];
+    var at = c.t.step;
+    // 恢复执行同样要过并发名额校验：dangerAcked 写进共享状态，接管方也会尊重它不再拦截
+    resumeRun(c.t, c.plan, c.cites, {
+      from: 'waiting',
+      mark: { dangerAcked: true, reason: '' },
+      runNow: blocked ? '继续执行第 ' + (at + 1) + ' 步：' + blocked.t : '继续执行',
+      queuedNow: '已确认高危动作，等并发名额释放后从第 ' + (at + 1) + ' 步继续',
+      onRun: function (cur) {
+        cardEl.classList.remove('taskcard--wait');
+        paintProgress(cur, c.plan);
+        start(cur, c.plan, c.cites);
+        refreshSide();
+      },
+      onQueued: function () {
+        msgSystem('高危动作的确认已记下，恢复执行后仍从第 ' + (at + 1) + ' 步继续，不会跳过该步');
+      }
+    });
+  });
+  U.$('#dgSkip').addEventListener('click', function () {
+    App.Modal.close('dangerModal');
+    if (!dangerCtx) return;
+    var c = dangerCtx;
+    msgSystem('已跳过对外发送步骤，报告仍会正常生成');
+    // 跳过是显式放弃当前这一步，因此进度前移一步，其余步骤照常执行
+    stopFollow();
+    var next = Math.min(c.t.step + 1, c.plan.length);
+    resumeRun(c.t, c.plan, c.cites, {
+      from: 'waiting',
+      mark: { step: next, dangerAcked: true, reason: '' },
+      runNow: '跳过对外发送，继续生成报告',
+      queuedNow: '已跳过对外发送，等并发名额释放后继续生成报告',
+      onRun: function (cur) {
+        cardEl.classList.remove('taskcard--wait');
+        start(cur, c.plan, c.cites);
+        refreshSide();
+      }
+    });
+  });
+
+  /* ------------------------------------------------------- 完成 / 失败 */
+  function finish(t, plan, cites) {
+    // 演示失败态：科研核对场景固定走失败分支（数据源有合并单元格）
+    if (t.scene === 'edu-crosscheck' && !t.retried) {
+      // 终态与交还租约同处一笔互斥区内的提交；租约已易主则整体不写，不覆盖别人的结果
+      Lease.release(t.id, {
+        status: 'failed', step: plan.length - 1,
+        // 记下失败停在哪一步，重试时据此接力，而不是固定回到某个写死的步骤
+        failedStep: plan.length - 1,
+        now: '执行失败',
+        reason: '数据源解析失败：《科研系统-项目负责人清单.xlsx》存在合并单元格，表头无法定位。' +
+                '建议拆分合并单元格后重试，或改为按「以人事系统为准」策略跳过该表。'
+      }, function (wrote) {
+        if (!wrote) { followTask(t, plan, cites); return; }
+        delete held[t.id];
+        Store.refresh();
+        var lis = U.$$('#tcSteps li');
+        if (lis[plan.length - 1]) lis[plan.length - 1].setAttribute('data-state', 'error');
+        paintProgress(t, plan);
+        renderFailed(t);
+        promoteQueued();               // 失败是真实终态，同样交还并发名额
+        refreshSide();
+      });
+      return;
+    }
+
+    var outs = (OUTPUTS[t.scene] || OUTPUTS['gen-report']).map(function (o) {
+      return { name: o.name, size: o.size, state: 'ready' };
+    });
+    Lease.release(t.id, { status: 'done', step: plan.length, now: '已完成',
+      artifacts: outs }, function (wrote) {
+        if (!wrote) { followTask(t, plan, cites); return; }
+        delete held[t.id];
+        Store.refresh();
+        U.$$('#tcSteps li').forEach(function (li) { li.setAttribute('data-state', 'done'); });
+        cardEl.classList.add('taskcard--done');
+        paintProgress(t, plan);
+        U.$('#tcNow').innerHTML = '<span aria-hidden="true">✓</span><span id="tcNowText">' +
+          '全部 ' + plan.length + ' 个步骤已完成，交付物已通过双端打开校验</span>';
+        U.$('#tcCancel').remove();
+        U.$('#tcInterim').hidden = true;
+        renderDone(t, cites);
+        App.Toast.show('任务已完成', t.title, 'ok', 6000);
+        promoteQueued();               // 本任务真实完成，名额交还给队首任务
+        App.paintNavBadges();
+        U.$$('[data-taskbar]').forEach(App.renderTaskbar);
+        refreshSide();
+        updateHint();
+      });
+  }
+
+  /** 完成语按场景给出贴合业务的总结，避免所有场景共用一句话 */
+  var DONE_SUMMARY = {
+    'edu-audit-report': '自评报告共 6 章、约 2.1 万字。师生比、生师结构等 9 处数据已按本单位口径核算并标注来源；' +
+      '与上轮专家意见相关的 4 处已单独说明整改情况。',
+    'edu-ledger': '台账共 28 条整改事项（新识别 23 条 + 历史遗留 5 条），已按责任部门归集并设定时限，' +
+      '表内保留筛选与进度统计公式。',
+    'edu-crosscheck': '填报表已生成，3 个系统共 1,352 条记录完成主键对齐；' +
+      '按「以人事系统为准」裁决了 17 处口径冲突，差异明细单独成表。',
+    'edu-notice': '通知已按本校公文格式规范成稿，红头版式与发文字号占位已就绪，落款与主送单位待办公室核定。',
+    'edu-research': '已按申报指南逐项核验，齐备 21 项、缺件 4 项（伦理审查批件 2 份、合作单位证明 2 份），' +
+      '缺件清单已附在文末可直接用于催办。',
+    'mfg-8d': '8D 报告已按 D1—D8 完整展开。根本原因定位为供应商车床刀具磨损未按周期更换（Cpk 0.62），' +
+      '纠正措施含刀具寿命管控与首件全尺寸检验两项，并已比对 IATF16949 条款 10.2.3 补充有效性验证要求。',
+    'mfg-iso-diff': '共比对 214 条条款，识别差异 31 处，其中 6 处判定为高风险（可能被开不符合项），' +
+      '已按条款号与风险等级排序。',
+    'mfg-recon': '12 家供应商本期对账完成核对，超容差差异 37 条、合计 14,690.00 元，' +
+      '已按单价差异 / 数量差异 / 跨期入账 / 退货未冲销四类归因，表内保留合计与差异公式。',
+    'mfg-asset': '台账合并去重后共 486 台设备，补全资产编号 62 条、保养周期 118 条；' +
+      '另标出校准已过期的计量器具 9 台，需优先处理。',
+    'mfg-sop': 'SOP 已按标准作业结构成稿，含 14 个操作步骤、5 个关键控制点与安全锁定挂牌要求，' +
+      '并附随工记录表可直接下发车间。',
+    'gen-report': '已完成按车间与月份的不良品率汇总，含趋势折线与帕累托图；' +
+      '透视表与图表数据区保留公式联动。',
+    'gen-ppt': '演示稿共 18 页，已套用本单位版式；数据页与源表格保持引用关系，源数据更新后可一键刷新。'
+  };
+
+  function renderDone(t, cites) {
+    msgAgent('任务已完成。' + (DONE_SUMMARY[t.scene] || '交付物已生成并通过格式校验。'), cites);
+
+    var html = '<div class="msg msg--agent"><span class="msg__avatar" aria-hidden="true">AI</span>' +
+      '<div class="msg__body" style="min-width:min(520px,100%)">' +
+      '<strong>交付物（原生可编辑 Office 文件）</strong>' +
+      '<p class="hint" style="margin:var(--sp-1) 0 var(--sp-3)">' +
+      '已在 Microsoft Office 与 WPS 中完成打开校验，版式正确；表格保留公式与数据格式。</p>';
+    (t.artifacts || []).forEach(function (a) {
+      html += '<div class="artifact" style="margin-bottom:var(--sp-2)">' + U.fileIcon(a.name) +
+        '<div class="artifact__info"><div class="artifact__name">' + U.esc(a.name) + '</div>' +
+        '<div class="artifact__meta">' + U.esc(a.size) + ' · 可追溯到 ' +
+        ((t.inputs && t.inputs.files) ? t.inputs.files.length : 3) + ' 个数据源与任务 ' + U.esc(t.id) +
+        '</div></div></div>' +
+        '<div class="artifact__acts" style="margin:0 0 var(--sp-4)">' +
+        '<button class="btn btn--sm" type="button" data-pv="' + U.esc(a.name) + '">预览</button>' +
+        '<button class="btn btn--sm" type="button" data-dl="' + U.esc(a.name) + '">下载</button>' +
+        '<button class="btn btn--sm" type="button" data-edit="' + U.esc(a.name) + '">继续修改</button>' +
+        '<button class="btn btn--sm btn--primary" type="button" data-fb="' + U.esc(a.name) + '">提出修改意见</button>' +
+        '</div>';
+    });
+    html += '</div></div>';
+    push(html);
+  }
+
+  /** 续跑起点：取最后一个成功检查点，即失败步骤本身（失败步骤之前的步骤才算跑完） */
+  function resumeStep(t, plan) {
+    var cur = Store.task(t.id) || t;
+    var failed = typeof cur.failedStep === 'number' ? cur.failedStep : cur.step;
+    return Math.max(0, Math.min(failed, plan.length - 1));
+  }
+
+  function renderFailed(t) {
+    var plan = STEP_PLANS[t.scene] || STEP_PLANS['gen-report'];
+    var from = resumeStep(t, plan);
+    cardEl.classList.add('taskcard--err');
+    U.$('#tcNow').innerHTML = '<span aria-hidden="true">⚠</span><span id="tcNowText">执行失败</span>';
+    var btn = U.$('#tcCancel'); if (btn) btn.remove();
+    push('<div class="msg msg--agent"><span class="msg__avatar" aria-hidden="true">AI</span>' +
+      '<div class="msg__body" style="min-width:min(520px,100%)">' +
+      '<div class="banner banner--err" style="margin-bottom:var(--sp-3)"><span aria-hidden="true">⚠</span>' +
+      '<div><strong>失败原因（可读）</strong><br>' + U.esc(t.reason || '未知错误') + '</div></div>' +
+      '<p class="hint">已完成步骤的成果与中间物已保留，重试时从第 ' + (from + 1) +
+      ' 步接力，前序步骤不重复消耗模型调用。</p>' +
+      '<div class="artifact__acts" style="margin-top:var(--sp-3)">' +
+      '<button class="btn btn--primary btn--sm" type="button" id="retryBtn">从检查点重试</button>' +
+      '<a class="btn btn--sm" href="tasks.html">回到任务中心</a></div>' +
+      '</div></div>');
+    var rb = U.$('#retryBtn');
+    if (rb) rb.addEventListener('click', function () {
+      // 续跑起点由失败现场决定：失败停在第几步就从第几步接力，前序步骤即最后一个成功检查点
+      var at = resumeStep(t, plan);
+      var cites = CITES[t.industry] || CITES.gen;
+      stopFollow();
+      // 重试同样要过并发名额校验：失败态不占名额，恢复执行前必须申领，否则会挤出第三个执行中任务
+      resumeRun(t, plan, cites, {
+        from: 'failed',
+        mark: { retried: true, step: at, reason: '' },
+        runNow: at > 0 ? '从检查点续跑：跳过已完成的前 ' + at + ' 步' : '从第 1 步重新执行',
+        queuedNow: at > 0
+          ? '已排队重试：等并发名额释放后从检查点第 ' + (at + 1) + ' 步接力'
+          : '已排队重试：等并发名额释放后从第 1 步重新执行',
+        onRun: function (cur) {
+          msgUser('从检查点重试（已按提示改为「以人事系统为准」策略）');
+          msgSystem(at > 0
+            ? '已从检查点第 ' + (at + 1) + ' 步接力，前 ' + at + ' 步不重复消耗'
+            : '没有可用检查点，从第 1 步重新执行');
+          cardEl.classList.remove('taskcard--err');
+          U.$$('#tcSteps li').forEach(function (li, i) {
+            li.setAttribute('data-state', i < at ? 'done' : 'todo');
+          });
+          U.$('#tcNow').innerHTML = '<span class="spinner" aria-hidden="true"></span>' +
+            '<span id="tcNowText">' + U.esc(cur.now) + '</span>';
+          start(cur, plan, cites);
+          rb.closest('.msg').remove();
+          refreshSide();
+        },
+        onQueued: function () {
+          msgUser('从检查点重试（已按提示改为「以人事系统为准」策略）');
+          msgSystem('检查点已保留，出队后仍从第 ' + (at + 1) + ' 步接力，前 ' + at + ' 步不重复消耗');
+          cardEl.classList.remove('taskcard--err');
+          U.$$('#tcSteps li').forEach(function (li, i) {
+            li.setAttribute('data-state', i < at ? 'done' : 'todo');
+          });
+          rb.closest('.msg').remove();
+        }
+      });
+    });
+  }
+
+  /* ----------------------------------------------------- 卡片内按钮 */
+  function bindCard(t, plan, cites) {
+    var cancel = U.$('#tcCancel');
+    if (cancel) cancel.addEventListener('click', function () {
+      stopTimer();
+      stopSlotWatcher();
+      stopFollow();
+      // 取消由创建人发起，不受租约归属限制：无论谁在推进都要立刻落终态。
+      // revoke 在同一笔提交里递增租约版本，正在代跑它的页面下一拍校验必然失败
+      Lease.revoke(t.id, { status: 'cancelled', now: '已由创建人取消' }, function () {
+        delete held[t.id];
+        Store.refresh();
+        cardEl.classList.remove('taskcard--wait');
+        paintProgress(t, plan);
+        U.$('#tcNow').innerHTML = '<span aria-hidden="true">■</span><span id="tcNowText">任务已取消，已产出的中间物保留</span>';
+        cancel.remove();
+        App.Toast.show('任务已取消', '中间物已保留在任务详情中', 'info');
+        promoteQueued();               // 取消同样释放并发名额
+        App.paintNavBadges();
+        U.$$('[data-taskbar]').forEach(App.renderTaskbar);
+        refreshSide();
+      });
+    });
+  }
+
+  /* ------------------------------------------- 引用角标 / 产物操作 */
+  stream.addEventListener('click', function (e) {
+    var c = e.target.closest('[data-cite]');
+    if (c) {
+      var panel = document.getElementById(c.getAttribute('data-cite'));
+      if (panel) {
+        panel.hidden = !panel.hidden;
+        c.setAttribute('aria-expanded', String(!panel.hidden));
+      }
+      return;
+    }
+    var pv = e.target.closest('[data-pv]');
+    if (pv) { openPreview(pv.getAttribute('data-pv')); return; }
+    var dl = e.target.closest('[data-dl]');
+    if (dl) {
+      App.Toast.show('已开始下载', dl.getAttribute('data-dl') + '（原型不产生真实文件）', 'ok');
+      return;
+    }
+    var ed = e.target.closest('[data-edit]');
+    if (ed) {
+      var name = ed.getAttribute('data-edit');
+      U.$('#msgInput').value = '基于《' + name + '》继续修改：';
+      U.$('#msgInput').focus();
+      App.Toast.show('已带入输入框', '直接补充你要改的内容并发送即可', 'info', 3000);
+      return;
+    }
+    var fb = e.target.closest('[data-fb]');
+    if (fb) {
+      U.$('#feedbackModal').setAttribute('data-target', fb.getAttribute('data-fb'));
+      App.Modal.open('feedbackModal');
+    }
+  });
+
+  /* ---------------------------------------------------- 产出物预览 */
+  var PREVIEWS = {
+    docx: function (name) {
+      return '<div style="background:var(--bg-surface);border:1px solid var(--line);' +
+        'border-radius:var(--r-md);padding:var(--sp-6);max-height:52vh;overflow:auto">' +
+        '<div style="text-align:center;margin-bottom:var(--sp-5)">' +
+        '<div style="font-size:var(--fs-18);font-weight:700;color:var(--fg-strong)">' +
+        U.esc(name.replace(/\.docx$/, '')) + '</div>' +
+        '<div style="font-size:var(--fs-12);color:var(--fg-muted);margin-top:4px">江城理工大学 · 2026 年 9 月</div></div>' +
+        '<h4>一、学校概况与办学定位</h4>' +
+        '<p style="font-size:var(--fs-13)">学校现有全日制在校生 24,318 人，其中本科生 19,602 人；专任教师 1,352 人，' +
+        '折合在校生与专任教师比为 1:17.6<span class="cite" aria-hidden="true">1</span>，符合《普通高等学校本科教学工作' +
+        '审核评估指标体系》相关要求。</p>' +
+        '<h4>二、上轮评估整改落实情况</h4>' +
+        '<p style="font-size:var(--fs-13)">针对上轮专家组提出的「师生比数据口径不统一」问题，学校已明确以折合在校生数' +
+        '作为统一分母，并由教务处与人事处建立季度校核机制<span class="cite" aria-hidden="true">2</span>。</p>' +
+        '<h4>三、培养过程</h4>' +
+        '<p style="font-size:var(--fs-13)">2025—2026 学年共开设本科课程 4,186 门次，其中由教授、副教授主讲的' +
+        '本科课程占比 68.4%…</p></div>';
+    },
+    xlsx: function (name) {
+      return '<div class="table-wrap" style="max-height:52vh">' +
+        '<table class="data"><thead><tr><th>序号</th><th>供应商</th><th>物料号</th>' +
+        '<th class="num">对账单金额</th><th class="num">ERP 入库金额</th><th class="num">差异</th><th>差异归类</th></tr></thead>' +
+        '<tbody>' +
+        [['1','宏昌精密','PN-44827-B','186,420.00','182,640.00','3,780.00','单价差异'],
+         ['2','瑞泰五金','PN-31055-A','94,200.00','94,200.00','0.00','—'],
+         ['3','东力铸造','PN-27310-C','312,880.00','305,120.00','7,760.00','数量差异'],
+         ['4','安捷紧固件','PN-50914','48,650.00','50,120.00','-1,470.00','跨期入账'],
+         ['5','华新表面处理','PN-66201-D','127,340.00','127,340.00','0.00','—'],
+         ['6','宏昌精密','PN-44830','75,900.00','71,280.00','4,620.00','退货未冲销']]
+        .map(function (r, i) {
+          var diff = parseFloat(r[5].replace(/,/g, ''));
+          return '<tr><td>' + r[0] + '</td><td class="cell-main">' + r[1] + '</td><td class="mono">' + r[2] +
+            '</td><td class="num">' + r[3] + '</td><td class="num">' + r[4] + '</td><td class="num" style="color:' +
+            (diff === 0 ? 'var(--fg-muted)' : diff > 0 ? 'var(--err-fg)' : 'var(--warn-fg)') + '">' + r[5] +
+            '</td><td>' + (r[6] === '—' ? '<span class="tag tag--ok">一致</span>' : '<span class="tag tag--warn">' + r[6] + '</span>') +
+            '</td></tr>';
+        }).join('') +
+        '<tr style="font-weight:600;background:var(--bg-sunken)"><td colspan="3">合计（含公式 =SUM）</td>' +
+        '<td class="num">845,390.00</td><td class="num">830,700.00</td><td class="num">14,690.00</td><td></td></tr>' +
+        '</tbody></table></div>' +
+        '<p class="hint" style="margin-top:var(--sp-3)">单元格保留 =SUM / =IF 公式与货币格式，未退化为纯文本。</p>';
+    },
+    pptx: function () {
+      return '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:var(--sp-3);max-height:52vh;overflow:auto">' +
+        ['封面：三季度质量月度分析会', '议程', '质量指标总览', '不良品率趋势',
+         '重点问题（8D 追踪）', '供应商质量表现', '整改计划与责任分工', '下季度目标']
+        .map(function (t, i) {
+          return '<div style="border:1px solid var(--line);border-radius:var(--r-md);' +
+            'background:var(--bg-surface);padding:var(--sp-3);aspect-ratio:16/9;display:flex;' +
+            'flex-direction:column;justify-content:space-between">' +
+            '<span style="font-size:var(--fs-12);font-weight:600;color:var(--fg-strong)">' + U.esc(t) + '</span>' +
+            '<span style="font-size:10px;color:var(--fg-faint)">第 ' + (i + 1) + ' 页</span></div>';
+        }).join('') + '</div>';
+    }
+  };
+
+  function openPreview(name) {
+    var ext = U.ext(name);
+    U.$('#pvTitle').textContent = name;
+    U.$('#pvMeta').textContent = '格式 .' + ext + ' · 原生可编辑 · 支持推送到本单位自有存储';
+    U.$('#pvBody').innerHTML = (PREVIEWS[ext] || PREVIEWS.docx)(name);
+    App.Modal.open('previewModal');
+  }
+  U.$('#pvDownload').addEventListener('click', function () {
+    App.Toast.show('已开始下载', U.$('#pvTitle').textContent + '（原型不产生真实文件）', 'ok');
+  });
+
+  /* ------------------------------------------------ 修改意见回写沉淀 */
+  U.$('#fbSubmit').addEventListener('click', function () {
+    var txt = U.$('#fbText').value.trim();
+    var err = U.$('#fbErr');
+    if (!txt) {
+      err.classList.add('show');
+      U.$('#fbText').setAttribute('aria-invalid', 'true');
+      U.$('#fbText').focus();
+      return;
+    }
+    err.classList.remove('show');
+    U.$('#fbText').removeAttribute('aria-invalid');
+    var kind = U.$('#fbKind').value, scope = U.$('#fbScope').value;
+    var target = U.$('#feedbackModal').getAttribute('data-target') || '';
+    // 意见追加在互斥区内完成，别的标签页同时提交的意见不会被整库覆盖丢掉
+    Store.addFeedback({ kind: kind, scope: scope, text: txt, target: target, at: Date.now() },
+      function () { refreshSide(); });
+    App.Modal.close('feedbackModal');
+    U.$('#fbText').value = '';
+    msgUser('修改意见（' + kind + '）：' + txt);
+    msgAgent('<strong>已记录，下次同类任务将自动应用。</strong>该意见已结构化写入' +
+      '「' + U.esc(scope) + '」的口径资产，并生成版本记录（v12 → v13，操作人 刘敏）。' +
+      '再次执行同场景任务时会作为约束自动注入，无需重复说明。');
+    msgSystem('口径资产已更新 · 生效范围：' + scope + ' · 已写入审计日志');
+    App.Toast.show('意见已沉淀', '下次同类任务将自动应用此约束', 'ok', 5000);
+  });
+
+  /* ---------------------------------------------- 输入区（始终可用） */
+  function currentTask() { return task ? Store.task(task.id) : null; }
+
+  function isBusy() {
+    var t = currentTask();
+    return !!t && (t.status === 'running' || t.status === 'queued');
+  }
+
+  function updateHint() {
+    var hint = U.$('#composerHint');
+    if (queue.length) {
+      hint.innerHTML = '<b>' + queue.length + ' 条追问排队中</b>，将在当前步骤完成后送达';
+    } else if (isBusy()) {
+      hint.textContent = '任务执行中，你仍可输入（会在步骤边界送达，不打断任务）';
+    } else {
+      hint.textContent = '输入框始终可用';
+    }
+  }
+
+  function send() {
+    var box = U.$('#msgInput');
+    var text = box.value.trim();
+    if (!text) return;
+    box.value = '';
+
+    var t = currentTask();
+    if (t && (t.status === 'running' || t.status === 'queued' || t.status === 'waiting')) {
+      // ★ 核心：任务执行中不阻塞输入，消息进入排队（steering）
+      var node = msgUser(text, true);
+      queue.push({ text: text, node: node });
+      updateHint();
+      App.Toast.show('已插入待送达队列', '当前步骤完成后立即送达，原任务不中断', 'info', 3200);
+      // 等待确认态下没有 tick 在跑，立刻送达以免用户卡住
+      if (t.status === 'waiting') {
+        setTimeout(function () { flushQueue(t, CITES[t.industry] || CITES.gen); }, 900);
+      }
+      return;
+    }
+
+    // 任务已结束或自由对话：直接对话
+    msgUser(text);
+    setTimeout(function () {
+      msgAgent(freeReply(text), /数据|来源|依据|口径|标准|条款/.test(text)
+        ? (CITES[(t && t.industry) || 'gen'] || CITES.gen) : null);
+    }, 600);
+  }
+
+  function freeReply(text) {
+    if (/场景|怎么做|怎么用/.test(text)) {
+      return '这类工作建议走场景卡，引导式填写比自由描述更稳定。' +
+             '<a href="workbench.html">回到场景工作台</a> 选择对应场景即可。';
+    }
+    if (/8D|质量|不良/.test(text)) {
+      return '如果要出正式 8D 报告，建议用「生成 8D 质量报告」场景卡，' +
+             '它会按 D1—D8 结构完整展开并自动比对 IATF16949 条款。';
+    }
+    if (/报告|台账|通知|对账/.test(text)) {
+      return '已理解需求。这类材料生成建议通过场景卡发起，可直接产出原生 Office 文件；' +
+             '自由对话更适合临时问答与小幅修改。';
+    }
+    return '已收到。需要产出正式交付物的话，建议从场景工作台选择对应场景卡发起任务；' +
+           '简单问答我可以直接在这里回答。';
+  }
+
+  U.$('#sendBtn').addEventListener('click', send);
+  U.$('#msgInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }
+  });
+  U.$('#attachBtn').addEventListener('click', function () {
+    addChip('来料检验记录-PN44827B.xlsx');
+  });
+  U.$('#refKbBtn').addEventListener('click', function () {
+    addChip('引用：质量手册-QM-2026-RevC.docx');
+  });
+  function addChip(label) {
+    var chips = U.$('#chips');
+    var s = document.createElement('span');
+    s.className = 'chip';
+    s.innerHTML = U.esc(label) + '<button type="button" aria-label="移除">×</button>';
+    s.querySelector('button').addEventListener('click', function () { s.remove(); });
+    chips.appendChild(s);
+  }
+
+  /* ---------------------------------------------------------- 侧栏 */
+  function refreshSide() {
+    var t = currentTask();
+    var side = U.$('#sideTask');
+    if (!t) {
+      side.innerHTML = '<p class="hint">本会话没有关联任务。</p>';
+    } else {
+      side.innerHTML =
+        '<div style="display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-2)">' +
+        App.statusTag(t.status) + '<span class="taskcard__id">' + U.esc(t.id) + '</span></div>' +
+        '<div style="font-size:var(--fs-13);font-weight:600;color:var(--fg-strong)">' + U.esc(t.title) + '</div>' +
+        '<p class="hint" style="margin-top:4px">' + U.esc(t.now) + '</p>' +
+        '<div class="btn-row" style="margin-top:var(--sp-3)">' +
+        '<a class="btn btn--sm" href="tasks.html">任务中心</a></div>';
+    }
+    var others = Store.active().filter(function (x) { return !t || x.id !== t.id; });
+    U.$('#sideOthers').innerHTML = others.length
+      ? others.map(function (x) {
+          return '<li><a href="session.html?task=' + encodeURIComponent(x.id) + '" style="color:inherit">' +
+            '<b>' + U.esc(x.title) + '</b></a>' + App.statusTag(x.status) + '</li>';
+        }).join('')
+      : '<li class="hint">没有其他进行中任务</li>';
+
+    var ind = t ? t.industry : 'gen';
+    var assets = ind === 'mfg'
+      ? [['质量体系文件库', '租户共享 · 可读'], ['字段口径 · 不良品率', '工作区（质量部）'],
+         ['模板 · 8D 报告模板 v4', '租户共享'], ['技能包 · IATF16949 审核要点', '租户私有 · 已启用']]
+      : [['评估材料知识库', '租户共享 · 可读'], ['字段口径 · 师生比', '工作区（教务处）'],
+         ['模板 · 自评报告模板 2026版', '租户共享'], ['技能包 · 审核评估指标解读', '租户私有 · 已启用']];
+    var fbCount = Store.load().feedback.length;
+    U.$('#sideAssets').innerHTML = assets.map(function (a) {
+      return '<li><b>' + a[0] + '</b>' + a[1] + '</li>';
+    }).join('') + (fbCount
+      ? '<li><b>已应用的修改意见</b>' + fbCount + ' 条（来自历史回写）</li>' : '');
+
+    U.$('#sideUsage').innerHTML =
+      '<div class="kv"><dt>本月已产出交付物</dt><dd>14 份</dd></div>' +
+      '<div class="kv"><dt>本月任务数</dt><dd>21 个</dd></div>' +
+      '<div class="kv"><dt>本任务消耗</dt><dd>' + (t ? (t.tokens / 1000).toFixed(0) + 'K tokens' : '—') + '</dd></div>' +
+      '<div class="kv"><dt>剩余任务额度</dt><dd>79 / 100</dd></div>';
+  }
+
+  /* ---------------------------------------------- 无任务 / 自由对话 */
+  function bootNoTask() {
+    U.$('#sessTitle').textContent = '会话执行页';
+    stream.innerHTML = '';
+    push('<div class="empty"><div class="empty__icon" aria-hidden="true">💬</div>' +
+      '<h3>这个会话还没有关联任务</h3>' +
+      '<p>会话执行页用于承载任务执行过程的可见化与追问。' +
+      '请先从场景工作台选择一个场景卡发起任务，或直接在下方自由对话。</p>' +
+      '<div class="btn-row" style="justify-content:center">' +
+      '<a class="btn btn--primary" href="workbench.html">去场景工作台选场景</a>' +
+      '<a class="btn" href="tasks.html">看看已有任务</a></div></div>');
+  }
+
+  function bootFreeChat() {
+    msgSystem('自由对话模式 · 适合临时问答与小幅修改，复杂材料生成建议走场景卡');
+    msgAgent('你好，我是本单位的办公 Agent。可以直接问我问题；' +
+      '如果要产出正式材料（报告、台账、体系文件、对账表），' +
+      '建议回到 <a href="workbench.html">场景工作台</a> 选对应场景卡，产出质量更稳定。');
+  }
+
+  // 所有声明就绪后再启动会话（见上方 boot 的注释）
+  boot();
+  refreshSide();
+  updateHint();
+  // 排队不依赖目标任务自己的页面：本页在共享状态变更与定时巡检时都会尝试接管队首任务
+  Store.onChange(scheduleQueued);
+  scheduleQueued();
+  // 每 5 秒刷新一次全局提示条，体现任务是全局态
+  setInterval(function () {
+    U.$$('[data-taskbar]').forEach(App.renderTaskbar);
+    App.paintNavBadges();
+    scheduleQueued();
+  }, 5000);
+})();
+</script>
+</body>
+</html>

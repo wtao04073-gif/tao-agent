@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理后台 · 办公 Agent 平台原型</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主内容</a>
+
+<div class="app">
+  <div data-sidenav="admin"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>管理后台</h1>
+      <span class="topbar__sub">Spec 4.6 · 租户管理员视角</span>
+      <span class="topbar__spacer"></span>
+      <span class="tag tag--brand">江城理工大学 · 租户管理员</span>
+      <button class="iconbtn" data-theme-toggle type="button">☾</button>
+    </header>
+
+    <main class="page" id="main">
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true"  data-tab="dash">用量与产出看板</button>
+        <button role="tab" aria-selected="false" data-tab="member">成员与角色</button>
+        <button role="tab" aria-selected="false" data-tab="ws">工作区</button>
+        <button role="tab" aria-selected="false" data-tab="skill">技能包</button>
+        <button role="tab" aria-selected="false" data-tab="scene">场景卡</button>
+        <button role="tab" aria-selected="false" data-tab="model">模型与路由</button>
+        <button role="tab" aria-selected="false" data-tab="audit">审计日志</button>
+      </div>
+
+      <!-- ===================== 用量与产出看板 ===================== -->
+      <section data-pane="dash">
+        <div class="banner banner--info" style="margin-bottom:var(--sp-5)">
+          <span aria-hidden="true">📈</span>
+          <span>管理者可见的使用与产出看板是<strong>采纳机制的一部分</strong>，不是附属报表——
+            「上级明确要求使用」是提升员工 AI 熟练度的最强杠杆。</span>
+        </div>
+
+        <!-- 关键指标 -->
+        <div class="stat-grid section">
+          <div class="stat"><div class="stat__label">本月交付物产出</div>
+            <div class="stat__value">186 <span style="font-size:var(--fs-14);font-weight:400">份</span></div>
+            <div class="stat__delta up">↑ 34% 对比上月</div></div>
+          <div class="stat"><div class="stat__label">席位周活率</div>
+            <div class="stat__value">63%</div>
+            <div class="stat__delta up">目标 ≥ 40%，已达标</div></div>
+          <div class="stat"><div class="stat__label">新账号首周产出率</div>
+            <div class="stat__value">71%</div>
+            <div class="stat__delta up">目标 ≥ 60%，已达标</div></div>
+          <div class="stat"><div class="stat__label">本月模型成本</div>
+            <div class="stat__value">￥742</div>
+            <div class="stat__delta up">折合 7.4 元/人/月（上限 10）</div></div>
+          <div class="stat"><div class="stat__label">交付物格式保真率</div>
+            <div class="stat__value">97.3%</div>
+            <div class="stat__delta up">抽检 150 份，目标 ≥ 95%</div></div>
+          <div class="stat"><div class="stat__label">任务失败率</div>
+            <div class="stat__value">4.1%</div>
+            <div class="stat__delta down">主因：数据源格式问题</div></div>
+        </div>
+
+        <div class="grid-2 section">
+          <!-- 纯 CSS 堆叠柱状图：按月按格式的产出量 -->
+          <div class="card"><div class="card__head"><h3>交付物产出趋势（按格式）</h3>
+            <span class="spacer"></span><span class="hint">近 6 个月</span></div>
+            <div class="card__body">
+              <div class="chart-bars" id="barChart" role="img"
+                   aria-label="近六个月交付物产出趋势柱状图：4月 62 份、5月 78 份、6月 95 份、7月 104 份、8月 139 份、9月 186 份"></div>
+              <div class="chart-xaxis" id="barAxis"></div>
+              <div class="legend">
+                <span><i style="background:#2b579a"></i>Word (.docx)</span>
+                <span><i style="background:#1d7044"></i>Excel (.xlsx)</span>
+                <span><i style="background:#c04526"></i>PowerPoint (.pptx)</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 内联 SVG 折线图：席位周活率 -->
+          <div class="card"><div class="card__head"><h3>席位周活率</h3>
+            <span class="spacer"></span><span class="hint">近 12 周，目标线 40%</span></div>
+            <div class="card__body">
+              <svg viewBox="0 0 320 170" width="100%" height="190" role="img"
+                   aria-label="近十二周席位周活率折线图，由 31% 上升至 63%，持续高于 40% 目标线">
+                <!-- 网格与坐标 -->
+                <g stroke="var(--line)" stroke-width="1">
+                  <line x1="34" y1="10"  x2="310" y2="10"/>
+                  <line x1="34" y1="45"  x2="310" y2="45"/>
+                  <line x1="34" y1="80"  x2="310" y2="80"/>
+                  <line x1="34" y1="115" x2="310" y2="115"/>
+                  <line x1="34" y1="150" x2="310" y2="150"/>
+                </g>
+                <g fill="var(--fg-muted)" font-size="9" text-anchor="end">
+                  <text x="29" y="13">80%</text><text x="29" y="48">60%</text>
+                  <text x="29" y="83">40%</text><text x="29" y="118">20%</text>
+                  <text x="29" y="153">0</text>
+                </g>
+                <!-- 40% 目标线 -->
+                <line x1="34" y1="80" x2="310" y2="80" stroke="var(--warn-fg)"
+                      stroke-width="1.2" stroke-dasharray="4 3"/>
+                <text x="306" y="76" fill="var(--warn-fg)" font-size="9" text-anchor="end">目标 40%</text>
+                <!-- 面积 + 折线：12 点，y = 150 - pct/80*140 -->
+                <polygon fill="var(--brand-500)" fill-opacity=".14"
+                  points="40,96 64,92 88,87 112,85 136,78 160,73 184,68 208,64 232,57 256,52 280,48 304,40 304,150 40,150"/>
+                <polyline fill="none" stroke="var(--brand-500)" stroke-width="2"
+                  stroke-linejoin="round" stroke-linecap="round"
+                  points="40,96 64,92 88,87 112,85 136,78 160,73 184,68 208,64 232,57 256,52 280,48 304,40"/>
+                <g fill="var(--brand-500)">
+                  <circle cx="40" cy="96" r="2.5"/><circle cx="112" cy="85" r="2.5"/>
+                  <circle cx="184" cy="68" r="2.5"/><circle cx="256" cy="52" r="2.5"/>
+                  <circle cx="304" cy="40" r="3.5"/>
+                </g>
+                <text x="304" y="32" fill="var(--fg-strong)" font-size="10" font-weight="600"
+                      text-anchor="end">63%</text>
+                <g fill="var(--fg-muted)" font-size="9">
+                  <text x="34" y="164">第1周</text><text x="168" y="164">第6周</text>
+                  <text x="284" y="164">第12周</text>
+                </g>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-2 section">
+          <!-- 场景采纳排行（横向条形） -->
+          <div class="card"><div class="card__head"><h3>场景采纳排行</h3>
+            <span class="spacer"></span><span class="hint">本月执行次数</span></div>
+            <div class="card__body"><ul class="rank" id="sceneRank"></ul></div>
+          </div>
+
+          <!-- 成员使用分布 + 单用户熔断 -->
+          <div class="card"><div class="card__head"><h3>成员使用分布</h3>
+            <span class="spacer"></span><span class="hint">本月任务数 / 熔断状态</span></div>
+            <div class="card__body"><ul class="rank" id="userRank"></ul>
+              <div class="banner banner--warn" style="margin-top:var(--sp-4)">
+                <span aria-hidden="true">🔌</span>
+                <span><strong>单用户级熔断已触发 1 人</strong>：黄志远本月消耗达个人上限 150%，
+                  已限制新任务提交，防止个别重度用户击穿整体成本。</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 配额与并发 -->
+        <section class="section" id="quota">
+          <div class="section__head"><h2>配额与并发</h2>
+            <span class="section__desc">SaaS 形态扣减额度并在耗尽时熔断；私有化形态只上报不扣费，转为并发与速率硬限制</span>
+          </div>
+          <div class="grid-2">
+            <div class="card"><div class="card__body">
+              <h4 style="margin-bottom:var(--sp-3)">当前档位：基础档</h4>
+              <dl style="margin:0">
+                <div class="kv"><dt>并发任务上限</dt><dd>2</dd></div>
+                <div class="kv"><dt>月度任务额度</dt><dd>500（已用 312）</dd></div>
+                <div class="kv"><dt>知识库容量</dt><dd>20 GB（已用 6.8 GB）</dd></div>
+                <div class="kv"><dt>席位数</dt><dd>100（已开通 100）</dd></div>
+              </dl>
+              <div class="progress" style="margin-top:var(--sp-4)" role="progressbar"
+                   aria-valuemin="0" aria-valuemax="100" aria-valuenow="62">
+                <div class="progress__fill" style="width:62%"></div></div>
+              <p class="hint" style="margin-top:6px">月度任务额度已用 62%</p>
+            </div></div>
+            <div class="card" style="border-color:var(--warn-line)"><div class="card__body">
+              <div class="banner banner--warn" style="margin-bottom:var(--sp-4)">
+                <span aria-hidden="true">⚠</span>
+                <span><strong>用量接近配额预警</strong><br>
+                  按当前速度，月度任务额度预计在 9 月 28 日耗尽；并发上限 2 已成为评估冲刺期的瓶颈。</span>
+              </div>
+              <h4 style="margin-bottom:var(--sp-3)">升档到「专业档」</h4>
+              <dl style="margin:0">
+                <div class="kv"><dt>并发任务上限</dt><dd>2 → <strong>8</strong></dd></div>
+                <div class="kv"><dt>月度任务额度</dt><dd>500 → <strong>2,000</strong></dd></div>
+                <div class="kv"><dt>知识库容量</dt><dd>20 GB → <strong>100 GB</strong></dd></div>
+                <div class="kv"><dt>企业目录同步</dt><dd>不含 → <strong>包含</strong></dd></div>
+              </dl>
+              <div class="btn-row" style="margin-top:var(--sp-4)">
+                <button class="btn btn--primary" type="button" id="upgradeBtn">申请升档</button>
+                <button class="btn" type="button" id="quotaAdjust">调整成员配额</button>
+              </div>
+            </div></div>
+          </div>
+        </section>
+      </section>
+
+      <!-- ===================== 成员与角色 ===================== -->
+      <section data-pane="member" hidden>
+        <div class="section__head">
+          <h2>成员与角色管理</h2>
+          <span class="section__desc">四类角色：平台管理员 / 租户管理员 / 工作区管理员 / 普通成员</span>
+          <span class="spacer"></span>
+          <button class="btn btn--sm" type="button" id="inviteBtn">+ 邀请成员</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>成员</th><th>所属工作区</th><th style="width:170px">角色</th>
+              <th class="num" style="width:96px">本月任务</th><th class="num" style="width:96px">产出</th>
+              <th style="width:110px">状态</th><th style="width:120px">操作</th></tr></thead>
+            <tbody id="memberBody"></tbody>
+          </table>
+        </div>
+        <div class="banner banner--info" style="margin-top:var(--sp-4)">
+          <span aria-hidden="true">ℹ</span>
+          <span>角色变更即时生效。越权操作会被拒绝并记入审计日志；
+            所有业务数据无条件携带租户标识并施加行级隔离，私有化部署时租户数为 1 但组织模型不简化。</span>
+        </div>
+      </section>
+
+      <!-- ===================== 工作区 ===================== -->
+      <section data-pane="ws" hidden>
+        <div class="section__head"><h2>工作区管理</h2>
+          <span class="section__desc">工作区对应部门或项目组；会话、任务、知识资产默认归属创建者与其工作区</span></div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>工作区</th><th>管理员</th><th class="num">成员</th>
+              <th class="num">知识库</th><th class="num">本月任务</th><th>绑定场景卡</th></tr></thead>
+            <tbody id="wsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===================== 技能包 ===================== -->
+      <section data-pane="skill" hidden>
+        <div class="section__head">
+          <h2>技能包管理</h2>
+          <span class="section__desc">三级命名空间按优先级合并：平台共享 / 租户私有 / 会话临时；上传后即时生效无需发版</span>
+          <span class="spacer"></span>
+          <button class="btn btn--sm" type="button" id="skillUpload">+ 上传技能包</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>技能包</th><th>命名空间</th><th>版本</th><th>绑定范围</th>
+              <th class="num">调用次数</th><th style="width:120px">状态</th><th style="width:150px">操作</th></tr></thead>
+            <tbody id="skillBody"></tbody>
+          </table>
+        </div>
+        <div class="banner" style="margin-top:var(--sp-4)">
+          <span aria-hidden="true">⏱</span>
+          <span>会话临时技能有生存期限制并自动回收（默认 24 小时）；多节点部署下各节点技能视图保持一致。
+            上传、启停、绑定操作全部写入审计。</span>
+        </div>
+      </section>
+
+      <!-- ===================== 场景卡 ===================== -->
+      <section data-pane="scene" hidden>
+        <div class="section__head"><h2>场景卡管理</h2>
+          <span class="section__desc">租户自建场景可覆盖同名平台预置场景</span>
+          <span class="spacer"></span>
+          <button class="btn btn--sm" type="button" id="sceneNew">+ 新建场景卡</button></div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>场景卡</th><th>行业 / 职能</th><th>来源</th>
+              <th class="num">本月执行</th><th class="num">采纳率</th><th style="width:120px">状态</th>
+              <th style="width:130px">操作</th></tr></thead>
+            <tbody id="sceneBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===================== 模型与路由 ===================== -->
+      <section data-pane="model" hidden>
+        <div class="section__head"><h2>模型与路由配置</h2>
+          <span class="section__desc">模型可热替换且无需重新部署；路由策略变更须通过回归评测门禁</span></div>
+
+        <div class="grid-2 section">
+          <div class="card"><div class="card__head"><h3>分层路由</h3></div>
+            <div class="card__body">
+              <div class="field">
+                <label class="field__label" for="mPlan">任务规划与结果裁决节点（旗舰档）</label>
+                <select id="mPlan">
+                  <option>旗舰档 A · 云端</option>
+                  <option>旗舰档 B · 云端</option>
+                  <option>本地部署 70B · 信创环境</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="field__label" for="mExec">常规执行节点（轻量档）</label>
+                <select id="mExec">
+                  <option>轻量档 A · 云端</option>
+                  <option>轻量档 B · 云端</option>
+                  <option>本地部署 14B · 信创环境</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="check"><input type="checkbox" checked> 启用上下文缓存（当前命中率 71%）</label>
+              </div>
+              <div class="btn-row">
+                <button class="btn btn--primary" type="button" id="modelSave">保存并热生效</button>
+                <button class="btn" type="button" id="modelEval">运行回归评测</button>
+              </div>
+              <p class="hint" style="margin-top:var(--sp-2)">
+                保存即热替换，不需要重新部署或重启服务。</p>
+            </div></div>
+
+          <div class="card"><div class="card__head"><h3>回归评测门禁</h3>
+            <span class="spacer"></span><span class="tag tag--ok">上次通过</span></div>
+            <div class="card__body">
+              <p class="hint" style="margin-bottom:var(--sp-3)">
+                覆盖两个行业核心场景的用例集，未通过则不允许路由策略上线。</p>
+              <div id="evalHost"></div>
+            </div></div>
+        </div>
+
+        <div class="card section"><div class="card__head"><h3>成本与缓存</h3></div>
+          <div class="card__body">
+            <div class="stat-grid">
+              <div class="stat"><div class="stat__label">旗舰档调用占比</div>
+                <div class="stat__value">8.2%</div><div class="stat__delta">仅规划与裁决节点</div></div>
+              <div class="stat"><div class="stat__label">缓存命中率</div>
+                <div class="stat__value">71%</div><div class="stat__delta up">↑ 较上月 +12pt</div></div>
+              <div class="stat"><div class="stat__label">单任务平均成本</div>
+                <div class="stat__value">￥2.38</div><div class="stat__delta down">↓ 21%</div></div>
+              <div class="stat"><div class="stat__label">单租户人均月成本</div>
+                <div class="stat__value">￥7.4</div><div class="stat__delta up">上限 ￥10</div></div>
+            </div>
+          </div></div>
+      </section>
+
+      <!-- ===================== 审计日志 ===================== -->
+      <section data-pane="audit" hidden>
+        <div class="section__head"><h2>审计日志</h2>
+          <span class="section__desc">可检索；高危动作、权限变更、技能启停、越权拒绝全部留痕</span>
+          <span class="spacer"></span>
+          <input type="search" id="auditKw" placeholder="搜索操作人、动作或对象" style="width:240px"
+                 aria-label="搜索审计日志"></div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th style="width:150px">时间</th><th style="width:96px">操作人</th>
+              <th style="width:120px">类型</th><th>动作</th><th style="width:96px">结果</th></tr></thead>
+            <tbody id="auditBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script src="../assets/app.js"></script>
+<script>
+/* =========================================================================
+   管理后台（Spec 4.6）
+   图表全部用纯 CSS 与内联 SVG 绘制，不引任何外部库。
+   ========================================================================= */
+(function () {
+  var U = App.Util;
+
+  /* ---------------- 标签页 ---------------- */
+  U.$$('[data-tab]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      U.$$('[data-tab]').forEach(function (x) { x.setAttribute('aria-selected', 'false'); });
+      b.setAttribute('aria-selected', 'true');
+      var k = b.getAttribute('data-tab');
+      U.$$('[data-pane]').forEach(function (p) { p.hidden = p.getAttribute('data-pane') !== k; });
+    });
+  });
+  // 支持 #quota 直达配额区（任务中心与会话页的升档引导链接）
+  if (location.hash === '#quota') {
+    setTimeout(function () {
+      var q = U.$('#quota'); if (q) q.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 120);
+  }
+  if (location.hash === '#scenes') {
+    var tb = U.$('[data-tab="scene"]'); if (tb) tb.click();
+  }
+
+  /* ---------------- 纯 CSS 堆叠柱状图 ---------------- */
+  var MONTHS = [
+    { m: '4月', docx: 34, xlsx: 21, pptx: 7 },
+    { m: '5月', docx: 41, xlsx: 27, pptx: 10 },
+    { m: '6月', docx: 48, xlsx: 36, pptx: 11 },
+    { m: '7月', docx: 52, xlsx: 39, pptx: 13 },
+    { m: '8月', docx: 68, xlsx: 53, pptx: 18 },
+    { m: '9月', docx: 92, xlsx: 70, pptx: 24 }
+  ];
+  var maxTotal = Math.max.apply(null, MONTHS.map(function (x) { return x.docx + x.xlsx + x.pptx; }));
+  U.$('#barChart').innerHTML = MONTHS.map(function (x) {
+    var total = x.docx + x.xlsx + x.pptx;
+    return '<div class="bar"><span class="bar__val">' + total + '</span>' +
+      '<div class="bar__stack" style="height:' + (total / maxTotal * 100) + '%">' +
+      '<span class="bar__seg bar__seg--pptx" style="height:' + (x.pptx / total * 100) + '%"></span>' +
+      '<span class="bar__seg bar__seg--xlsx" style="height:' + (x.xlsx / total * 100) + '%"></span>' +
+      '<span class="bar__seg bar__seg--docx" style="height:' + (x.docx / total * 100) + '%"></span>' +
+      '</div></div>';
+  }).join('');
+  U.$('#barAxis').innerHTML = MONTHS.map(function (x) {
+    return '<span>' + x.m + '</span>';
+  }).join('');
+
+  /* ---------------- 排行榜 ---------------- */
+  function rank(host, rows, suffix) {
+    var max = Math.max.apply(null, rows.map(function (r) { return r[1]; }));
+    U.$(host).innerHTML = rows.map(function (r) {
+      return '<li><span class="rank__name" title="' + U.esc(r[0]) + '">' + U.esc(r[0]) + '</span>' +
+        '<span class="rank__track"><span class="rank__fill" style="width:' +
+        (r[1] / max * 100).toFixed(1) + '%' + (r[2] ? ';background:' + r[2] : '') + '"></span></span>' +
+        '<span class="rank__val">' + r[1] + (suffix || '') + '</span></li>';
+    }).join('');
+  }
+
+  rank('#sceneRank', [
+    ['起草校内通知公文', 96],
+    ['多系统数据核对填报', 58],
+    ['生成 8D 质量报告', 73],
+    ['供应商对账核查', 64],
+    ['编制作业指导书 SOP', 45],
+    ['生成审核评估自评报告', 42],
+    ['体系文件比对', 38],
+    ['整理评估整改台账', 31]
+  ].sort(function (a, b) { return b[1] - a[1]; }));
+
+  rank('#userRank', [
+    ['黄志远（科研院）', 74, 'var(--err-fg)'],
+    ['刘敏（教务处）', 52],
+    ['陈国栋（质量部）', 48],
+    ['周雅琴（采购部）', 41],
+    ['李伟明（工艺部）', 33],
+    ['王建华（人事处）', 18],
+    ['张丽（学生工作部）', 6, 'var(--warn-fg)']
+  ]);
+
+  /* ---------------- 成员与角色 ---------------- */
+  var MEMBERS = [
+    ['刘敏', '教务处', '工作区管理员', 52, 38, 'active'],
+    ['王建华', '人事处', '租户管理员', 18, 11, 'active'],
+    ['陈国栋', '质量部', '工作区管理员', 48, 36, 'active'],
+    ['周雅琴', '采购部', '普通成员', 41, 29, 'active'],
+    ['李伟明', '工艺部', '普通成员', 33, 24, 'active'],
+    ['黄志远', '科研院', '普通成员', 74, 46, 'throttled'],
+    ['张丽', '学生工作部', '普通成员', 6, 3, 'idle'],
+    ['赵鹏', '资产后勤处', '普通成员', 0, 0, 'never'],
+    ['外审 · 李工', '质量部', '外部协作者', 2, 0, 'active']
+  ];
+  var ROLES = ['平台管理员', '租户管理员', '工作区管理员', '普通成员', '外部协作者'];
+
+  function renderMembers() {
+    U.$('#memberBody').innerHTML = MEMBERS.map(function (m, i) {
+      var st = m[5] === 'throttled' ? '<span class="tag tag--err">已熔断</span>'
+        : m[5] === 'idle' ? '<span class="tag tag--warn">低活跃</span>'
+        : m[5] === 'never' ? '<span class="tag">未使用</span>'
+        : '<span class="tag tag--ok">正常</span>';
+      return '<tr><td><div style="display:flex;align-items:center;gap:var(--sp-3)">' +
+        '<span class="avatar" aria-hidden="true">' + U.esc(m[0].charAt(0)) + '</span>' +
+        '<span class="cell-main">' + U.esc(m[0]) + '</span></div></td>' +
+        '<td>' + U.esc(m[1]) + '</td>' +
+        '<td><select data-role="' + i + '" aria-label="' + U.esc(m[0]) + ' 的角色">' +
+          ROLES.map(function (r) {
+            return '<option' + (r === m[2] ? ' selected' : '') + '>' + r + '</option>';
+          }).join('') + '</select></td>' +
+        '<td class="num">' + m[3] + '</td><td class="num">' + m[4] + '</td>' +
+        '<td>' + st + '</td>' +
+        '<td><div class="btn-row">' +
+        (m[5] === 'throttled'
+          ? '<button class="btn btn--sm btn--primary" type="button" data-unthrottle="' + i + '">解除熔断</button>'
+          : m[5] === 'never'
+            ? '<button class="btn btn--sm" type="button" data-nudge="' + i + '">发送使用提醒</button>'
+            : '<button class="btn btn--sm btn--ghost" type="button" data-disable="' + i + '">停用</button>') +
+        '</div></td></tr>';
+    }).join('');
+  }
+  renderMembers();
+
+  U.$('#memberBody').addEventListener('change', function (e) {
+    var sel = e.target.closest('[data-role]');
+    if (!sel) return;
+    var i = +sel.getAttribute('data-role');
+    var old = MEMBERS[i][2];
+    MEMBERS[i][2] = sel.value;
+    App.Toast.show('角色已变更并即时生效',
+      MEMBERS[i][0] + '：' + old + ' → ' + sel.value + ' · 已写入审计日志', 'ok', 5000);
+    addAudit(MEMBERS[i][0], '权限变更', '角色调整 ' + old + ' → ' + sel.value, '成功');
+  });
+  U.$('#memberBody').addEventListener('click', function (e) {
+    var un = e.target.closest('[data-unthrottle]');
+    if (un) {
+      var i = +un.getAttribute('data-unthrottle');
+      MEMBERS[i][5] = 'active';
+      renderMembers();
+      App.Toast.show('已解除单用户熔断', MEMBERS[i][0] + ' 可继续提交任务', 'ok');
+      addAudit('王建华', '配额调整', '解除 ' + MEMBERS[i][0] + ' 的单用户熔断', '成功');
+      return;
+    }
+    var nd = e.target.closest('[data-nudge]');
+    if (nd) {
+      var k = +nd.getAttribute('data-nudge');
+      App.Toast.show('已发送使用提醒',
+        MEMBERS[k][0] + ' · 附 3 个推荐场景卡（上级要求使用是最强采纳杠杆）', 'ok', 4500);
+      return;
+    }
+    var ds = e.target.closest('[data-disable]');
+    if (ds) {
+      var j = +ds.getAttribute('data-disable');
+      App.Toast.show('操作需二次确认', '停用成员属于高危动作，原型中不实际执行', 'info', 4000);
+      addAudit('王建华', '高危动作', '尝试停用成员 ' + MEMBERS[j][0] + '（待确认）', '待确认');
+    }
+  });
+
+  U.$('#inviteBtn').addEventListener('click', function () {
+    App.Toast.show('邀请链接已生成', '支持统一身份认证对接；企业级目录同步为专业档能力', 'ok', 4500);
+  });
+
+  /* ---------------- 工作区 ---------------- */
+  var WORKSPACES = [
+    ['教务处', '刘敏', 24, 2, 128, '评估类 5 个 + 公文类 2 个'],
+    ['人事处', '王建华', 11, 1, 34, '公文类 2 个'],
+    ['科研院', '黄志远', 9, 1, 96, '科研类 2 个 + 数据核对'],
+    ['学生工作部', '张丽', 14, 0, 12, '公文类 2 个'],
+    ['资产后勤处', '—', 8, 0, 0, '未绑定'],
+    ['质量部', '陈国栋', 12, 2, 142, '质量类 3 个'],
+    ['采购部', '周雅琴', 6, 1, 78, '对账核查'],
+    ['工艺部', '李伟明', 7, 0, 56, 'SOP 编制 + 设备台账']
+  ];
+  U.$('#wsBody').innerHTML = WORKSPACES.map(function (w) {
+    return '<tr><td class="cell-main">' + U.esc(w[0]) + '</td><td>' + U.esc(w[1]) + '</td>' +
+      '<td class="num">' + w[2] + '</td><td class="num">' + w[3] + '</td>' +
+      '<td class="num">' + w[4] + '</td>' +
+      '<td class="cell-sub">' + U.esc(w[5]) +
+      (w[5] === '未绑定' ? ' <span class="tag tag--warn">建议绑定场景卡提升采纳</span>' : '') + '</td></tr>';
+  }).join('');
+
+  /* ---------------- 技能包 ---------------- */
+  var SKILLS = [
+    ['审核评估指标解读', '租户私有', 'v2.3', '教务处 / 科研院', 418, true],
+    ['公文格式规范（GB∕T 9704）', '平台共享', 'v1.8', '全租户', 1206, true],
+    ['IATF16949 审核要点', '租户私有', 'v3.1', '质量部', 642, true],
+    ['8D 问题解决方法', '平台共享', 'v2.0', '全租户', 531, true],
+    ['Excel 多表核对方法', '平台共享', 'v1.4', '全租户', 874, true],
+    ['供应商对账规则（本厂）', '租户私有', 'v1.2', '采购部', 187, true],
+    ['迎新专项材料规范（临时）', '会话临时', 'v0.1', '单会话 · 剩余 18 小时', 6, true],
+    ['VDA6.3 过程审核（试用）', '租户私有', 'v0.9', '未绑定', 0, false]
+  ];
+  function renderSkills() {
+    U.$('#skillBody').innerHTML = SKILLS.map(function (s, i) {
+      var nsTag = s[1] === '平台共享' ? 'tag--info' : s[1] === '租户私有' ? 'tag--brand' : 'tag--warn';
+      return '<tr><td class="cell-main">' + U.esc(s[0]) + '</td>' +
+        '<td><span class="tag ' + nsTag + '">' + s[1] + '</span></td>' +
+        '<td class="mono">' + s[2] + '</td><td class="cell-sub">' + U.esc(s[3]) + '</td>' +
+        '<td class="num">' + s[4] + '</td>' +
+        '<td>' + (s[5] ? '<span class="tag tag--ok">已启用</span>' : '<span class="tag">已停用</span>') + '</td>' +
+        '<td><div class="btn-row">' +
+        '<button class="btn btn--sm" type="button" data-skill-toggle="' + i + '">' +
+        (s[5] ? '停用' : '启用') + '</button>' +
+        '<button class="btn btn--sm btn--ghost" type="button" data-skill-bind="' + i + '">绑定</button>' +
+        '</div></td></tr>';
+    }).join('');
+  }
+  renderSkills();
+  U.$('#skillBody').addEventListener('click', function (e) {
+    var tg = e.target.closest('[data-skill-toggle]');
+    if (tg) {
+      var i = +tg.getAttribute('data-skill-toggle');
+      SKILLS[i][5] = !SKILLS[i][5];
+      renderSkills();
+      App.Toast.show((SKILLS[i][5] ? '已启用' : '已停用') + '技能包',
+        SKILLS[i][0] + ' · 变更即时生效，无需发版或重启；已写入审计', 'ok', 5000);
+      addAudit('王建华', '技能变更', (SKILLS[i][5] ? '启用' : '停用') + '技能包 ' + SKILLS[i][0], '成功');
+      return;
+    }
+    var bd = e.target.closest('[data-skill-bind]');
+    if (bd) {
+      App.Toast.show('绑定范围', '可按租户 / 工作区绑定，变更即时生效', 'info', 3500);
+    }
+  });
+  U.$('#skillUpload').addEventListener('click', function () {
+    App.Toast.show('技能包已上传', '版本 v1.0 · 已即时生效，无需重新部署', 'ok', 4500);
+    SKILLS.push(['新上传技能包', '租户私有', 'v1.0', '未绑定', 0, true]);
+    renderSkills();
+    addAudit('王建华', '技能变更', '上传技能包 新上传技能包 v1.0', '成功');
+  });
+
+  /* ---------------- 场景卡管理 ---------------- */
+  function renderScenes() {
+    U.$('#sceneBody').innerHTML = App.Scenes.all.map(function (s, i) {
+      var ind = App.Scenes.industryMeta(s.industry);
+      var overrides = s.source === 'tenant';
+      return '<tr><td class="cell-main">' + U.esc(s.icon + ' ' + s.title) +
+        (overrides ? ' <span class="tag tag--brand">覆盖同名平台场景</span>' : '') + '</td>' +
+        '<td><span class="ind ' + ind.cls + '">' + ind.label + '</span> ' + U.esc(s.group) + '</td>' +
+        '<td>' + (overrides ? '租户自建' : '平台预置') + '</td>' +
+        '<td class="num">' + s.runs + '</td>' +
+        '<td class="num">' + (60 + (i * 7) % 38) + '%</td>' +
+        '<td><span class="tag tag--ok">已启用</span></td>' +
+        '<td><div class="btn-row"><button class="btn btn--sm" type="button">编辑要点</button>' +
+        '<button class="btn btn--sm btn--ghost" type="button">停用</button></div></td></tr>';
+    }).join('');
+  }
+  renderScenes();
+  U.$('#sceneNew').addEventListener('click', function () {
+    App.Toast.show('新建场景卡', '定义必需输入与可选输入后即可发布；同名可覆盖平台预置场景', 'info', 4500);
+  });
+
+  /* ---------------- 模型与路由 ---------------- */
+  var EVAL_CASES = [
+    ['高校 · 自评报告生成（指标覆盖完整性）', 'pass', '通过 18/18'],
+    ['高校 · 多系统数据核对（口径一致性）', 'pass', '通过 12/12'],
+    ['高校 · 公文格式规范符合性', 'pass', '通过 9/9'],
+    ['制造 · 8D 报告结构完整性', 'pass', '通过 14/14'],
+    ['制造 · 体系条款比对准确率', 'pass', '通过 11/12（1 项人工复核）'],
+    ['制造 · 对账差异识别召回率', 'pass', '通过 15/15'],
+    ['通用 · Office 格式保真（Office + WPS）', 'pass', '通过 20/20']
+  ];
+  function renderEval(running) {
+    U.$('#evalHost').innerHTML = EVAL_CASES.map(function (c, i) {
+      var st = running
+        ? (i < 3 ? '<span class="tag tag--ok">通过</span>'
+                 : '<span class="tag tag--run"><i class="dot dot--pulse"></i>评测中</span>')
+        : '<span class="tag tag--ok">通过</span>';
+      return '<div style="display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2) 0;' +
+        'border-bottom:1px solid var(--line)">' +
+        '<span style="flex:1;font-size:var(--fs-13)">' + U.esc(c[0]) + '</span>' +
+        '<span class="cell-sub">' + U.esc(running && i >= 3 ? '—' : c[2]) + '</span>' + st + '</div>';
+    }).join('');
+  }
+  renderEval(false);
+  U.$('#modelEval').addEventListener('click', function () {
+    renderEval(true);
+    App.Toast.show('回归评测已启动', '覆盖两个行业核心场景用例集，未通过则阻止上线', 'info', 4000);
+    setTimeout(function () {
+      renderEval(false);
+      App.Toast.show('评测通过', '门禁放行，路由策略可以上线', 'ok', 4000);
+    }, 4200);
+  });
+  U.$('#modelSave').addEventListener('click', function () {
+    App.Toast.show('模型配置已热生效',
+      U.$('#mPlan').value + '（规划） / ' + U.$('#mExec').value + '（执行）· 无需重新部署', 'ok', 5000);
+    addAudit('王建华', '模型配置', '更新分层路由：' + U.$('#mExec').value, '成功');
+  });
+  U.$('#upgradeBtn').addEventListener('click', function () {
+    App.Toast.show('升档申请已提交', '专业档：并发 8 / 月度额度 2,000 / 容量 100GB', 'ok', 5000);
+  });
+  U.$('#quotaAdjust').addEventListener('click', function () {
+    App.Toast.show('成员配额', '可为单个成员设置任务上限，超限触发单用户熔断', 'info', 4000);
+  });
+
+  /* ---------------- 审计日志 ---------------- */
+  var AUDIT = [
+    ['2026-09-24 14:02', '陈国栋', '高危动作', '确认向供应商发送纠正措施要求邮件（任务 T-20260924-0117）', '成功'],
+    ['2026-09-24 13:48', '刘敏', '资产变更', '更新字段口径「师生比」v12 → v13（来源：修改意见回写）', '成功'],
+    ['2026-09-24 11:20', '张丽', '越权操作', '尝试访问「人事薪酬资料库」', '已拒绝'],
+    ['2026-09-24 10:05', '系统', '配额熔断', '黄志远本月消耗达个人上限 150%，限制新任务提交', '已生效'],
+    ['2026-09-23 17:31', '王建华', '权限变更', '评估材料知识库：普通成员取消「删除」权限', '成功'],
+    ['2026-09-23 16:12', '陈国栋', '技能变更', '启用技能包「IATF16949 审核要点」v3.1', '成功'],
+    ['2026-09-23 09:44', '周雅琴', '资产变更', '上传《年度价格协议汇总-2026.xlsx》到供应商与采购库', '成功'],
+    ['2026-09-22 15:07', '外审 · 李工', '越权操作', '尝试下载质量手册-QM-2026-RevC.docx', '已拒绝'],
+    ['2026-09-22 09:30', '王建华', '模型配置', '启用上下文缓存，缓存命中率目标 70%', '成功']
+  ];
+  function renderAudit() {
+    var kw = (U.$('#auditKw').value || '').toLowerCase();
+    var rows = AUDIT.filter(function (a) {
+      return !kw || a.join(' ').toLowerCase().indexOf(kw) >= 0;
+    });
+    if (!rows.length) {
+      U.$('#auditBody').innerHTML = '<tr><td colspan="5">' +
+        '<div class="empty" style="padding:var(--sp-8)"><div class="empty__icon" aria-hidden="true">🔎</div>' +
+        '<h3>没有匹配的审计记录</h3><p>换个关键词试试，或清空搜索框查看全部。</p></div></td></tr>';
+      return;
+    }
+    U.$('#auditBody').innerHTML = rows.map(function (a) {
+      var t = a[2] === '越权操作' ? 'tag--err' : a[2] === '高危动作' ? 'tag--warn'
+        : a[2] === '配额熔断' ? 'tag--err' : 'tag--info';
+      var r = a[4] === '已拒绝' ? 'tag--err' : a[4] === '待确认' ? 'tag--warn' : 'tag--ok';
+      return '<tr><td class="cell-sub mono">' + U.esc(a[0]) + '</td>' +
+        '<td>' + U.esc(a[1]) + '</td>' +
+        '<td><span class="tag ' + t + '">' + U.esc(a[2]) + '</span></td>' +
+        '<td>' + U.esc(a[3]) + '</td>' +
+        '<td><span class="tag ' + r + '">' + U.esc(a[4]) + '</span></td></tr>';
+    }).join('');
+  }
+  function addAudit(who, type, action, result) {
+    var d = new Date();
+    var p = function (n) { return n < 10 ? '0' + n : n; };
+    AUDIT.unshift(['2026-09-24 ' + p(d.getHours()) + ':' + p(d.getMinutes()),
+      who, type, action, result]);
+    renderAudit();
+  }
+  U.$('#auditKw').addEventListener('input', renderAudit);
+  renderAudit();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "name": "@tao/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "任务编排：状态机、事件流、异步执行与「执行中可继续对话」。",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsgo -p tsconfig.build.json",
+    "clean": "shx rm -rf dist"
+  },
+  "dependencies": {
+    "@tao/core": "*"
+  }
+}

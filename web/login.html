@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · 办公 Agent 平台</title>
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/web.css">
+</head>
+<body>
+<div class="auth-wrap">
+  <form class="auth-card" id="loginForm">
+    <div class="auth-logo" aria-hidden="true">章</div>
+    <h1>办公 Agent 平台</h1>
+    <p class="sub">面向高校服务机构与传统制造业的通用 AI 办公助手。请输入你的访问令牌登录。</p>
+
+    <div class="field">
+      <label for="token">访问令牌（Token）</label>
+      <input type="password" id="token" name="token" autocomplete="current-password"
+             placeholder="粘贴管理员分配给你的令牌" required aria-describedby="tokenErr">
+    </div>
+    <p class="hint" id="tokenErr" role="alert" style="color:var(--err-fg);min-height:18px;margin:0 0 var(--sp-3)"></p>
+
+    <button class="btn btn--primary btn--lg btn--block" type="submit" id="loginBtn">登录</button>
+
+    <div class="auth-hint">
+      令牌由单位管理员在 <span class="mono">accounts.json</span> 中分配，按账号精确识别
+      租户 / 工作区 / 角色。私有化部署首次启动时，控制台会打印默认占位令牌，<strong>请尽快修改</strong>。
+    </div>
+  </form>
+</div>
+
+<script src="/assets/core.js"></script>
+<script>
+(function () {
+	App.Theme.init();
+	var DEFAULT_NEXT = App._r("workbench");
+
+	// 回跳地址白名单：只接受以单个 "/" 开头的站内路径，
+	// 拒绝任何 scheme（javascript:/data:/http: 等）、协议相对 URL（//）、
+	// 反斜杠与控制字符，防止可执行同源脚本窃取令牌。
+	function sanitizeNext(raw) {
+		if (typeof raw !== "string" || raw === "") return DEFAULT_NEXT;
+		if (raw.charAt(0) !== "/") return DEFAULT_NEXT;
+		if (raw.charAt(1) === "/") return DEFAULT_NEXT; // 协议相对 URL
+		if (raw.indexOf("\\") !== -1) return DEFAULT_NEXT;
+		if (/[\x00-\x1f\x7f]/.test(raw)) return DEFAULT_NEXT; // 控制字符（含 TAB/LF/CR/DEL）
+		try {
+			var u = new URL(raw, location.origin);
+			if (u.origin !== location.origin) return DEFAULT_NEXT;
+			if (u.pathname.charAt(0) !== "/") return DEFAULT_NEXT;
+		} catch (e) {
+			return DEFAULT_NEXT;
+		}
+		return raw;
+	}
+
+	var params = new URLSearchParams(location.search);
+	var next = sanitizeNext(params.get("next"));
+
+	// 已登录则直接进入
+	if (App.Auth.signedIn) { location.href = next; return; }
+
+	var form = document.getElementById("loginForm");
+	var tokenInput = document.getElementById("token");
+	var err = document.getElementById("tokenErr");
+	var btn = document.getElementById("loginBtn");
+
+	form.addEventListener("submit", async function (e) {
+		e.preventDefault();
+		var token = tokenInput.value.trim();
+		if (!token) { err.textContent = "请输入令牌"; return; }
+		err.textContent = "";
+		btn.disabled = true; btn.textContent = "验证中…";
+		App.Auth.token = token; // 先暂存，供 /api/me 带 Bearer
+		var r = await App.api("GET", "/api/me");
+		if (r.ok) {
+			location.href = next;
+		} else {
+			App.Auth.token = "";
+			err.textContent = r.status === 401 ? "令牌无效或已过期，请核对后重试" : ("登录失败：" + (r.data.error || "服务暂不可用"));
+			btn.disabled = false; btn.textContent = "登录";
+			tokenInput.focus();
+		}
+	});
+	tokenInput.focus();
+})();
+</script>
+</body>
+</html>

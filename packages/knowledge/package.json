@@ -1,0 +1,23 @@
+{
+	"name": "@tao/knowledge",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "知识库检索与入库。检索强制携带调用者身份，不允许跨租户召回。",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"source": "./src/index.ts",
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "tsgo -p tsconfig.build.json",
+		"clean": "shx rm -rf dist"
+	},
+	"dependencies": {
+		"@tao/core": "*"
+	}
+}

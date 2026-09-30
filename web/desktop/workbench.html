@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>场景工作台 · 办公 Agent 平台</title>
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/web.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主内容</a>
+<div class="app">
+  <div data-sidenav="workbench"></div>
+  <div class="main">
+    <header class="topbar">
+      <h1>场景工作台</h1>
+      <span class="topbar__sub">选一张场景卡，按引导填要点、带材料即可发起任务</span>
+      <span class="topbar__spacer"></span>
+      <button class="iconbtn" data-theme-toggle type="button">☾</button>
+    </header>
+
+    <main class="page" id="main">
+      <section class="section">
+        <div class="section__head">
+          <h2>选择场景发起任务</h2>
+          <span class="spacer"></span>
+          <div class="segmented" role="group" aria-label="按行业筛选场景" id="indFilter">
+            <button type="button" data-ind="all" aria-pressed="true">全部</button>
+            <button type="button" data-ind="university" aria-pressed="false">高校服务机构</button>
+            <button type="button" data-ind="manufacturing" aria-pressed="false">传统制造业</button>
+          </div>
+        </div>
+        <input type="search" id="sceneSearch" placeholder="搜索场景，如「8D」「台账」「通知」"
+               aria-label="搜索场景" style="margin-bottom:var(--sp-3);max-width:320px">
+        <div class="scene-grid" id="sceneGrid"></div>
+        <div class="empty" id="sceneEmpty" hidden>
+          <div class="empty__icon">🔎</div>
+          <h3>没有匹配的场景卡</h3>
+          <p>可联系管理员新增场景，或直接在任务中心查看已有任务。</p>
+        </div>
+      </section>
+
+      <div class="grid-2">
+        <section class="section">
+          <div class="section__head"><h2>最近任务</h2><span class="spacer"></span>
+            <a href="/desktop/tasks.html" style="font-size:var(--fs-12)">全部任务 →</a></div>
+          <div class="card"><div class="card__body" style="padding:var(--sp-2)">
+            <ul class="side-list" id="recentTasks" style="gap:0"></ul>
+          </div></div>
+        </section>
+        <section class="section">
+          <div class="section__head"><h2>最近产物</h2>
+            <span class="section__desc">原生 Office 文件，可直接下载编辑</span></div>
+          <div class="card"><div class="card__body" style="display:grid;gap:var(--sp-2)" id="recentArtifacts"></div></div>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- 场景表单模态 -->
+<div class="modal-mask" id="sceneModal" hidden>
+  <div class="modal-card modal-card--wide" role="dialog" aria-modal="true" aria-labelledby="sceneModalTitle">
+    <div class="modal-card__head">
+      <span class="scene-card__icon" id="mIcon" aria-hidden="true">📋</span>
+      <div><h2 id="sceneModalTitle">场景</h2><p class="muted" id="mSummary" style="margin:2px 0 0"></p></div>
+      <button class="iconbtn" type="button" data-close aria-label="关闭">×</button>
+    </div>
+    <div class="modal-card__body">
+      <form id="sceneForm"></form>
+      <p class="hint" id="formErr" role="alert" style="color:var(--err-fg)"></p>
+    </div>
+    <div class="modal-card__foot">
+      <button class="btn" type="button" data-close>取消</button>
+      <button class="btn btn--primary" type="button" id="submitScene">提交任务</button>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/core.js"></script>
+<script src="/assets/forms.js"></script>
+<script>
+(function () {
+	var me = null;
+	var allCards = [];
+	var filterInd = "all";
+	var keyword = "";
+	var currentCard = null;
+
+	var ICON = { university: "🎓", manufacturing: "🏭", general: "💼" };
+
+	bootstrap().then(function (u) {
+		me = u;
+		loadScenarios();
+		loadRecent();
+	});
+
+	function bootstrap() { return App.bootstrap("workbench"); }
+
+	async function loadScenarios() {
+		var r = await App.api("GET", "/api/scenarios");
+		if (!r.ok) { App.Toast.show("加载场景失败", r.data.error, "err"); return; }
+		allCards = r.data.scenarios || [];
+		render();
+	}
+
+	function render() {
+		var kw = keyword.trim().toLowerCase();
+		var list = allCards.filter(function (c) {
+			if (filterInd !== "all" && c.industry !== filterInd) return false;
+			if (kw && (c.title + c.summary + c.category).toLowerCase().indexOf(kw) < 0) return false;
+			return true;
+		});
+		var host = document.getElementById("sceneGrid");
+		document.getElementById("sceneEmpty").hidden = list.length > 0;
+		host.innerHTML = list.map(function (c) {
+			var ind = App.industryMeta(c.industry);
+			return '<button type="button" class="scene-card" data-id="' + App.esc(c.id) + '">' +
+				'<span class="scene-card__icon" aria-hidden="true">' + (ICON[c.industry] || "💼") + "</span>" +
+				"<h3>" + App.esc(c.title) + "</h3>" +
+				"<p>" + App.esc(c.summary) + "</p>" +
+				'<div class="scene-card__meta"><span class="tag">' + App.esc(ind.label) + "</span>" +
+				'<span class="tag">' + App.esc(c.category) + "</span></div></button>";
+		}).join("");
+		$$(".scene-card", host).forEach(function (b) {
+			b.addEventListener("click", function () { openCard(b.getAttribute("data-id")); });
+		});
+	}
+
+	function openCard(id) {
+		var card = allCards.find(function (c) { return c.id === id; });
+		if (!card) return;
+		currentCard = card;
+		document.getElementById("sceneModalTitle").textContent = card.title;
+		document.getElementById("mSummary").textContent = card.summary;
+		document.getElementById("mIcon").textContent = ICON[card.industry] || "💼";
+		var form = document.getElementById("sceneForm");
+		form._fields = card.fields || [];
+		form.innerHTML = (card.fields || []).map(ScenarioForms.renderField).join("");
+		ScenarioForms.bindUploads(form);
+		document.getElementById("formErr").textContent = "";
+		App.Modal.open("sceneModal");
+	}
+
+	function closeModal() { document.getElementById("sceneModal").hidden = true; }
+
+	document.getElementById("submitScene").addEventListener("click", async function () {
+		if (!currentCard) return;
+		var form = document.getElementById("sceneForm");
+		var got = ScenarioForms.collect(form);
+		var err = document.getElementById("formErr");
+		if (!got.ok) { err.textContent = got.errors.join("；"); return; }
+		err.textContent = "";
+		var btn = this; btn.disabled = true; btn.textContent = "提交中…";
+		var r = await App.api("POST", "/api/tasks", { scenarioId: currentCard.id, fields: got.values });
+		btn.disabled = false; btn.textContent = "提交任务";
+		if (!r.ok) { err.textContent = r.data.error || "提交失败"; return; }
+		closeModal();
+		App.Toast.show("任务已提交", "正在跳转到执行页", "ok");
+		setTimeout(function () { location.href = "/desktop/session.html?task=" + encodeURIComponent(r.data.taskId); }, 400);
+	});
+
+	$$("[data-close]").forEach(function (b) { b.addEventListener("click", closeModal); });
+
+	$$("#indFilter button").forEach(function (b) {
+		b.addEventListener("click", function () {
+			$$("#indFilter button").forEach(function (x) { x.setAttribute("aria-pressed", "false"); });
+			b.setAttribute("aria-pressed", "true");
+			filterInd = b.getAttribute("data-ind");
+			render();
+		});
+	});
+	document.getElementById("sceneSearch").addEventListener("input", function (e) {
+		keyword = e.target.value; render();
+	});
+
+	async function loadRecent() {
+		var r = await App.api("GET", "/api/tasks");
+		if (!r.ok) return;
+		var tasks = (r.data.tasks || []).slice().sort(function (a, b) { return b.updatedAt - a.updatedAt; });
+		var recent = tasks.slice(0, 6);
+		document.getElementById("recentTasks").innerHTML = recent.length ? recent.map(function (t) {
+			return '<li><a class="side-list__item" href="/desktop/session.html?task=' + encodeURIComponent(t.taskId) + '">' +
+				'<span style="flex:1;min-width:0"><span style="display:block;color:var(--fg-strong)">' +
+				App.esc(taskTitle(t)) + "</span>" +
+				'<span class="muted" style="font-size:var(--fs-12)">' + App.ago(t.updatedAt) + "</span></span>" +
+				App.statusTag(t.status) + "</a></li>";
+		}).join("") : '<li class="muted" style="padding:var(--sp-3)">还没有任务，从上方选一张场景卡开始</li>';
+
+		var done = tasks.filter(function (t) { return (t.artifacts || []).length > 0; }).slice(0, 5);
+		document.getElementById("recentArtifacts").innerHTML = done.length ? done.map(function (t) {
+			return (t.artifacts || []).slice(0, 2).map(function (p) {
+				var name = baseName(p);
+				// 不在 href 暴露任何令牌；点击时由 core.js 先换一次性票据再下载
+				return '<a class="artifact-row" href="#" data-ticket-download="artifact"' +
+					' data-task="' + App.esc(String(t.taskId)) + '" data-name="' + App.esc(name) + '">' +
+					App.fileIcon(name) + '<span class="artifact-row__name">' + App.esc(name) + "</span>" +
+					'<span class="artifact-row__size">下载 ↓</span></a>';
+			}).join("");
+		}).join("") : '<p class="muted" style="font-size:var(--fs-12)">任务完成后，产出的 Excel / Word 会出现在这里</p>';
+	}
+
+	function taskTitle(t) {
+		if (t.scenarioTitle) return t.scenarioTitle;
+		return (t.reason && t.status === "FAILED") ? t.reason : ("任务 " + t.taskId);
+	}
+	function baseName(p) { return String(p).split(/[\\/]/).pop() || p; }
+
+	function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
+
+	// 关闭模态：点遮罩
+	document.getElementById("sceneModal").addEventListener("click", function (e) {
+		if (e.target === this) closeModal();
+	});
+})();
+</script>
+</body>
+</html>

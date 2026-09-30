@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>任务中心 · 办公 Agent 平台</title>
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/web.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主内容</a>
+<div class="app">
+  <div data-sidenav="tasks"></div>
+  <div class="main">
+    <header class="topbar">
+      <h1>任务中心</h1>
+      <span class="topbar__sub">任务与会话解耦，可随时查看进度与取回产物</span>
+      <span class="topbar__spacer"></span>
+      <a class="btn btn--sm btn--primary" href="/desktop/workbench.html">+ 发起任务</a>
+      <button class="iconbtn" data-theme-toggle type="button">☾</button>
+    </header>
+
+    <main class="page" id="main">
+      <section class="section">
+        <div class="segmented" role="group" aria-label="按状态筛选" id="stFilter" style="margin-bottom:var(--sp-3)">
+          <button data-st="all" aria-pressed="true">全部</button>
+          <button data-st="RUNNING" aria-pressed="false">执行中</button>
+          <button data-st="AWAIT_CONFIRM" aria-pressed="false">待确认</button>
+          <button data-st="QUEUED" aria-pressed="false">排队中</button>
+          <button data-st="SUCCEEDED" aria-pressed="false">已完成</button>
+          <button data-st="FAILED" aria-pressed="false">失败</button>
+          <button data-st="INTERRUPTED" aria-pressed="false">已中断</button>
+        </div>
+
+        <div class="card"><div class="card__body" style="padding:var(--sp-2)">
+          <ul class="side-list" id="taskList" style="gap:0"></ul>
+          <div class="empty" id="empty" hidden>
+            <div class="empty__icon">📭</div>
+            <h3 id="emptyT">还没有任务</h3>
+            <p>从场景工作台选一张卡片发起任务。</p>
+            <a class="btn btn--primary" href="/desktop/workbench.html">去发起任务</a>
+          </div>
+        </div></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script src="/assets/core.js"></script>
+<script>
+(function () {
+	var tasks = [];
+	var st = "all";
+	var sub = null;
+
+	App.bootstrap("tasks").then(load);
+
+	async function load() {
+		var r = await App.api("GET", "/api/tasks");
+		if (!r.ok) { App.Toast.show("加载任务失败", r.data.error, "err"); return; }
+		tasks = r.data.tasks || [];
+		render();
+		// 订阅全工作区事件，实时刷新状态
+		if (!sub) sub = App.subscribe(null, { onEvent: function () { scheduleReload(); } });
+	}
+
+	var reloadTimer = null;
+	function scheduleReload() {
+		clearTimeout(reloadTimer);
+		reloadTimer = setTimeout(load, 400);
+	}
+
+	function render() {
+		var list = tasks
+			.filter(function (t) { return st === "all" || t.status === st; })
+			.sort(function (a, b) { return b.updatedAt - a.updatedAt; });
+		var host = document.getElementById("taskList");
+		var empty = document.getElementById("empty");
+		empty.hidden = list.length > 0;
+		document.getElementById("emptyT").textContent = st === "all" ? "还没有任务" : "没有此状态的任务";
+
+		host.innerHTML = list.map(function (t) {
+			var arts = (t.artifacts || []).length;
+			return '<li><a class="side-list__item" href="/desktop/session.html?task=' + encodeURIComponent(t.taskId) + '">' +
+				'<span style="flex:1;min-width:0">' +
+				'<span style="display:block;color:var(--fg-strong)">' + App.esc(title(t)) + "</span>" +
+				'<span class="muted" style="font-size:var(--fs-12)">' + App.ago(t.updatedAt) +
+				(arts ? " · " + arts + " 份产物" : "") +
+				(t.status === "FAILED" && t.reason ? " · " + App.esc(t.reason) : "") +
+				"</span></span>" +
+				App.statusTag(t.status) + "</a></li>";
+		}).join("");
+
+		// 侧栏角标：未结任务数
+		var active = tasks.filter(function (t) {
+			return ["RUNNING", "QUEUED", "AWAIT_CONFIRM"].indexOf(t.status) >= 0;
+		}).length;
+		App.$$("[data-task-badge]").forEach(function (b) { b.textContent = active; b.hidden = active === 0; });
+	}
+
+	function title(t) {
+		if (t.scenarioTitle) return t.scenarioTitle;
+		if (t.status === "FAILED" && t.reason) return t.reason.slice(0, 40);
+		return "任务 " + t.taskId;
+	}
+
+	App.$$("#stFilter button").forEach(function (b) {
+		b.addEventListener("click", function () {
+			App.$$("#stFilter button").forEach(function (x) { x.setAttribute("aria-pressed", "false"); });
+			b.setAttribute("aria-pressed", "true");
+			st = b.getAttribute("data-st");
+			render();
+		});
+	});
+	setInterval(load, 8000); // 兜底轮询
+})();
+</script>
+</body>
+</html>

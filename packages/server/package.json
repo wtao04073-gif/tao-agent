@@ -1,0 +1,24 @@
+{
+	"name": "@tao/server",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "HTTP 服务与 SSE 事件下发。零第三方运行时依赖（仅 Node 内置 http），便于私有化部署。",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"source": "./src/index.ts",
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "tsgo -p tsconfig.build.json",
+		"clean": "shx rm -rf dist"
+	},
+	"dependencies": {
+		"@tao/core": "*",
+		"@tao/orchestrator": "*"
+	}
+}

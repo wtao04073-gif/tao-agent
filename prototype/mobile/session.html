@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>会话追问（移动端）· 办公 Agent 平台原型</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body class="mobile">
+<p class="m-frame-note">移动端 Web · 375px 视口 · Spec 4.7</p>
+
+<div class="m-app">
+  <header class="m-topbar">
+    <a class="m-back" href="tasks.html" aria-label="返回任务列表">←</a>
+    <h1 id="mTitle">会话</h1>
+    <button class="m-back" data-theme-toggle type="button">☾</button>
+  </header>
+
+  <div class="m-body m-body--stream" id="mStream" aria-live="polite"></div>
+
+  <!-- 输入区：执行中同样可用，追问排队送达 -->
+  <div class="m-composer">
+    <div class="row">
+      <label class="sr-only" for="mInput">输入追问</label>
+      <textarea id="mInput" rows="1" placeholder="追问或要求调整…"></textarea>
+      <button class="btn btn--primary" type="button" id="mSend">发送</button>
+    </div>
+    <p class="hint" id="mHint" style="margin-top:6px">输入框始终可用</p>
+  </div>
+</div>
+
+<!-- 产物预览 / 分享 -->
+<div class="modal-backdrop" id="mShare" aria-hidden="true">
+  <div class="modal modal--narrow" role="dialog" aria-modal="true" aria-labelledby="mShareTitle">
+    <div class="modal__head">
+      <div><h2 id="mShareTitle">取回与分享</h2><p id="mShareName"></p></div>
+      <span class="spacer"></span>
+      <button class="iconbtn" type="button" data-modal-close="mShare" aria-label="关闭">×</button>
+    </div>
+    <div class="modal__body">
+      <div class="btn-row" style="flex-direction:column">
+        <button class="btn btn--block" type="button" data-act="下载到手机">下载到手机</button>
+        <button class="btn btn--block" type="button" data-act="复制分享链接">复制分享链接（7 天有效）</button>
+        <button class="btn btn--block" type="button" data-act="转发给同事">转发给同事</button>
+      </div>
+      <div class="m-desktop-hint" style="margin-top:var(--sp-4)">
+        在线编辑与套版调整需要桌面端。<a href="../desktop/session.html">在桌面端打开</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="../assets/app.js"></script>
+<script>
+/* =========================================================================
+   移动端会话追问（Spec 4.7）
+   - 小屏适配的步骤级进度展示（折叠为「当前动作 + 进度条 + 已完成步数」）
+   - 执行中仍可追问，消息标记「已插入，将在当前步骤完成后送达」
+   - 产物预览 / 分享；不支持的操作引导至桌面端
+   ========================================================================= */
+(function () {
+  var U = App.Util, Store = App.Store, Lease = App.Lease;
+  var id = U.param('task');
+  var task = id ? Store.task(id) : null;
+  var stream = U.$('#mStream');
+  var queue = [];
+  var timer = null;
+  var beat = null;                    // 租约心跳
+  var watcher = null;                 // 已有执行方时的只读同步句柄
+  var runGen = 0;                     // 推进循环的代号：让出后抢到的租约不得再起循环
+  var TICK_MS = 3000;
+  var HEARTBEAT_MS = 3000;            // 心跳节奏须明显小于 App.Lease.TTL
+  var SLOT_POLL_MS = 2000;            // 排队期间查并发名额的节奏
+  /* 同一任务同一时刻只允许一个页面推进步骤：走 app.js 里与桌面端共用的那一套
+     执行租约（owner + leaseVer + leaseAt 心跳），不再自维护一份移动端专用锁——
+     两套并存时桌面页与移动页同开一个任务仍会双推进 */
+  var RUNNER_ID = Lease.id();
+
+  /* 小屏下只展示压缩后的步骤脚本 */
+  var STEPS = {
+    'edu-audit-report': ['解析上传材料', '检索本校知识库', '核对师生比口径',
+      '分章节并行撰写', '统一行文口径', '套版生成 docx', '双端打开校验'],
+    'mfg-8d': ['解析检验记录', 'D1—D2 问题描述', 'D3 临时措施', 'D4 根本原因分析',
+      'D5—D6 永久措施', 'D7 预防措施', '生成 8D 报告', '双端打开校验'],
+    'mfg-recon': ['解析对账单与 ERP 数据', '按供应商与物料号对齐',
+      '核对供应商对账明细', '差异归类', '生成差异明细表', '双端打开校验'],
+    'edu-ledger': ['解析反馈意见', '拆解整改事项', '匹配责任部门',
+      '与上轮台账去重', '生成台账 xlsx', '双端打开校验'],
+    'edu-crosscheck': ['解析各系统导出表', '按主键对齐', '定位口径冲突',
+      '按策略裁决', '生成填报表', '双端打开校验'],
+    'mfg-iso-diff': ['解析体系文件', '建立双标准映射', '逐条比对差异',
+      '生成差异清单', '双端打开校验'],
+    'mfg-sop': ['解析工艺参数', '拆解操作步骤', '标注关键控制点',
+      '生成 SOP docx', '双端打开校验'],
+    'edu-notice': ['检索公文规范', '组织正文结构', '套用红头版式', '生成 docx 并校验']
+  };
+
+  if (!task) {
+    U.$('#mTitle').textContent = '会话';
+    stream.innerHTML = '<div class="empty" style="padding:var(--sp-8) var(--sp-4)">' +
+      '<div class="empty__icon" aria-hidden="true">💬</div><h3>没有指定任务</h3>' +
+      '<p>请从任务列表进入某个任务的会话。</p>' +
+      '<a class="btn btn--primary" href="tasks.html">回到任务列表</a></div>';
+    U.$('#mInput').disabled = true;
+    U.$('#mSend').disabled = true;
+    return;
+  }
+
+  var steps = STEPS[task.scene] ||
+    Array.apply(null, Array(task.stepTotal || 6)).map(function (_, i) { return '第 ' + (i + 1) + ' 步'; });
+  if (task.stepTotal !== steps.length) Store.commit(task.id, { stepTotal: steps.length });
+
+  U.$('#mTitle').textContent = task.title;
+
+  function push(html) {
+    var w = document.createElement('div');
+    w.innerHTML = html;
+    var n = w.firstElementChild;
+    stream.appendChild(n);
+    stream.scrollTop = stream.scrollHeight;
+    return n;
+  }
+
+  function msgUser(text, queued) {
+    return push('<div class="msg msg--user' + (queued ? ' msg--queued' : '') + '">' +
+      '<span class="msg__avatar" aria-hidden="true">刘</span>' +
+      '<div class="msg__body" style="font-size:var(--fs-13)">' + U.esc(text) +
+      (queued ? '<div class="queued-flag"><i class="dot dot--pulse" aria-hidden="true"></i>' +
+        '已插入，当前步骤完成后送达</div>'
+              : '<div class="msg__meta">' + U.clock() + '</div>') +
+      '</div></div>');
+  }
+  function msgAgent(html) {
+    return push('<div class="msg msg--agent"><span class="msg__avatar" aria-hidden="true">AI</span>' +
+      '<div class="msg__body" style="font-size:var(--fs-13)">' + html + '</div></div>');
+  }
+  function msgSystem(text) {
+    return push('<div class="msg msg--system"><div class="msg__body">' + U.esc(text) + '</div></div>');
+  }
+
+  /* -------- 进度卡（小屏压缩版：当前动作 + 进度条 + 折叠步骤列表） -------- */
+  function cardHTML(t) {
+    var pct = Math.round(t.step / steps.length * 100);
+    var cls = t.status === 'done' ? ' taskcard--done'
+      : t.status === 'failed' ? ' taskcard--err'
+      : t.status === 'waiting' ? ' taskcard--wait' : '';
+    return '<div class="taskcard' + cls + '" id="mCard">' +
+      '<div class="taskcard__head">' + App.statusTag(t.status) +
+        '<span class="spacer"></span>' +
+        '<span class="taskcard__id">' + U.esc(t.id) + '</span></div>' +
+      '<div class="taskcard__body" style="padding:var(--sp-3)">' +
+        '<div class="taskcard__now" style="font-size:var(--fs-12)" id="mNow">' +
+          (t.status === 'running' ? '<span class="spinner" aria-hidden="true"></span>' : '') +
+          '<span id="mNowText">' + U.esc(t.now) + '</span></div>' +
+        '<div class="progress" style="margin-bottom:6px" role="progressbar" id="mBar" ' +
+          'aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '">' +
+          '<div class="progress__fill" style="width:' + pct + '%"></div></div>' +
+        '<div style="font-size:var(--fs-11);color:var(--fg-muted);margin-bottom:var(--sp-2)" id="mCount">' +
+          '已完成 ' + t.step + '/' + steps.length + ' 步</div>' +
+        '<details><summary style="font-size:var(--fs-12);color:var(--brand-600);cursor:pointer">' +
+          '展开全部步骤</summary>' +
+          '<ol class="steps" id="mSteps" style="margin-top:var(--sp-2)">' +
+          steps.map(function (s, i) {
+            return '<li data-state="todo"><span class="step__mark">' + (i + 1) + '</span>' +
+              '<span class="step__text"><b style="font-size:var(--fs-12)">' + U.esc(s) + '</b></span></li>';
+          }).join('') + '</ol></details>' +
+      '</div></div>';
+  }
+
+  /* ---------------------------- 启动 ---------------------------- */
+  msgSystem('移动端会话 · 可查看进度、追问与取回产物');
+  msgUser('（任务由桌面端场景卡「' +
+    ((App.Scenes.get(task.scene) || {}).title || '自由对话') + '」发起）');
+  msgAgent('任务在后台异步执行，<strong>你随时可以追问</strong>，不会打断它。');
+
+  var card = push(cardHTML(task));
+  paintSteps();
+
+  if (task.status === 'running') {
+    // 该任务已有别处（另一标签页 / 返回列表前的本页）在推进时，只订阅进度不再起循环
+    if (hasLiveRunner()) { msgSystem('该任务已在执行中，这里同步显示它的实时进度'); watchRun(); }
+    else startRun();
+  }
+  else if (task.status === 'done') renderDone();
+  else if (task.status === 'failed') renderFailed();
+  else if (task.status === 'waiting') renderWaiting();
+  else if (task.status === 'queued') msgSystem('当前档位并发已满，任务排队中');
+  else if (task.status === 'cancelled') msgSystem('该任务已取消，已产出的中间物保留');
+
+  function paintSteps() {
+    var lis = U.$$('#mSteps li');
+    for (var i = 0; i < lis.length; i++) {
+      lis[i].setAttribute('data-state',
+        i < task.step ? 'done'
+        : (i === task.step && task.status === 'running') ? 'active'
+        : (i === task.step && task.status === 'failed') ? 'error' : 'todo');
+    }
+    var pct = Math.round(task.step / steps.length * 100);
+    var bar = U.$('#mBar');
+    if (bar) {
+      bar.setAttribute('aria-valuenow', String(pct));
+      U.$('.progress__fill', bar).style.width = pct + '%';
+    }
+    var c = U.$('#mCount');
+    if (c) c.textContent = '已完成 ' + task.step + '/' + steps.length + ' 步';
+    var n = U.$('#mNowText');
+    if (n) n.textContent = task.now;
+  }
+
+  /* -------- 执行租约：同一任务同一时刻只保留一个步骤推进循环 --------
+     租约的读写一律穿透 localStorage（App.Lease 内部走 Store.rawTask /
+     Store.casCommit），不读进程内缓存，否则每个标签页只会看到自己写的值。
+     校验与写入整段都在 app.js 里那个跨上下文互斥区（Web Locks）内完成，因此
+     本页被冻结期间租约若已易主，恢复后的写入会被整体拒绝，不会把旧数据盖回去。
+     互斥依赖异步的 Web Locks，因此租约写入都以回调收结果。
+     桌面会话页与任务中心用的是同一套租约，桌面页与移动页同开一个任务时
+     只有一方能推进。 */
+
+  /** 直读 localStorage 上本任务的最新快照，不经缓存 */
+  function freshTask() {
+    return Store.rawTask(task.id);
+  }
+  /** 租约是否被别的页面持有且心跳未过期 */
+  function hasLiveRunner() {
+    return Lease.heldByOther(freshTask());
+  }
+  /** 把本页视图同步为 localStorage 上的值 */
+  function syncLocal() {
+    Store.refresh();
+    task = Store.task(task.id) || task;
+  }
+  /** 竞争执行租约：done(true) 表示拿到，done(false) 表示被别人抢先 */
+  function claimRunner(done) {
+    Lease.acquire(task.id, null, function (ok) {
+      syncLocal();
+      done(!!ok);
+    });
+  }
+  /** 心跳续期并写业务字段：以「租约仍属本页」为前提在互斥区内原子提交。
+      patch 可以是函数 fn(cur)，由它基于提交时刻的最新快照算补丁——冻结恢复后
+      用旧 task.step 算出的进度可能已经过时，必须以提交时刻的 step 为准；
+      返回假值表示放弃本次提交，不写任何字段。
+      done(false) 即租约已易主，调用方必须立即停止推进。 */
+  function renewRunner(patch, done) {
+    Lease.renew(task.id, patch, function (ok) {
+      syncLocal();
+      done(!!ok);
+    });
+  }
+  /* 离开本页即以所有权校验交还租约，用户返回列表后再次进入仍能接着推进；
+     仍在执行中的任务如实标注无人推进，其它长驻页面会按租约过期接管它。
+     pagehide 里等不到异步回调，因此只发起提交——提交本身仍在互斥区内做
+     所有权校验，不会覆盖别人的推进结果 */
+  function releaseRunner() {
+    var t = freshTask();
+    if (!t || t.leaseBy !== RUNNER_ID) return;
+    Lease.release(task.id, t.status === 'running'
+      ? { now: '执行中：原推进页面已关闭，等待其它页面接管' } : {});
+  }
+  window.addEventListener('pagehide', function () {
+    runGen++;
+    if (timer) { clearInterval(timer); timer = null; }
+    if (beat) { clearInterval(beat); beat = null; }
+    if (watcher) { clearInterval(watcher); watcher = null; }
+    stopSlotWatch();
+    releaseRunner();
+  });
+  /* 别的标签页改写状态时同步本页视图（只读页靠此跟随进度） */
+  Store.onChange(function () {
+    var t = Store.task(task.id);
+    if (!t) return;
+    task = t;
+    paintSteps();
+  });
+
+  /* 已有执行方在跑时：只读同步它写入 Store 的进度，不自己改 step / status */
+  function watchRun() {
+    if (watcher) clearInterval(watcher);
+    var seen = task.step;
+    watcher = setInterval(function () {
+      // 穿透缓存刷新，否则读到的始终是本页首次载入的快照
+      Store.refresh();
+      var t = Store.task(task.id);
+      if (!t) return;
+      task = t;
+      if (t.step !== seen) { seen = t.step; flushQueue(); }   // 步骤边界送达排队追问
+      if (t.status === 'done') {
+        clearInterval(watcher); watcher = null;
+        paintDone();
+        return;
+      }
+      paintSteps();
+      // 原执行方心跳过期（页面已关闭）→ 由本页接手推进，进度不停在半路
+      if (t.status === 'running' && Lease.expired(freshTask())) {
+        clearInterval(watcher); watcher = null;
+        startRun();
+      }
+    }, 1000);
+  }
+
+  /* 完成态渲染：本页跑完与同步到完成态共用 */
+  function paintDone() {
+    card.classList.add('taskcard--done');
+    U.$('#mNow').innerHTML = '<span aria-hidden="true">✓</span>' +
+      '<span id="mNowText">全部步骤已完成</span>';
+    paintSteps();
+    renderDone();
+    App.Toast.show('任务已完成', task.title, 'ok', 5000);
+    updateHint();
+  }
+
+  function startRun() {
+    if (timer) clearInterval(timer);
+    if (beat) { clearInterval(beat); beat = null; }
+    timer = null;
+    var gen = ++runGen;
+    // 抢不到租约说明别的页面正在推进：转为只读同步，不起第二个推进循环
+    claimRunner(function (got) {
+      if (gen !== runGen) return;      // 等锁期间已被 yieldRun 收掉，不再起循环
+      if (!got) { watchRun(); return; }
+      if (watcher) { clearInterval(watcher); watcher = null; }   // 由同步显示转为本页推进
+      // 心跳续期：本页推进期间租约不会被误判过期而被别处接管
+      beat = setInterval(function () {
+        renewRunner({}, function (kept) {
+          if (!kept && beat) { clearInterval(beat); beat = null; }
+        });
+      }, HEARTBEAT_MS);
+      timer = setInterval(runTick, TICK_MS);
+    });
+  }
+
+  /** 交出推进权：收掉本页的推进与心跳循环，转为只读同步显示 */
+  function yieldRun() {
+    runGen++;
+    if (timer) { clearInterval(timer); timer = null; }
+    if (beat) { clearInterval(beat); beat = null; }
+    watchRun();
+  }
+
+  function runTick() {
+    // 每个 tick 以 localStorage 的最新快照为准：本页可能被浏览器冻结过，
+    // 手里的 task 快照与租约归属都可能已经过时
+    var cur = freshTask();
+    // 租约已被别处接管（例如本页曾被浏览器冻结）→ 让出推进权，转为同步显示
+    if (!cur || cur.leaseBy !== RUNNER_ID) { yieldRun(); return; }
+    flushQueue();
+    if ((cur.step || 0) >= steps.length) {
+      if (timer) { clearInterval(timer); timer = null; }
+      if (beat) { clearInterval(beat); beat = null; }
+      var outs = [{ name: outName(), size: '182 KB', state: 'ready' }];
+      // 终态与交还租约同处一笔互斥区内的提交；租约已易主则整体不写
+      Lease.release(task.id, { status: 'done', step: steps.length, now: '已完成',
+        artifacts: outs }, function (wrote) {
+          syncLocal();
+          if (!wrote) { watchRun(); return; }
+          paintDone();
+        });
+      return;
+    }
+    // 推进量以提交时刻的最新 step 为准，而不是 tick 开始时的快照。
+    // 续期失败即租约已易主，不写 step / status，直接交还推进权
+    renewRunner(function (at) {
+      var n = at.step || 0;
+      if (at.status !== 'running' || n >= steps.length) return null;
+      return { step: n + 1, now: '正在做第 ' + (n + 1) + ' 步：' + steps[n] };
+    }, function (ok) {
+      if (!ok) { yieldRun(); return; }
+      paintSteps();
+    });
+  }
+
+  function outName() {
+    var map = {
+      'edu-audit-report': '2026年本科教育教学审核评估自评报告.docx',
+      'edu-ledger': '本科教学审核评估整改台账.xlsx',
+      'edu-crosscheck': '教师基本情况填报表.xlsx',
+      'edu-notice': '关于开展2026年秋季学期期中教学检查的通知.docx',
+      'mfg-8d': '8D报告-来料尺寸超差.docx',
+      'mfg-iso-diff': '体系文件条款比对与差异清单.xlsx',
+      'mfg-recon': '供应商对账差异明细表.xlsx',
+      'mfg-sop': '注塑机换模作业指导书.docx'
+    };
+    return map[task.scene] || '任务产出物.docx';
+  }
+
+  function renderDone() {
+    var arts = task.artifacts || [];
+    var html = '<div class="msg msg--agent"><span class="msg__avatar" aria-hidden="true">AI</span>' +
+      '<div class="msg__body" style="font-size:var(--fs-13)"><strong>交付物已就绪</strong>' +
+      '<p class="hint" style="margin:4px 0 var(--sp-3)">原生 Office 文件，已通过 Office / WPS 双端打开校验。</p>';
+    arts.forEach(function (a) {
+      html += '<div style="display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) 0;' +
+        'border-top:1px solid var(--line)">' + U.fileIcon(a.name, true) +
+        '<span style="flex:1;min-width:0;font-size:var(--fs-12);color:var(--fg-strong);' +
+        'word-break:break-all">' + U.esc(a.name) + '</span></div>' +
+        '<div class="btn-row" style="margin-bottom:var(--sp-2)">' +
+        '<button class="btn btn--sm" type="button" data-pv="' + U.esc(a.name) + '">预览</button>' +
+        '<button class="btn btn--sm btn--primary" type="button" data-share="' + U.esc(a.name) + '">取回 / 分享</button>' +
+        '</div>';
+    });
+    html += '<div class="m-desktop-hint">提出修改意见与口径回写建议在桌面端操作，' +
+      '可选择生效范围。<a href="../desktop/session.html?task=' + encodeURIComponent(task.id) +
+      '">在桌面端打开</a></div></div></div>';
+    push(html);
+  }
+
+  /* -------- 恢复执行：失败重试 / 确认继续 / 跳过统一走并发名额申领 --------
+     失败态与待确认态都不占着并发名额，恢复执行等于重新入场，因此必须过名额校验：
+     只抢执行租约（Lease.acquire）不数名额的话，移动端就成了绕过档位上限的第二条
+     路径，桌面与移动的并发口径也会不一致。名额、queued→running 迁移与取租约是
+     Lease.claimSlot 的同一笔互斥区内提交，上限一律取 Lease.LIMIT，本页不另设常量。
+     取不到名额就退回排队，由名额释放后的接管流程提升它，本页不硬启动。 */
+  var claiming = {};                  // 已发出申领提交、结果未回的任务 id
+  var slotTimer = null;               // 排队期间的名额轮询
+
+  function stopSlotWatch() {
+    if (slotTimer) { clearInterval(slotTimer); slotTimer = null; }
+  }
+
+  /**
+   * 申领名额并恢复推进。
+   * from 是本次操作允许的入场状态（确认 / 跳过为 waiting，重试为 failed，排队出队为
+   * queued）：它随 claimSlot 一起进互斥区断言，等锁期间任务被桌面端取消或推进时这笔
+   * 申领整体不写，已取消的任务不会被旧的恢复操作改回执行中。
+   * patch 为同笔提交要写的业务字段（不含 status，status 由 claimSlot 置为 running）；
+   * okMsg 为拿到名额后的系统提示，queuedNote 为退回排队时写入任务的说明；
+   * onSettled 在本次申领落定后调用（用于收掉按钮所在的那条消息）。
+   */
+  function resume(from, patch, okMsg, queuedNote, onSettled) {
+    if (claiming[task.id]) return;    // 占位：连点不会发出多笔申领
+    claiming[task.id] = true;
+    Lease.claimSlot(task.id, patch, from, function (got) {
+      delete claiming[task.id];
+      syncLocal();
+      if (onSettled) onSettled();
+      if (got) {
+        stopSlotWatch();
+        card.classList.remove('taskcard--err', 'taskcard--wait');
+        U.$('#mNow').innerHTML = '<span class="spinner" aria-hidden="true"></span>' +
+          '<span id="mNowText">' + U.esc(task.now) + '</span>';
+        paintSteps();
+        msgSystem(okMsg);
+        startRun();
+        updateHint();
+        return;
+      }
+      var cur = freshTask();
+      // 等锁期间被别处取消：本次恢复不受理，如实说明，不退回排队把它救活
+      if (cur && cur.status === 'cancelled' && !Lease.fromAllows(from, 'cancelled')) {
+        stopSlotWatch();
+        msgSystem('该任务已被取消，本次恢复操作未执行；已产出的中间物保留');
+        paintSteps();
+        updateHint();
+        return;
+      }
+      // 别处已经把它提升起来并在推进：本页只同步显示，不起第二个推进循环
+      if (cur && cur.status === 'running') {
+        msgSystem('该任务已有其它页面在推进，这里同步显示它的进度');
+        paintSteps();
+        watchRun();
+        updateHint();
+        return;
+      }
+      // 来源状态已被别处改成本路径不受理的状态：同样不退回排队
+      if (!cur || !Lease.fromAllows(from, cur.status)) {
+        stopSlotWatch();
+        msgSystem('该任务的状态已被其它页面改变，这里只同步显示它的最新进度');
+        paintSteps();
+        updateHint();
+        return;
+      }
+      queueBack(from, patch, queuedNote);
+    });
+  }
+
+  /** 名额已满：连同业务字段一并退回排队态等名额释放。租约未必属本页，因此用
+      revoke 落状态——它同笔提交里递增租约版本，旧推进方下一拍校验必然失败。
+      退回同样只认本次操作的入场状态，不能把期间被取消的任务改回排队 */
+  function queueBack(from, patch, note) {
+    Lease.revoke(task.id, function (cur) {
+      // 期间已被别处提升 / 取消：不覆盖它的状态
+      if (!Lease.fromAllows(from, cur.status)) return null;
+      var body = {};
+      Object.keys(patch).forEach(function (k) { body[k] = patch[k]; });
+      body.status = 'queued';
+      body.now = note;
+      return body;
+    }, function (wrote) {
+      syncLocal();
+      if (!wrote) {
+        // 期间已被别处提升 / 取消：如实跟随共享状态，不硬改它
+        var at = freshTask();
+        paintSteps();
+        if (at && at.status === 'running') {
+          msgSystem('该任务已有其它页面在推进，这里同步显示它的进度');
+          watchRun();
+        } else if (at && at.status === 'cancelled' && !Lease.fromAllows(from, 'cancelled')) {
+          msgSystem('该任务已被取消，本次恢复操作未执行；已产出的中间物保留');
+        }
+        updateHint();
+        return;
+      }
+      card.classList.remove('taskcard--err', 'taskcard--wait');
+      var n = U.$('#mNow');
+      if (n) n.innerHTML = '<span id="mNowText">' + U.esc(note) + '</span>';
+      paintSteps();
+      msgSystem('当前档位同时执行上限为 ' + Lease.LIMIT +
+        ' 个，名额已满，本任务已进入排队；名额释放后会自动开始，无需守在本页');
+      App.Toast.show('已排队', '当前并发已满，名额释放后自动开始执行', 'info', 4000);
+      updateHint();
+      watchQueued(patch, note);
+    });
+  }
+
+  /** 排队不是死路：名额一空出就再申领一次，仍走 claimSlot，不绕开上限 */
+  function watchQueued(patch, note) {
+    stopSlotWatch();
+    slotTimer = setInterval(function () {
+      var cur = freshTask();
+      if (!cur) { stopSlotWatch(); return; }
+      if (cur.status === 'running') {   // 已由别处接管提升：转为只读同步进度
+        stopSlotWatch();
+        syncLocal();
+        paintSteps();
+        watchRun();
+        return;
+      }
+      if (cur.status !== 'queued') {    // 已取消 / 已进入其他状态
+        stopSlotWatch();
+        syncLocal();
+        paintSteps();
+        return;
+      }
+      // 名额够不够最终由 claimSlot 在互斥区内按当次快照判定，这里只是省一次取锁的粗筛
+      if (Lease.runningCount(Store.readRaw()) >= Lease.LIMIT) return;
+      stopSlotWatch();
+      // 已落到排队态，这一次出队的入场状态是 queued
+      resume('queued', patch, '并发名额已释放，本任务开始执行', note);
+    }, SLOT_POLL_MS);
+  }
+
+  function renderFailed() {
+    push('<div class="msg msg--agent"><span class="msg__avatar" aria-hidden="true">AI</span>' +
+      '<div class="msg__body" style="font-size:var(--fs-13)">' +
+      '<div class="banner banner--err" style="font-size:var(--fs-12)"><span aria-hidden="true">⚠</span>' +
+      '<div><strong>执行失败</strong><br>' + U.esc(task.reason || '') + '</div></div>' +
+      '<p class="hint" style="margin-top:var(--sp-2)">中间物已保留，重试时从检查点接力。</p>' +
+      '<div class="btn-row" style="margin-top:var(--sp-2)">' +
+      '<button class="btn btn--sm btn--primary" type="button" id="mRetry">重试</button></div>' +
+      '</div></div>');
+    var r = U.$('#mRetry');
+    if (r) r.addEventListener('click', function () {
+      // 重试从失败检查点接力：起点取 failedStep，没有则用当前 step
+      var cur = freshTask() || task;
+      var at = Math.max(0, Math.min(
+        typeof cur.failedStep === 'number' ? cur.failedStep : cur.step, steps.length - 1));
+      // 失败态不占着名额，重试等于重新入场，必须过并发名额这道校验；
+      // 入场状态只认 failed，等锁期间被桌面端取消的任务不会被这次重试救活
+      resume('failed', { retried: true, step: at, reason: '',
+        now: at > 0 ? '从检查点第 ' + (at + 1) + ' 步续跑' : '从第 1 步重新执行' },
+        '已从检查点接力，前序步骤不重复消耗',
+        '排队中：等待前序任务释放并发名额后' +
+          (at > 0 ? '从检查点第 ' + (at + 1) + ' 步续跑' : '从第 1 步重新执行'),
+        function () { r.closest('.msg').remove(); });
+    });
+  }
+
+  function renderWaiting() {
+    push('<div class="msg msg--agent"><span class="msg__avatar" aria-hidden="true">AI</span>' +
+      '<div class="msg__body" style="font-size:var(--fs-13)">' +
+      '<div class="banner banner--warn" style="font-size:var(--fs-12)"><span aria-hidden="true">⚠</span>' +
+      '<div><strong>需要你确认</strong><br>' + U.esc(task.now) + '</div></div>' +
+      '<div class="btn-row" style="margin-top:var(--sp-2)">' +
+      '<button class="btn btn--sm btn--primary" type="button" id="mOk">确认执行</button>' +
+      '<button class="btn btn--sm" type="button" id="mSkip">跳过此步</button></div>' +
+      '<p class="hint" style="margin-top:var(--sp-2)">高危动作不会静默执行。</p>' +
+      '</div></div>');
+    function go(msg, skip) {
+      // dangerAcked 写进共享状态，接管方也会尊重它不再拦截
+      var cur = freshTask() || task;
+      var patch = { reason: '', dangerAcked: true, now: msg };
+      // 跳过是显式放弃当前这一步，因此进度前移一步
+      if (skip) patch.step = Math.min((cur.step || 0) + 1, steps.length);
+      // 待确认态并不占着名额，恢复执行等于重新入场，必须过并发名额这道校验；
+      // 入场状态只认 waiting，等锁期间被桌面端取消的任务不会被这次确认 / 跳过救活
+      resume('waiting', patch, msg, '排队中：等待前序任务释放并发名额后' +
+        (skip ? '跳过高危步骤继续生成' : '继续执行后续步骤'));
+    }
+    U.$('#mOk').addEventListener('click', function () {
+      msgUser('已确认执行');
+      msgSystem('高危动作已确认并记入审计日志');
+      U.$('#mOk').closest('.msg').remove();
+      go('继续执行后续步骤', false);
+    });
+    U.$('#mSkip').addEventListener('click', function () {
+      msgSystem('已跳过该步骤，报告仍会正常生成');
+      U.$('#mSkip').closest('.msg').remove();
+      go('跳过高危步骤，继续生成', true);
+    });
+  }
+
+  /* ------------------------ 追问：执行中也可输入 ------------------------ */
+  function busy() {
+    var t = Store.task(task.id);
+    return t && (t.status === 'running' || t.status === 'queued' || t.status === 'waiting');
+  }
+  function updateHint() {
+    var h = U.$('#mHint');
+    if (queue.length) h.innerHTML = '<b style="color:var(--warn-fg)">' + queue.length +
+      ' 条追问排队中</b>，当前步骤完成后送达';
+    else if (busy()) h.textContent = '任务执行中，你仍可输入（不打断任务）';
+    else h.textContent = '输入框始终可用';
+  }
+  function flushQueue() {
+    if (!queue.length) return;
+    queue.splice(0, queue.length).forEach(function (it) {
+      it.node.classList.remove('msg--queued');
+      var f = U.$('.queued-flag', it.node);
+      if (f) f.outerHTML = '<div class="msg__meta">' + U.clock() + ' · 已送达，原任务未中断</div>';
+      msgAgent(reply(it.text));
+    });
+    updateHint();
+  }
+  function reply(text) {
+    if (/多久|什么时候|进度/.test(text)) {
+      return '当前在第 ' + Math.min(task.step + 1, steps.length) + ' 步，预计还需 2—4 分钟。完成后会推送提示。';
+    }
+    if (/加|补充|也要|附/.test(text)) {
+      return '已作为约束追加到后续步骤，不影响已完成部分，也不重复消耗。';
+    }
+    if (/口径|统计|怎么算/.test(text)) {
+      return '已按本单位口径资产处理。如需临时改口径，会作为本任务的一次性约束，不写入长期资产。';
+    }
+    return '已记录你的追问，会在后续步骤中一并考虑。';
+  }
+
+  function send() {
+    var box = U.$('#mInput');
+    var text = box.value.trim();
+    if (!text) return;
+    box.value = '';
+    if (busy()) {
+      var node = msgUser(text, true);
+      queue.push({ text: text, node: node });
+      updateHint();
+      App.Toast.show('已插入待送达队列', '当前步骤完成后送达，任务不中断', 'info', 3000);
+      if (Store.task(task.id).status !== 'running') {
+        setTimeout(flushQueue, 900);   // 排队/待确认态没有 tick，主动送达
+      }
+      return;
+    }
+    msgUser(text);
+    setTimeout(function () { msgAgent(reply(text)); }, 500);
+  }
+  U.$('#mSend').addEventListener('click', send);
+  U.$('#mInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }
+  });
+
+  /* ------------------------ 产物预览 / 分享 ------------------------ */
+  stream.addEventListener('click', function (e) {
+    var pv = e.target.closest('[data-pv]');
+    if (pv) {
+      App.Toast.show('产物预览', pv.getAttribute('data-pv') +
+        '（移动端提供只读预览，编辑请用桌面端）', 'info', 4500);
+      return;
+    }
+    var sh = e.target.closest('[data-share]');
+    if (sh) {
+      U.$('#mShareName').textContent = sh.getAttribute('data-share');
+      App.Modal.open('mShare');
+    }
+  });
+  U.$$('#mShare [data-act]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      App.Modal.close('mShare');
+      App.Toast.show(b.getAttribute('data-act') + '已完成',
+        U.$('#mShareName').textContent, 'ok', 4000);
+    });
+  });
+
+  updateHint();
+})();
+</script>
+</body>
+</html>
