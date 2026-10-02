@@ -24,6 +24,8 @@ export interface AppConfig {
 	 * 推理模型跑多步长任务时可调大（如 8192），通过 MODEL_MAX_TOKENS 配置。
 	 */
 	readonly modelMaxTokens: number;
+	/** 旗舰模型的实际上下文窗口；未配置时沿用适配层默认值。 */
+	readonly modelContextWindow?: number;
 	/**
 	 * 模型单价，单位「元 / 百万 token」，与各家官网价格页口径一致。
 	 * `undefined` 表示没配 —— 此时用量会被记为「未配价」而不是 0 元。
@@ -218,6 +220,9 @@ export function loadConfig(env: Record<string, string | undefined>): {
 		max: 1_000_000,
 		advice: "填正整数（如 8192），表示单次回复最大输出 token 数；删掉这一行用默认 4096",
 	});
+	const modelContextWindow = env.MODEL_CONTEXT_WINDOW?.trim()
+		? parseInteger("MODEL_CONTEXT_WINDOW", env.MODEL_CONTEXT_WINDOW, 32768, errors, { min: 1, max: 10_000_000 })
+		: undefined;
 
 	/**
 	 * 轻量档（M5-5）。三项要么全配，要么全空 —— 只配一半无法发起轻量请求，
@@ -275,6 +280,7 @@ export function loadConfig(env: Record<string, string | undefined>): {
 		modelApiKey,
 		modelName,
 		modelMaxTokens,
+		...(modelContextWindow === undefined ? {} : { modelContextWindow }),
 		modelInputPriceYuan: parseOptionalPrice("MODEL_INPUT_PRICE", env.MODEL_INPUT_PRICE, errors),
 		modelOutputPriceYuan: parseOptionalPrice("MODEL_OUTPUT_PRICE", env.MODEL_OUTPUT_PRICE, errors),
 		modelCacheReadPriceYuan: parseOptionalPrice(
