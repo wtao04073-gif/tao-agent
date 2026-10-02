@@ -336,7 +336,11 @@ export async function readJsonBody(
 	if (size === 0) return { ok: true, value: {} };
 
 	try {
-		return { ok: true, value: JSON.parse(Buffer.concat(chunks).toString("utf8")) };
+		const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+		if (value === null || typeof value !== "object" || Array.isArray(value)) {
+			return { ok: false, reason: "请求体必须是 JSON 对象" };
+		}
+		return { ok: true, value };
 	} catch {
 		return { ok: false, reason: "请求体不是合法的 JSON" };
 	}

@@ -14,6 +14,7 @@ import {
 	buildDashboard,
 	createPermissionGate,
 	evaluateQuota,
+	isTerminal,
 	PRESET_CARDS,
 	activateableTools,
 	compilePrompt,
@@ -366,6 +367,22 @@ orchestrator.subscribe((event) => {
 	hub.publish(event);
 });
 
+const runningTasks = new Set<string>();
+
+/** 等后台执行退出后再释放终态任务；待确认任务仍需保留会话。 */
+async function closeFinishedTask(taskId: string): Promise<void> {
+	if (runningTasks.has(taskId)) return;
+	const task = orchestrator.get(taskId);
+	if (task === undefined || !isTerminal(task.status)) return;
+	try {
+		await orchestrator.close(taskId);
+	} catch (error) {
+		process.stderr.write(
+			`[任务] ${taskId} 资源释放失败：${error instanceof Error ? error.message : String(error)}\n`,
+		);
+	}
+}
+
 /**
  * 工具集。工作区按租户隔离；产物目录按任务隔离。
  *
@@ -433,13 +450,16 @@ function commitJobConversation(job: StoredJob, conversationId: string, taskId: s
 	}
 	const summary = answer.trim() === "" ? "本次会话未产生文字结论。" : summarizeMemory(answer);
 	const entry: JobMemoryEntry = { conversationId, at: Date.now(), summary };
-	const conversationIds = job.conversationIds.includes(conversationId)
-		? job.conversationIds
-		: [...job.conversationIds, conversationId];
+	// 从最新记录同步读改写，不跨 await，避免并发会话用运行开始时的旧快照覆盖记忆。
+	const latestJob = jobStore.get(job.jobId);
+	if (latestJob === undefined) throw new Error("长程任务不存在，无法沉淀记忆");
+	const conversationIds = latestJob.conversationIds.includes(conversationId)
+		? latestJob.conversationIds
+		: [...latestJob.conversationIds, conversationId];
 	const updated: StoredJob = {
-		...job,
+		...latestJob,
 		conversationIds,
-		memory: [...job.memory, entry].slice(-20),
+		memory: [...latestJob.memory.filter((m) => m.conversationId !== conversationId), entry].slice(-20),
 		updatedAt: Date.now(),
 	};
 	jobStore.put(updated);
@@ -466,7 +486,7 @@ function summarizeMemory(text: string): string {
  * 取某多轮对话的标题与过往问答（按任务创建顺序、事件 seq 顺序配对）。
  *
  * 从该 conversationId 下各轮任务的事件流里，按出现顺序收集 user_message 与
- * assistant_message，相邻配对成 {user, assistant}。仅含已完整回答的轮次
+ * assistant_message，合并相邻同角色消息后配对成 {user, assistant}。仅含已完整回答的轮次
  * （有问有答），未回答完的半截不进上下文。
  *
  * @returns 无权/对话不存在返回 undefined；存在但首轮为空也返回空 turns。
@@ -488,15 +508,21 @@ async function conversationTurns(
 	for (const t of tasks) {
 		const events: readonly TaskEvent[] = orchestrator.events(t.taskId);
 		let pendingUser: string | undefined;
+		let pendingAssistant: string[] = [];
 		for (const e of events) {
 			if (e.type === "user_message") {
-				pendingUser = e.text;
-			} else if (e.type === "assistant_message") {
-				if (pendingUser !== undefined && e.text.trim() !== "") {
-					turns.push({ user: pendingUser, assistant: e.text });
+				if (pendingUser !== undefined && pendingAssistant.length > 0) {
+					turns.push({ user: pendingUser, assistant: pendingAssistant.join("\n\n") });
 					pendingUser = undefined;
+					pendingAssistant = [];
 				}
+				pendingUser = pendingUser === undefined ? e.text : pendingUser + "\n\n" + e.text;
+			} else if (e.type === "assistant_message" && pendingUser !== undefined && e.text.trim() !== "") {
+				pendingAssistant.push(e.text);
 			}
+		}
+		if (pendingUser !== undefined && pendingAssistant.length > 0) {
+			turns.push({ user: pendingUser, assistant: pendingAssistant.join("\n\n") });
 		}
 	}
 	// 只保留最近若干轮，避免历史无限增长撑爆上下文（一期取最近 10 轮）。
@@ -914,6 +940,7 @@ const app = createApp({
 		 *
 		 * 执行失败不会让提交接口报错，失败通过事件流回投（状态转 FAILED）。
 		 */
+		runningTasks.add(taskId);
 		void orchestrator.run(taskId, prompt, rawQuery)
 			.then(() => {
 				// 长程任务：本轮（一次会话）跑完后，登记会话并把结论沉淀为长期记忆，
@@ -932,12 +959,22 @@ const app = createApp({
 				process.stderr.write(
 					`[任务] ${taskId} 执行异常：${error instanceof Error ? error.message : String(error)}\n`,
 				);
+			})
+			.finally(async () => {
+				runningTasks.delete(taskId);
+				await closeFinishedTask(taskId);
 			});
 
 		return { taskId, conversationId };
 	},
 	steerTask: async (tenant, taskId, text) => orchestrator.steer(taskId, text),
-	cancelTask: async (tenant, taskId, reason) => void (await orchestrator.cancel(taskId, reason)),
+	cancelTask: async (tenant, taskId, reason) => {
+		try {
+			await orchestrator.cancel(taskId, reason);
+		} finally {
+			await closeFinishedTask(taskId);
+		}
+	},
 	confirmTask: async (tenant, taskId) => {
 		// 归属校验由路由层 getTask 完成；这里仅推进状态机
 		void tenant;
@@ -945,7 +982,11 @@ const app = createApp({
 	},
 	rejectTask: async (tenant, taskId, reason) => {
 		void tenant;
-		await orchestrator.reject(taskId, reason);
+		try {
+			await orchestrator.reject(taskId, reason);
+		} finally {
+			await closeFinishedTask(taskId);
+		}
 	},
 
 	listScenarios: (tenant) => listCards(PRESET_CARDS, tenant.tenantId),
