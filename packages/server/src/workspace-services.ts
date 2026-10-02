@@ -25,6 +25,8 @@ export interface KnowledgeDocument {
 	readonly createdAt: number;
 	readonly updatedAt: number;
 	readonly status: "ready";
+	readonly version?: number;
+	readonly sha256?: string;
 }
 interface StoredDocument {
 	readonly document: KnowledgeDocument;
@@ -143,12 +145,18 @@ export function createWorkspaceServices(options: { workspaceRoot: string }) {
 		const documentId = createHash("sha256").update(name).digest("hex");
 		const previous = load(tenant).find((d) => d.document.documentId === documentId);
 		if (previous !== undefined && previous.tenant.userId !== tenant.userId) throw new WorkspaceError(403, "只有创建者可更新同名知识文档");
-		const chunks = ingestDocument(paragraphs(text), { tenantId: tenant.tenantId, workspaceId: tenant.workspaceId, ownerId: tenant.userId, scope: Scope.Workspace, knowledgeBaseId: "workspace", documentId, documentName: name });
+		const version = (previous?.document.version ?? 0) + 1;
+        const chunks = ingestDocument(paragraphs(text), { tenantId: tenant.tenantId, workspaceId: tenant.workspaceId, ownerId: tenant.userId, scope: Scope.Workspace, knowledgeBaseId: "workspace", documentId, documentName: name }).map(chunk => ({ ...chunk, id: `${chunk.id}:v${version}`, documentVersion: version }));
 		if (chunks.length === 0) throw new WorkspaceError(400, "文档没有可检索的正文");
 		const now = Date.now();
-		const document: KnowledgeDocument = { documentId, name, ...(input.fileName === undefined ? {} : { fileName: input.fileName }), chunks: chunks.length, createdAt: previous?.document.createdAt ?? now, updatedAt: now, status: "ready" };
+		const document: KnowledgeDocument = { documentId, name, ...(input.fileName === undefined ? {} : { fileName: input.fileName }), chunks: chunks.length, createdAt: previous?.document.createdAt ?? now, updatedAt: now, status: "ready", version, sha256: createHash("sha256").update(text).digest("hex") };
 		const dir = storage(tenant);
 		mkdirSync(dir, { recursive: true });
+		if (previous) {
+			const history = join(dir, "history", documentId); mkdirSync(history, { recursive: true });
+			const saved = join(history, String(previous.document.version ?? 0) + ".json");
+			if (!existsSync(saved)) writeFileSync(saved, JSON.stringify(previous), { mode: 0o600, flag: "wx" });
+		}
 		const target = join(dir, documentId + ".json");
 		const temporary = join(dir, randomUUID() + ".tmp");
 		try {
@@ -165,6 +173,19 @@ export function createWorkspaceServices(options: { workspaceRoot: string }) {
 		unlinkSync(join(storage(tenant), documentId + ".json"));
 		return true;
 	}
+ function knowledgeVersion(tenant:TenantContext,documentId:string,version:number) {
+  if(!/^[a-f0-9]{64}$/.test(documentId)||!Number.isSafeInteger(version)||version<1)throw new WorkspaceError(400,"文档版本参数无效");
+  const current=load(tenant).find(d=>d.document.documentId===documentId);
+  if(!current)throw new WorkspaceError(404,"引用文档已删除或无权访问");
+  let stored=current;
+  if(current.document.version!==version) {
+   const path=checkedFile(storage(tenant),join(storage(tenant),"history",documentId,String(version)+".json"));
+   try {stored=JSON.parse(readFileSync(path,"utf8")) as StoredDocument;}catch{throw new WorkspaceError(404,"引用版本不可用");}
+  }
+  if(stored.tenant.tenantId!==tenant.tenantId||stored.tenant.workspaceId!==tenant.workspaceId||stored.document.version!==version)throw new WorkspaceError(404,"引用版本不可用");
+  return {document:stored.document,chunks:stored.chunks};
+ }
+
 	function createKnowledgeTool(tenant: TenantContext): PlatformTool {
 		const empty = new MemoryKnowledgeStore();
 		const template = createKnowledgeToolset({ store: empty, membership: { ...tenant, role: Role.Member } })[0];
@@ -177,6 +198,6 @@ export function createWorkspaceServices(options: { workspaceRoot: string }) {
 			return tool.execute(call);
 		} };
 	}
-	return { listKnowledge, ingestKnowledge, searchKnowledge, deleteKnowledge, createKnowledgeTool };
+	return { knowledgeVersion, listKnowledge, ingestKnowledge, searchKnowledge, deleteKnowledge, createKnowledgeTool };
 }
 export type WorkspaceServices = ReturnType<typeof createWorkspaceServices>;

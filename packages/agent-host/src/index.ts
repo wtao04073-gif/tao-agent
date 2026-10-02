@@ -21,3 +21,5 @@ export {
 	type KernelEvent,
 	type TranslatorContext,
 } from "./event-translator.ts";
+
+export { createMcpToolset, createSubagentTool, type McpServerConfig } from "./extensions.ts";

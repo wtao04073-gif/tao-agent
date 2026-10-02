@@ -15,6 +15,7 @@
  *     所以此处不吞异常、不做「出错就放行」的兜底。
  */
 
+import { Confirmations } from "./confirmations.ts";
 import { statSync } from "node:fs";
 import { basename } from "node:path";
 import {
@@ -47,6 +48,8 @@ import { TenantTaskGate, type ReleaseReservation } from "./tenant-gate.ts";
 
 /** 宿主运行所需的外部依赖。全部注入 —— 便于测试与私有化部署替换。 */
 export interface HostRuntime {
+	saveAction?: (action: import("@tao/core").StoredAction) => void | Promise<void>;
+	approvalTimeoutMs?: number;
 	/** 创建一个独占的会话存储。一人一 Session 由调用方保证。 */
 	createSession(sessionId: string): Promise<Session>;
 	/** 模型清单与 provider。 */
@@ -183,7 +186,7 @@ function toKernelTool(
 		taskId: string;
 		tenant: RunnerSpec["tenant"];
 		emitDetail: (detail: string) => void;
-		emitArtifact: (path: string) => Promise<void>;
+		emitArtifact: (path: string, details?: unknown) => Promise<void>;
 	},
 ): AgentHarnessTool<undefined> {
 	return {
@@ -206,7 +209,9 @@ function toKernelTool(
 			// 这是「取产物」全链路的数据源：编排器据此累积任务产物、前端据此给下载入口。
 			if (outcome.isError !== true) {
 				const outputPath = extractOutputPath(outcome.details);
-				if (outputPath !== undefined) await ctx.emitArtifact(outputPath);
+				if (outputPath !== undefined) await ctx.emitArtifact(outputPath, outcome.details);
+				const paths = (outcome.details as { outputPaths?: unknown } | undefined)?.outputPaths;
+				if (Array.isArray(paths)) for (const path of paths) if (typeof path === "string") await ctx.emitArtifact(path);
 			}
 			return {
 				content: [{ type: "text", text: outcome.text }],
@@ -218,6 +223,7 @@ function toKernelTool(
 }
 
 class InProcessRunner implements Runner {
+	readonly confirmations: Confirmations;
 	private readonly listeners = new Set<(event: TaskEvent) => void | Promise<void>>();
 	private readonly steps = new StepCounter();
 	private readonly translatorContext: TranslatorContext;
@@ -252,7 +258,9 @@ class InProcessRunner implements Runner {
 		now: () => number,
 		model: string,
 		enterPreflight?: () => Promise<ReleaseReservation | undefined>,
+		confirmations?: Confirmations,
 	) {
+		this.confirmations = confirmations ?? new Confirmations(spec.taskId, spec.tenant, () => {});
 		this.enterPreflight = enterPreflight;
 		this.sessionId = sessionId;
 		this.session = session;
@@ -335,7 +343,7 @@ class InProcessRunner implements Runner {
 	 * 产物已生成，不该因展示字段拿不到而打断任务。`final` 恒为 true：平台的
 	 * 办公工具一次性落最终文件，没有「流式草稿→定稿」两段式产物。
 	 */
-	async emitArtifact(absPath: string): Promise<void> {
+	async emitArtifact(absPath: string, details?: unknown): Promise<void> {
 		const name = basename(absPath);
 		let sizeBytes = 0;
 		try {
@@ -350,6 +358,7 @@ class InProcessRunner implements Runner {
 			artifactId: absPath,
 			name,
 			mimeType: mimeFor(name),
+            ...(typeof (details as { revisionSummary?: unknown } | undefined)?.revisionSummary === "string" ? { revisionSummary: (details as {revisionSummary:string}).revisionSummary } : {}),
 			sizeBytes,
 			final: true,
 		}));
@@ -366,6 +375,7 @@ class InProcessRunner implements Runner {
 				...base,
 				type: "user_message",
 				text: rawUserText,
+                ...(this.spec.inputReferences ? { references: this.spec.inputReferences } : {}),
 				delivery: "queued_after_current_step",
 			}));
 		}
@@ -410,8 +420,12 @@ class InProcessRunner implements Runner {
 		await this.lane.steer(text, [], BACKGROUND_CONTEXT);
 	}
 
+	listActions() { return this.confirmations.list(); }
+	async confirmAction(actionId?: string): Promise<void> { await this.confirmations.approve(actionId); }
+
 	async abort(reason: string): Promise<void> {
 		this.assertOpen();
+		await this.confirmations.cancel();
 		// abort 是唯一能取消进行中工具的手段（steer 不能）
 		await this.lane.abort(BACKGROUND_CONTEXT);
 		await this.emit((base) => ({
@@ -431,6 +445,7 @@ class InProcessRunner implements Runner {
 	async close(): Promise<void> {
 		if (this.closed) return; // 幂等
 		this.closed = true;
+		await this.confirmations.cancel();
 		this.listeners.clear();
 		await this.session.close(BACKGROUND_CONTEXT);
 	}
@@ -449,40 +464,36 @@ class InProcessRunner implements Runner {
  *    这正是我们要的行为。自己兜底反而可能把拒绝变成放行。
  */
 function installGate(
-	harness: { hooks: { on: (name: string, handler: (event: never) => unknown) => () => void } },
-	gate: PermissionGate,
-	runner: InProcessRunner,
-	spec: RunnerSpec,
+ harness: { hooks: { on: (name: string, handler: (event: never) => unknown) => () => void } },
+ gate: PermissionGate, runner: InProcessRunner, spec: RunnerSpec,
 ): void {
-	harness.hooks.on("before_tool", (async (event: {
-		toolName: string;
-		args: unknown;
-	}) => {
-		const decision: ToolDecision = await gate({
-			toolName: event.toolName,
-			args: event.args,
-			tenant: spec.tenant,
-			taskId: spec.taskId,
-		});
-
-		await runner.emit((base) => ({
-			...base,
-			type: "tool_decision",
-			toolName: event.toolName,
-			decision:
-				decision.kind === "allow"
-					? "allowed"
-					: decision.kind === "block"
-						? "blocked"
-						: "await_confirm",
-			...(decision.kind === "allow" ? {} : { reason: decision.reason }),
-		}));
-
-		if (decision.kind === "allow") return undefined;
-		// confirm 与 block 都先拦下执行。两者的区别在编排层：
-		// confirm 会把任务转入 AWAIT_CONFIRM 等用户决定，block 是终局拒绝。
-		return { block: { reason: decision.reason } };
-	}) as (event: never) => unknown);
+ harness.hooks.on("before_tool", (async (event: { toolCallId: string; toolName: string; args: unknown }) => {
+  const args = structuredClone(event.args);
+  const request = { toolName: event.toolName, args, tenant: spec.tenant, taskId: spec.taskId };
+  let decision = await gate(request);
+  if (decision.kind === "confirm") {
+   const pending = await runner.confirmations.request(event.toolCallId, event.toolName, args, decision.reason);
+   await runner.emit(base => ({ ...base, type: "tool_decision", toolName: event.toolName,
+    decision: "await_confirm", reason: decision.kind === "confirm" ? decision.reason : "需要确认",
+    actionId: pending.action.actionId, expiresAt: pending.action.expiresAt }));
+   if (!await pending.decision) {
+    runner.noteRunFailure("动作被拒绝、过期或取消，未执行");
+    return { block: { reason: "动作未获得有效授权", terminate: true } };
+   }
+   // 在同一次工具调用中复核路径、输入版本及配额。仅本次参数的 confirm 可被消费。
+   decision = await gate(request);
+   if (decision.kind === "block") {
+    await runner.confirmations.finish(pending.action.actionId, "invalidated");
+   } else decision = { kind: "allow" };
+  }
+  await runner.emit(base => ({ ...base, type: "tool_decision", toolName: event.toolName,
+   decision: decision.kind === "allow" ? "allowed" : "blocked",
+   ...(decision.kind === "allow" ? {} : { reason: decision.reason }) }));
+  return decision.kind === "allow" ? undefined : { block: { reason: decision.reason } };
+ }) as (event: never) => unknown);
+ harness.hooks.on("after_tool", (async (event: { toolCallId: string; isError: boolean }) => {
+  await runner.confirmations.completed(event.toolCallId, event.isError);
+ }) as (event: never) => unknown);
 }
 
 /** 进程内 Runner 工厂。 */
@@ -545,7 +556,7 @@ export class InProcessRunnerFactory implements RunnerFactory {
 				taskId: spec.taskId,
 				tenant: spec.tenant,
 				emitDetail,
-				emitArtifact: (path) => runnerRef?.emitArtifact(path) ?? Promise.resolve(),
+				emitArtifact: (path, details) => runnerRef?.emitArtifact(path, details) ?? Promise.resolve(),
 			}),
 		);
 
@@ -621,6 +632,7 @@ export class InProcessRunnerFactory implements RunnerFactory {
 								throw new Error(verdict.reason);
 							}
 						}),
+			new Confirmations(spec.taskId, spec.tenant, this.runtime.saveAction ?? (() => {}), now, this.runtime.approvalTimeoutMs),
 		);
 		runnerRef = runner;
 

@@ -1226,13 +1226,13 @@
 		}
 		btn.addEventListener("click", function () {
 			btn.disabled = true; no.disabled = true;
-			App.api("POST", "/api/tasks/" + state.taskId + "/confirm", {}).then(function (r) {
+			App.api("POST", "/api/tasks/" + (ev.taskId || state.taskId) + "/confirm", ev.actionId ? { actionId: ev.actionId } : {}).then(function (r) {
 				if (r.ok) box.remove(); else failBtn("确认", r);
 			}).catch(function () { failBtn("确认", null); });
 		});
 		no.addEventListener("click", function () {
 			btn.disabled = true; no.disabled = true;
-			App.api("POST", "/api/tasks/" + state.taskId + "/reject", {}).then(function (r) {
+			App.api("POST", "/api/tasks/" + (ev.taskId || state.taskId) + "/reject", ev.actionId ? { actionId: ev.actionId } : {}).then(function (r) {
 				if (r.ok) box.remove(); else failBtn("拒绝", r);
 			}).catch(function () { failBtn("拒绝", null); });
 		});

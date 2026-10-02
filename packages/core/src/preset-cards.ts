@@ -711,7 +711,7 @@ const generalTask: ScenarioCard = {
 		},
 	],
 	// 开放当前装配的全部办公 / 文档工具；模型按需调用。
-	tools: ["list_sheets", "read_table", "reconcile_tables", "read_document", "write_document", "search_knowledge"],
+	tools: ["list_sheets", "read_table", "reconcile_tables", "read_document", "write_document", "edit_document", "search_knowledge", "delegate_tasks", "mcp_list_tools", "mcp_call"],
 	systemPrompt:
 		"你是面向高校与制造业办公人员的通用办公助手。用户用一句话提出需求，可能附带了上传的文件。" +
 		"请先判断需要读取哪些附件、用哪些工具，再规划并执行；产出要可直接使用（规范的 Word / Excel）。" +

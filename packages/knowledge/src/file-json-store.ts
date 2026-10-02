@@ -84,7 +84,7 @@ export class FileJsonStore<T extends TenantScoped> {
 	private writeAtomic(id: string, item: T): void {
 		const final = this.path(id);
 		const tmp = `${final}.tmp-${process.pid}-${Math.floor(Math.random() * 1e6)}`;
-		writeFileSync(tmp, JSON.stringify(item) + "\n", { encoding: "utf8" });
+		writeFileSync(tmp, JSON.stringify(item) + "\n", { encoding: "utf8", mode: 0o600 });
 		renameSync(tmp, final);
 	}
 }

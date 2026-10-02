@@ -52,11 +52,14 @@ export interface TaskToolDecisionEvent extends TaskEventBase {
 	readonly decision: "allowed" | "blocked" | "await_confirm";
 	/** 拒绝或需确认的原因，会展示给用户。 */
 	readonly reason?: string;
+	readonly actionId?: string;
+	readonly expiresAt?: number;
 }
 
 /** 已产出的中间物或最终产物。失败任务也要保留中间物（验收要求）。 */
 export interface TaskArtifactEvent extends TaskEventBase {
 	readonly type: "artifact";
+    readonly revisionSummary?: string;
 	readonly artifactId: string;
 	readonly name: string;
 	readonly mimeType: string;
@@ -95,6 +98,7 @@ export interface TaskAssistantDeltaEvent extends TaskEventBase {
 /** 用户在执行期间插入的消息。 */
 export interface TaskUserMessageEvent extends TaskEventBase {
 	readonly type: "user_message";
+    readonly references?: readonly { fileId: string; name: string; sha256: string }[];
 	readonly text: string;
 	/**
 	 * 投递语义。

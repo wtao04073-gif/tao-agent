@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -43,6 +43,8 @@ class TestRunner {
 	finish() { this.pending.resolve(); }
 	fail() { this.pending.reject(new Error("模拟执行失败")); }
 	async awaitConfirmation() {
+        const dir = join(host.dir, ".execution", "actions"); mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, this.spec.taskId + ".json"), JSON.stringify({ actionId: this.spec.taskId, taskId: this.spec.taskId, tenant: this.spec.tenant, status: "pending", expiresAt: Date.now() + 60000 }));
 		await this.listener?.({
 			type: "tool_decision", toolName: "test_write", decision: "await_confirm",
 			reason: "需要确认", taskId: this.spec.taskId, tenant: this.spec.tenant,
@@ -59,13 +61,14 @@ vi.mock("../src/config.ts", () => ({
 }));
 vi.mock("../src/accounts.ts", async (original) => ({
 	...await original<typeof import("../src/accounts.ts")>(),
-	loadAccounts: () => ({}), hasDefaultTokens: () => false,
+	loadAccounts: () => ({ accounts: [] }), hasDefaultTokens: () => false,
 }));
 vi.mock("../src/app.ts", async (original) => ({
 	...await original<typeof import("../src/app.ts")>(),
 	createApp: (deps: AppDeps) => { host.deps = deps; return vi.fn(); },
 }));
-vi.mock("@tao/agent-host", () => ({
+vi.mock("@tao/agent-host", async (original) => ({
+ ...await original<typeof import("@tao/agent-host")>(),
 	createModelRuntime: () => ({ models: {}, model: {} }),
 	MemorySessionFactory: class { close = vi.fn(); },
 	InProcessRunnerFactory: class {

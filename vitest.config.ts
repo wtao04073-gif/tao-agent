@@ -10,6 +10,7 @@ export default defineConfig({
 		environment: "node",
 		include: ["packages/*/test/**/*.test.ts", "e2e/**/*.test.ts"],
 		testTimeout: 30000,
+        server: { deps: { inline: ["eventsource", "@modelcontextprotocol/client"] } },
 	},
 	resolve: {
 		conditions: ["source"],

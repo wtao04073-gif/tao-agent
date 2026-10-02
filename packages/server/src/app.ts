@@ -53,6 +53,7 @@ export interface Principal {
 
 /** 上传成功后回给前端的文件信息。 */
 export interface UploadedFile {
+    readonly fileId?: string;
 	readonly name: string;
 	/** 工具消费用的绝对路径（在任务工作区内）。 */
 	readonly path: string;
@@ -104,9 +105,9 @@ export interface AppDeps {
 		name: string,
 	) => string | undefined;
 	/** 用户确认高危动作后继续。 */
-	readonly confirmTask?: (tenant: TenantContext, taskId: string) => Promise<void>;
+	readonly confirmTask?: (tenant: TenantContext, taskId: string, actionId?: string) => Promise<void>;
 	/** 用户拒绝高危动作（取消任务）。 */
-	readonly rejectTask?: (tenant: TenantContext, taskId: string, reason: string) => Promise<void>;
+	readonly rejectTask?: (tenant: TenantContext, taskId: string, reason: string, actionId?: string) => Promise<void>;
 	/** 取某任务的事件历史，供 SSE 重连补发。 */
 	readonly taskEvents: (tenant: TenantContext, taskId: string, afterSeq: number) => readonly TaskEvent[];
 	/** 列出某租户工作区的任务。 */
@@ -117,6 +118,8 @@ export interface AppDeps {
 	readonly submitTask: (
 		tenant: TenantContext,
 		input: {
+			readonly idempotencyKey?: string;
+			readonly retryOf?: string;
 			readonly scenarioId: string;
 			readonly fields: Record<string, unknown>;
 			/**
@@ -160,7 +163,7 @@ export interface AppDeps {
 	/** 在执行期间插入消息（「执行中可继续对话」的落点）。 */
 	readonly steerTask: (tenant: TenantContext, taskId: string, text: string) => Promise<void>;
 	/** 取消任务。 */
-	readonly cancelTask: (tenant: TenantContext, taskId: string, reason: string) => Promise<void>;
+	readonly cancelTask: (tenant: TenantContext, taskId: string, reason: string, actionId?: string) => Promise<void>;
 	readonly hub: SseHub;
 	/**
 	 * 取用量看板。仅租户管理员可调。
@@ -843,6 +846,7 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 				try {
 					// 租户来自鉴权，**绝不**从请求体取 —— 见文件头说明
 					const result = await deps.submitTask(tenant, {
+						...(typeof req.headers["idempotency-key"] === "string" ? { idempotencyKey: req.headers["idempotency-key"] } : {}),
 						scenarioId,
 						fields,
 						tier,
@@ -853,7 +857,7 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 					});
 					sendJson(res, 202, result);
 				} catch (error) {
-					sendError(res, 400, error instanceof Error ? error.message : "任务提交失败");
+					sendError(res, error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : 400, error instanceof Error ? error.message : "任务提交失败");
 				}
 				return;
 			}
@@ -972,7 +976,8 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 				sendError(res, 400, body.reason);
 				return;
 			}
-			const payload = body.value as { text?: unknown; reason?: unknown };
+			const payload = body.value as { text?: unknown; reason?: unknown; actionId?: unknown };
+			if (payload.actionId !== undefined && (typeof payload.actionId !== "string" || payload.actionId.trim() === "")) { sendError(res, 400, "actionId 无效"); return; }
 
 			try {
 				if (action === "steer") {
@@ -1006,7 +1011,7 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 						sendError(res, 501, "当前部署未启用动作确认");
 						return;
 					}
-					await deps.confirmTask(tenant, taskId);
+					await deps.confirmTask(tenant, taskId, payload.actionId as string | undefined);
 					sendJson(res, 200, { status: "confirmed" });
 					return;
 				}
@@ -1019,7 +1024,7 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 					const reason = typeof payload.reason === "string" && payload.reason.trim() !== ""
 						? payload.reason
 						: "用户拒绝了该高危动作";
-					await deps.rejectTask(tenant, taskId, reason);
+					await deps.rejectTask(tenant, taskId, reason, payload.actionId as string | undefined);
 					sendJson(res, 200, { status: "rejected" });
 					return;
 				}

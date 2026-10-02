@@ -35,3 +35,5 @@ export {
 } from "./docx-reader.ts";
 export { validateDocx, type DocxValidationResult } from "./validate-docx.ts";
 export { createDocToolset, DOC_TOOL_POLICIES, type DocToolsetOptions } from "./doc-toolset.ts";
+
+export { reviseDocument, createDocumentEditTool } from "./edit-document.ts";

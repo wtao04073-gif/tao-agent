@@ -38,7 +38,9 @@ export function createWorkspaceHandler(deps: WorkspaceDeps) {
 					const query = url.searchParams.get("q")?.trim();
 					const documents = services.listKnowledge(tenant);
 					sendJson(res, 200, { documents, ...(query ? { hits: await services.searchKnowledge(tenant, query) } : {}) });
-				} else if (method === "POST" && path.length === 2) {
+				} else if (method === "GET" && path.length === 5 && path[3] === "versions") {
+                    sendJson(res,200,services.knowledgeVersion(tenant,path[2]!,Number(path[4])));
+                } else if (method === "POST" && path.length === 2) {
 					const body = await readJsonBody(req);
 					if (!body.ok) throw new WorkspaceError(400, body.reason);
 					if (body.value === null || typeof body.value !== "object" || Array.isArray(body.value)) throw new WorkspaceError(400, "文档参数无效");

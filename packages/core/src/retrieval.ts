@@ -17,6 +17,7 @@ export interface Chunk {
 	readonly id: string;
 	readonly documentId: string;
 	readonly documentName: string;
+    readonly documentVersion?: number;
 	/** 片段正文。 */
 	readonly text: string;
 	/** 在原文中的位置，用于「跳转到原文」。 */
@@ -177,12 +178,14 @@ export function citationsOf(hits: readonly SearchHit[]): Array<{
 	readonly chunkId: string;
 	readonly documentId: string;
 	readonly documentName: string;
+    readonly documentVersion?: number;
 	readonly position: number;
 }> {
 	return hits.map((h) => ({
 		chunkId: h.chunk.id,
 		documentId: h.chunk.documentId,
 		documentName: h.chunk.documentName,
+        ...(h.chunk.documentVersion === undefined ? {} : { documentVersion: h.chunk.documentVersion }),
 		position: h.chunk.position,
 	}));
 }
