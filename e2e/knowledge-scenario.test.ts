@@ -169,9 +169,12 @@ describe("M3-2 验收 · 知识库场景端到端", () => {
 		for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 	});
 
-	it("十张场景卡全部可跑到产出", () => {
-		// M3 的一个里程碑：M2 交付时 2 张，M3-1 后 6 张，M3-2 后全部
-		const runnable = PRESET_CARDS.filter((c) => isFullyImplemented([...c.tools]));
+	it("十张行业场景卡全部可跑到产出", () => {
+		// M3 的一个里程碑：M2 交付时 2 张，M3-1 后 6 张，M3-2 后全部。
+		// 通用自由任务卡（industry=general）是后续自由入口兜底，不计入这十张行业卡。
+		const runnable = PRESET_CARDS.filter(
+			(c) => c.industry !== "general" && isFullyImplemented([...c.tools]),
+		);
 		expect(runnable).toHaveLength(10);
 	});
 

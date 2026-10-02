@@ -29,6 +29,12 @@ export interface TaskRecord {
 	readonly sessionId: string;
 	/** 发起任务的场景卡 id（M5-3）。自由对话等非场景入口缺省。 */
 	readonly scenarioId?: string;
+	/** 所属多轮对话 id；缺省等于独立一轮。 */
+	readonly conversationId?: string;
+	/** 对话标题（首轮 query 摘要）。 */
+	readonly title?: string;
+	/** 所属长程任务（Job）id；临时对话缺省。 */
+	readonly jobId?: string;
 	readonly status: TaskStatus;
 	/** 面向用户的失败/取消原因。终态非成功时必须有值。 */
 	readonly reason?: string;
@@ -68,6 +74,11 @@ export interface SubmitOptions {
 	readonly sessionId: string;
 	/** 场景卡 id。自由对话等非场景入口可省略。 */
 	readonly scenarioId?: string;
+	/** 多轮对话归属与标题（续聊轮次透传，落首条变更）。 */
+	readonly conversationId?: string;
+	readonly title?: string;
+	/** 长程任务归属。 */
+	readonly jobId?: string;
 	/**
 	 * 模型档位（M5-5）。显式选路入口：`"flagship"`（默认）或 `"lite"`，
 	 * 透传到 factory.createRunner 的 RunnerSpec.tier，决定本次 run 用哪个模型。
@@ -79,6 +90,10 @@ export interface SubmitOptions {
 	readonly tools: RunnerSpec["tools"];
 	readonly gate: RunnerSpec["gate"];
 	readonly activeTools?: readonly string[];
+	/** 多轮续聊时本轮之前的历史问答。 */
+	readonly history?: RunnerSpec["history"];
+	/** 本次运行注入的技能（智能体挂载的技能 + 本次显式选择的技能）。 */
+	readonly skills?: RunnerSpec["skills"];
 }
 
 /**
@@ -289,6 +304,9 @@ export class TaskOrchestrator {
 			tenant: options.tenant,
 			sessionId: options.sessionId,
 			...(options.scenarioId === undefined ? {} : { scenarioId: options.scenarioId }),
+			...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
+			...(options.title === undefined ? {} : { title: options.title }),
+			...(options.jobId === undefined ? {} : { jobId: options.jobId }),
 			status: TaskStatus.Queued,
 			artifacts: [],
 			createdAt: at,
@@ -314,6 +332,8 @@ export class TaskOrchestrator {
 				...(options.activeTools === undefined ? {} : { activeTools: options.activeTools }),
 				// 档位显式透传；缺省由 Runner 侧回落旗舰（RunnerSpec.tier 默认）
 				...(options.tier === undefined ? {} : { tier: options.tier }),
+				...(options.history === undefined ? {} : { history: options.history }),
+				...(options.skills === undefined ? {} : { skills: options.skills }),
 			});
 		} catch (error) {
 			// QUEUED 记录此刻已落内存并落盘，而 runners 中没有执行器。
@@ -328,6 +348,12 @@ export class TaskOrchestrator {
 		// Runner 有自己从 1 开始的序号空间，直接入库会与状态事件的序号撞车，
 		// 因此这里统一重新编号（见 ingest）
 		runner.subscribe(async (event) => {
+			// 瞬时事件（流式增量 seq=0）：只实时 fanout，不进事件日志、不落盘、
+			// 不推进 seq 游标、不触发派生状态迁移。断线/轮询不补发，由定稿事件补全。
+			if (event.seq === 0) {
+				await this.fanout(event);
+				return;
+			}
 			// ingest 内部已把「内存事件日志推进」与「落盘」解耦：磁盘写失败只经
 			// onPersistenceError 告警，不抛错。这样 Runner 的 publish 不会因监听器
 			// 异常吞掉后续处理，fanout 与派生状态迁移也不会被落盘失败跳过。
@@ -389,13 +415,13 @@ export class TaskOrchestrator {
 	 * 与 submit 分开是刻意的：submit 立即返回让用户能继续对话，
 	 * run 由调度器在有执行位时调用。一期直接串行调用。
 	 */
-	async run(taskId: string, prompt: string): Promise<TaskRecord> {
+	async run(taskId: string, prompt: string, userText?: string): Promise<TaskRecord> {
 		const runner = this.runners.get(taskId);
 		if (runner === undefined) throw new Error(`任务 ${taskId} 没有对应的 Runner`);
 
 		await this.transition(taskId, TaskStatus.Running);
 		try {
-			await runner.prompt(prompt);
+			await runner.prompt(prompt, userText);
 			const current = this.tasks.get(taskId) as TaskRecord;
 			// 若执行过程中已进入终态（例如被取消），不再覆盖
 			if (!isTerminal(current.status) && current.status !== TaskStatus.AwaitConfirm) {
@@ -628,8 +654,13 @@ export class TaskOrchestrator {
 			taskId: record.taskId,
 			tenant: record.tenant,
 			sessionId: record.sessionId,
-			// 场景归属是任务静态属性，只随首条（create）变更落盘
+			// 场景/对话归属与标题是任务静态属性，只随首条（create）变更落盘
 			...(from === null && record.scenarioId !== undefined ? { scenarioId: record.scenarioId } : {}),
+			...(from === null && record.conversationId !== undefined
+				? { conversationId: record.conversationId }
+				: {}),
+			...(from === null && record.title !== undefined ? { title: record.title } : {}),
+			...(from === null && record.jobId !== undefined ? { jobId: record.jobId } : {}),
 			seq,
 			at: record.updatedAt,
 			from,

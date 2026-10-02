@@ -34,7 +34,8 @@
 <script>
 (function () {
 	App.Theme.init();
-	var DEFAULT_NEXT = App._r("workbench");
+	// 默认落点统一为新版单页对话工作台（不再进入旧的场景卡片工作台）。
+	var DEFAULT_NEXT = "/chat.html";
 
 	// 回跳地址白名单：只接受以单个 "/" 开头的站内路径，
 	// 拒绝任何 scheme（javascript:/data:/http: 等）、协议相对 URL（//）、

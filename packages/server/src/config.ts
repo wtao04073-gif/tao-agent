@@ -20,6 +20,11 @@ export interface AppConfig {
 	readonly modelApiKey: string;
 	readonly modelName: string;
 	/**
+	 * 单次回复最大输出 token 数。旗舰与轻量档共用此上限，缺省 4096。
+	 * 推理模型跑多步长任务时可调大（如 8192），通过 MODEL_MAX_TOKENS 配置。
+	 */
+	readonly modelMaxTokens: number;
+	/**
 	 * 模型单价，单位「元 / 百万 token」，与各家官网价格页口径一致。
 	 * `undefined` 表示没配 —— 此时用量会被记为「未配价」而不是 0 元。
 	 *
@@ -207,6 +212,13 @@ export function loadConfig(env: Record<string, string | undefined>): {
 		});
 	}
 
+	// 单次输出上限。留空走 4096 默认；推理模型跑长任务可在 .env 调大。
+	const modelMaxTokens = parseInteger("MODEL_MAX_TOKENS", env.MODEL_MAX_TOKENS, 4096, errors, {
+		min: 1,
+		max: 1_000_000,
+		advice: "填正整数（如 8192），表示单次回复最大输出 token 数；删掉这一行用默认 4096",
+	});
+
 	/**
 	 * 轻量档（M5-5）。三项要么全配，要么全空 —— 只配一半无法发起轻量请求，
 	 * 还会让「以为启用了省钱档、实际仍走旗舰」这种静默偏差发生，故一次性报错。
@@ -262,6 +274,7 @@ export function loadConfig(env: Record<string, string | undefined>): {
 		modelBaseUrl,
 		modelApiKey,
 		modelName,
+		modelMaxTokens,
 		modelInputPriceYuan: parseOptionalPrice("MODEL_INPUT_PRICE", env.MODEL_INPUT_PRICE, errors),
 		modelOutputPriceYuan: parseOptionalPrice("MODEL_OUTPUT_PRICE", env.MODEL_OUTPUT_PRICE, errors),
 		modelCacheReadPriceYuan: parseOptionalPrice(
@@ -390,6 +403,7 @@ export function describeConfig(config: AppConfig): string {
 		`  工作区        ${config.workspaceDir}`,
 		`  模型服务      ${config.modelBaseUrl}`,
 		`  旗舰模型      ${config.modelName}`,
+		`  输出上限      ${config.modelMaxTokens} tokens`,
 		`  轻量模型      ${config.modelLiteName ?? "未配置（回落旗舰）"}`,
 		`  API Key       ${config.modelApiKey === "" ? "未配置" : "已配置"}`,
 		`  模型单价      ${describePrices(config)}`,

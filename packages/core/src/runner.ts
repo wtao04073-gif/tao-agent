@@ -104,14 +104,46 @@ export interface RunnerSpec {
 	readonly gate: PermissionGate;
 	/** 步数上限，超出转 EXCEEDED。 */
 	readonly maxSteps?: number;
+	/**
+	 * 多轮对话的历史（本轮之前的问答，按时间顺序）。
+	 *
+	 * 每轮是独立 Session（内核不允许同 id 重建），跨轮上下文不靠内核会话复用，
+	 * 而是由宿主把历史问答显式带进新一轮，模型据此记得上文。进程重启后只要
+	 * 历史事件仍在，就能重建这段记忆，因此比复用内存 Session 更稳。
+	 */
+	readonly history?: readonly ChatTurn[];
+	/**
+	 * 本次运行注入的技能（可复用指令）。透传给内核 harness 的 resources.skills，
+	 * 模型命中使用场景时自动按指令执行。
+	 */
+	readonly skills?: readonly RunnerSkill[];
+}
+
+/** 传给 Runner 的技能（平台层形状，与内核 Skill 对齐）。 */
+export interface RunnerSkill {
+	readonly name: string;
+	readonly description: string;
+	readonly content: string;
+}
+
+/** 一轮历史问答，用于跨轮上下文。 */
+export interface ChatTurn {
+	readonly user: string;
+	readonly assistant: string;
 }
 
 /** 一个运行中的会话。 */
 export interface Runner {
 	readonly sessionId: string;
 
-	/** 提交一轮输入并执行到本轮结束。 */
-	prompt(text: string): Promise<void>;
+	/**
+	 * 提交一轮输入并执行到本轮结束。
+	 *
+	 * @param text 实际发给模型的提示（多轮时已含历史拼接）。
+	 * @param rawUserText 本轮用户原文；提供时落一条持久化 user_message，
+	 *   供多轮历史重建与前端展示。不传则不落（兼容旧调用）。
+	 */
+	prompt(text: string, rawUserText?: string): Promise<void>;
 
 	/**
 	 * 在执行期间插入消息。

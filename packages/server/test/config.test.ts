@@ -259,3 +259,28 @@ describe("M5-5 轻量档模型配置", () => {
 	});
 });
 
+describe("MODEL_MAX_TOKENS 输出上限", () => {
+	it("留空时缺省为 4096", () => {
+		const { config, errors } = load();
+		expect(errors).toEqual([]);
+		expect(config.modelMaxTokens).toBe(4096);
+	});
+
+	it("显式配置时按原值解析（推理模型可调大到 8192）", () => {
+		const { config, errors } = load({ MODEL_MAX_TOKENS: "8192" });
+		expect(errors).toEqual([]);
+		expect(config.modelMaxTokens).toBe(8192);
+	});
+
+	it("非正整数报错，而不是悄悄退回默认值", () => {
+		const { errors } = load({ MODEL_MAX_TOKENS: "0" });
+		expect(errorFor(errors, "MODEL_MAX_TOKENS")).toBeDefined();
+	});
+
+	it("摘要里列出当前输出上限", () => {
+		const text = describeConfig(load({ MODEL_MAX_TOKENS: "8192" }).config);
+		expect(text).toContain("8192");
+		expect(text).toContain("输出上限");
+	});
+});
+

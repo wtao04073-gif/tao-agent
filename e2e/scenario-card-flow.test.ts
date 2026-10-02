@@ -377,8 +377,11 @@ describe("M2 验收 · 场景卡驱动，用户不写一个字的 prompt", () =>
 		expect(provenance.scenarioId).toBe("mfg.supplier-reconcile");
 	});
 
-	it("十张场景卡对本租户全部可见且无重名", () => {
-		const visible = listCards(PRESET_CARDS, TENANT.tenantId);
+	it("十张行业场景卡对本租户全部可见且无重名", () => {
+		// 通用自由任务卡是隐式兜底、不进行业场景清单，这里只统计行业卡。
+		const visible = listCards(PRESET_CARDS, TENANT.tenantId).filter(
+			(c) => c.industry !== "general",
+		);
 		expect(visible).toHaveLength(10);
 
 		const titles = visible.map((c) => c.title);

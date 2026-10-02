@@ -50,3 +50,6 @@ export {
 	interruptedStatusOnRestart,
 	type FileTaskStoreOptions,
 } from "./file-task-store.ts";
+export { FileJobStore, type FileJobStoreOptions } from "./file-job-store.ts";
+export { MemoryJobStore } from "./memory-job-store.ts";
+export { FileJsonStore, type FileJsonStoreOptions } from "./file-json-store.ts";

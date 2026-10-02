@@ -81,7 +81,7 @@
 
 		host.innerHTML = list.map(function (t) {
 			var arts = (t.artifacts || []).length;
-			return '<li><a class="side-list__item" href="/desktop/session.html?task=' + encodeURIComponent(t.taskId) + '">' +
+			return '<li><a class="side-list__item" href="/chat.html?task=' + encodeURIComponent(t.taskId) + '">' +
 				'<span style="flex:1;min-width:0">' +
 				'<span style="display:block;color:var(--fg-strong)">' + App.esc(title(t)) + "</span>" +
 				'<span class="muted" style="font-size:var(--fs-12)">' + App.ago(t.updatedAt) +

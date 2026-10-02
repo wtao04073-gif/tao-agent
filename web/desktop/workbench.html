@@ -157,7 +157,7 @@
 		if (!r.ok) { err.textContent = r.data.error || "提交失败"; return; }
 		closeModal();
 		App.Toast.show("任务已提交", "正在跳转到执行页", "ok");
-		setTimeout(function () { location.href = "/desktop/session.html?task=" + encodeURIComponent(r.data.taskId); }, 400);
+		setTimeout(function () { location.href = "/chat.html?task=" + encodeURIComponent(r.data.taskId); }, 400);
 	});
 
 	$$("[data-close]").forEach(function (b) { b.addEventListener("click", closeModal); });
@@ -180,7 +180,7 @@
 		var tasks = (r.data.tasks || []).slice().sort(function (a, b) { return b.updatedAt - a.updatedAt; });
 		var recent = tasks.slice(0, 6);
 		document.getElementById("recentTasks").innerHTML = recent.length ? recent.map(function (t) {
-			return '<li><a class="side-list__item" href="/desktop/session.html?task=' + encodeURIComponent(t.taskId) + '">' +
+			return '<li><a class="side-list__item" href="/chat.html?task=' + encodeURIComponent(t.taskId) + '">' +
 				'<span style="flex:1;min-width:0"><span style="display:block;color:var(--fg-strong)">' +
 				App.esc(taskTitle(t)) + "</span>" +
 				'<span class="muted" style="font-size:var(--fs-12)">' + App.ago(t.updatedAt) + "</span></span>" +

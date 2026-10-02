@@ -14,7 +14,13 @@
 
 import { createReadStream, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { hasRoleAtLeast, Role, type TaskEvent, type TenantContext } from "@tao/core";
+import {
+	GENERAL_TASK_CARD_ID,
+	hasRoleAtLeast,
+	Role,
+	type TaskEvent,
+	type TenantContext,
+} from "@tao/core";
 import { parseAnchor, SseHub } from "./sse.ts";
 import { tryServeStatic } from "./static.ts";
 import type { TicketService } from "./tickets.ts";
@@ -72,6 +78,11 @@ export interface AppDeps {
 	 * query 票据（ticket），由 authenticate 实现消费。
 	 */
 	readonly authenticate: (req: IncomingMessage) => Promise<Principal | undefined>;
+	/**
+	 * 当前部署可用的模型档位信息（供前端做模型选择器）。
+	 * liteName 缺省表示只配置了旗舰档，前端不展示轻量选项。
+	 */
+	readonly modelInfo?: () => { readonly flagshipName: string; readonly liteName?: string };
 	/** 列出当前账号可见的场景卡。 */
 	readonly listScenarios?: (tenant: TenantContext) => readonly unknown[];
 	/** 上传输入文件到租户工作区，返回落盘信息。 */
@@ -113,8 +124,39 @@ export interface AppDeps {
 			 * POST /api/tasks 被 400 拦截，故到达这里时只剩这两个值（缺省旗舰）。
 			 */
 			readonly tier?: "flagship" | "lite";
+			/** 续聊所属对话 id；省略表示开启新对话。 */
+			readonly conversationId?: string;
+			/** 所属长程任务 id；省略表示临时对话。 */
+			readonly jobId?: string;
+			/** 本次使用的技能 id。 */
+			readonly skillId?: string;
+			/** 本次使用的智能体 id。 */
+			readonly agentId?: string;
 		},
-	) => Promise<{ readonly taskId: string }>;
+	) => Promise<{ readonly taskId: string; readonly conversationId: string }>;
+	/** 创建长程任务。 */
+	readonly createJob?: (
+		tenant: TenantContext,
+		input: { readonly title: string; readonly goal: string },
+	) => Promise<{ readonly jobId: string }>;
+	/** 列出长程任务。 */
+	readonly listJobs?: (tenant: TenantContext) => readonly unknown[];
+	/** 取单个长程任务；不存在/越权返回 undefined。 */
+	readonly getJob?: (tenant: TenantContext, jobId: string) => unknown | undefined;
+	/** 列出可用技能（含预置与本租户上传）。 */
+	readonly listSkills?: (tenant: TenantContext) => readonly unknown[];
+	/** 列出可用智能体。 */
+	readonly listAgents?: (tenant: TenantContext) => readonly unknown[];
+	/** 上传/新建技能。 */
+	readonly createSkill?: (
+		tenant: TenantContext,
+		input: { name: string; description: string; content: string },
+	) => Promise<{ readonly skillId: string }>;
+	/** 上传/新建智能体。 */
+	readonly createAgent?: (
+		tenant: TenantContext,
+		input: { name: string; description: string; systemPrompt: string; skillIds: string[] },
+	) => Promise<{ readonly agentId: string }>;
 	/** 在执行期间插入消息（「执行中可继续对话」的落点）。 */
 	readonly steerTask: (tenant: TenantContext, taskId: string, text: string) => Promise<void>;
 	/** 取消任务。 */
@@ -448,6 +490,7 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 
 		// ── 当前身份（侧栏渲染、角色判入口）──
 		if (method === "GET" && path.length === 2 && path[0] === "api" && path[1] === "me") {
+			const models = deps.modelInfo ? deps.modelInfo() : { flagshipName: "" };
 			sendJson(res, 200, {
 				name: principal.name ?? tenant.userId,
 				userId: tenant.userId,
@@ -455,15 +498,121 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 				workspaceId: tenant.workspaceId,
 				role: principal.role,
 				roleLabel: hasRoleAtLeast(principal.role, Role.TenantAdmin) ? "租户管理员" : "成员",
+				models: {
+					flagship: models.flagshipName,
+					lite: models.liteName ?? null,
+				},
 			});
 			return;
 		}
 
 		// ── 场景卡列表（按租户解析自建覆盖）──
 		if (method === "GET" && path.length === 2 && path[0] === "api" && path[1] === "scenarios") {
-			const cards = deps.listScenarios ? deps.listScenarios(tenant) : [];
+			const all = deps.listScenarios ? deps.listScenarios(tenant) : [];
+			// 通用自由任务卡是「一句话入口」的隐式兜底，不作为可点选卡片列出。
+			const cards = all.filter(
+				(c) => (c as { id?: unknown })?.id !== GENERAL_TASK_CARD_ID,
+			);
 			sendJson(res, 200, { scenarios: cards });
 			return;
+		}
+
+		// ── 长程任务（Job）集合：POST 建任务 / GET 列表 ──
+		if (path.length === 2 && path[0] === "api" && path[1] === "jobs") {
+			if (deps.createJob === undefined || deps.listJobs === undefined) {
+				sendError(res, 501, "当前部署未启用长程任务");
+				return;
+			}
+			if (method === "GET") {
+				sendJson(res, 200, { jobs: deps.listJobs(tenant) });
+				return;
+			}
+			if (method === "POST") {
+				const body = await readJsonBody(req);
+				if (!body.ok) { sendError(res, 400, body.reason); return; }
+				const v = body.value as { title?: unknown; goal?: unknown };
+				const goal = typeof v.goal === "string" ? v.goal.trim() : "";
+				const title =
+					typeof v.title === "string" && v.title.trim() !== ""
+						? v.title.trim()
+						: goal.slice(0, 24);
+				if (goal === "") { sendError(res, 400, "请填写任务目标"); return; }
+				try {
+					const result = await deps.createJob(tenant, { title, goal });
+					sendJson(res, 201, result);
+				} catch (error) {
+					sendError(res, 400, error instanceof Error ? error.message : "创建任务失败");
+				}
+				return;
+			}
+			sendError(res, 405, `不支持 ${method} 方法`);
+			return;
+		}
+
+		// ── 单个长程任务：GET 详情（含其下会话与长期记忆）──
+		if (method === "GET" && path.length === 3 && path[0] === "api" && path[1] === "jobs") {
+			if (deps.getJob === undefined) { sendError(res, 501, "当前部署未启用长程任务"); return; }
+			const job = deps.getJob(tenant, path[2] as string);
+			if (job === undefined) { sendError(res, 404, "任务不存在"); return; }
+			sendJson(res, 200, job);
+			return;
+		}
+
+		// ── 技能：GET 列表 / POST 上传新建 ──
+		if (path.length === 2 && path[0] === "api" && path[1] === "skills") {
+			if (deps.listSkills === undefined || deps.createSkill === undefined) {
+				sendError(res, 501, "当前部署未启用技能"); return;
+			}
+			if (method === "GET") { sendJson(res, 200, { skills: deps.listSkills(tenant) }); return; }
+			if (method === "POST") {
+				const body = await readJsonBody(req);
+				if (!body.ok) { sendError(res, 400, body.reason); return; }
+				const v = body.value as { name?: unknown; description?: unknown; content?: unknown };
+				const name = typeof v.name === "string" ? v.name.trim() : "";
+				const description = typeof v.description === "string" ? v.description.trim() : "";
+				const content = typeof v.content === "string" ? v.content.trim() : "";
+				if (!name || !content) { sendError(res, 400, "技能名称与指令内容必填"); return; }
+				try {
+					sendJson(res, 201, await deps.createSkill(tenant, {
+						name, description: description || "自定义技能", content,
+					}));
+				} catch (error) {
+					sendError(res, 400, error instanceof Error ? error.message : "创建技能失败");
+				}
+				return;
+			}
+			sendError(res, 405, `不支持 ${method} 方法`); return;
+		}
+
+		// ── 智能体：GET 列表 / POST 上传新建 ──
+		if (path.length === 2 && path[0] === "api" && path[1] === "agents") {
+			if (deps.listAgents === undefined || deps.createAgent === undefined) {
+				sendError(res, 501, "当前部署未启用智能体"); return;
+			}
+			if (method === "GET") { sendJson(res, 200, { agents: deps.listAgents(tenant) }); return; }
+			if (method === "POST") {
+				const body = await readJsonBody(req);
+				if (!body.ok) { sendError(res, 400, body.reason); return; }
+				const v = body.value as {
+					name?: unknown; description?: unknown; systemPrompt?: unknown; skillIds?: unknown;
+				};
+				const name = typeof v.name === "string" ? v.name.trim() : "";
+				const description = typeof v.description === "string" ? v.description.trim() : "";
+				const systemPrompt = typeof v.systemPrompt === "string" ? v.systemPrompt.trim() : "";
+				const skillIds = Array.isArray(v.skillIds)
+					? v.skillIds.filter((x): x is string => typeof x === "string")
+					: [];
+				if (!name || !systemPrompt) { sendError(res, 400, "智能体名称与系统提示词必填"); return; }
+				try {
+					sendJson(res, 201, await deps.createAgent(tenant, {
+						name, description: description || "自定义智能体", systemPrompt, skillIds,
+					}));
+				} catch (error) {
+					sendError(res, 400, error instanceof Error ? error.message : "创建智能体失败");
+				}
+				return;
+			}
+			sendError(res, 405, `不支持 ${method} 方法`); return;
 		}
 
 		// ── 输入文件上传（multipart，单文件）──
@@ -623,9 +772,38 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 					sendError(res, 400, body.reason);
 					return;
 				}
-				const input = body.value as { scenarioId?: unknown; fields?: unknown; tier?: unknown };
-				if (typeof input.scenarioId !== "string" || input.scenarioId === "") {
-					sendError(res, 400, "缺少场景标识（scenarioId）");
+				const input = body.value as {
+					scenarioId?: unknown;
+					fields?: unknown;
+					query?: unknown;
+					files?: unknown;
+					tier?: unknown;
+					conversationId?: unknown;
+					jobId?: unknown;
+					skillId?: unknown;
+					agentId?: unknown;
+				};
+				// 自由文本入口：未给 scenarioId 时允许直接给一句话 query，
+				// 路由归一到内置「通用任务」卡（fields.query），让前台能一句话发起。
+				let scenarioId: string;
+				let fields: Record<string, unknown>;
+				if (typeof input.scenarioId === "string" && input.scenarioId !== "") {
+					scenarioId = input.scenarioId;
+					fields =
+						typeof input.fields === "object" && input.fields !== null
+							? (input.fields as Record<string, unknown>)
+							: {};
+				} else if (typeof input.query === "string" && input.query.trim() !== "") {
+					scenarioId = GENERAL_TASK_CARD_ID;
+					// 自由入口的附件路径归到通用卡 attachments（文件级白名单据此授权）。
+					fields = {
+						query: input.query,
+						...(Array.isArray(input.files) && input.files.length > 0
+							? { attachments: input.files.filter((f) => typeof f === "string") }
+							: {}),
+					};
+				} else {
+					sendError(res, 400, "请输入要执行的任务（query），或指定场景（scenarioId）");
 					return;
 				}
 				// 档位是显式选路入口：白名单校验，非法值 400；缺省旗舰。
@@ -640,15 +818,34 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 					return;
 				}
 
+				// 续聊对话 id：只接受非空字符串，非法/缺失一律按新对话处理。
+				const conversationId =
+					typeof input.conversationId === "string" && input.conversationId.trim() !== ""
+						? input.conversationId.trim()
+						: undefined;
+				const jobId =
+					typeof input.jobId === "string" && input.jobId.trim() !== ""
+						? input.jobId.trim()
+						: undefined;
+				const skillId =
+					typeof input.skillId === "string" && input.skillId.trim() !== ""
+						? input.skillId.trim()
+						: undefined;
+				const agentId =
+					typeof input.agentId === "string" && input.agentId.trim() !== ""
+						? input.agentId.trim()
+						: undefined;
+
 				try {
 					// 租户来自鉴权，**绝不**从请求体取 —— 见文件头说明
 					const result = await deps.submitTask(tenant, {
-						scenarioId: input.scenarioId,
-						fields:
-							typeof input.fields === "object" && input.fields !== null
-								? (input.fields as Record<string, unknown>)
-								: {},
+						scenarioId,
+						fields,
 						tier,
+						...(conversationId === undefined ? {} : { conversationId }),
+						...(jobId === undefined ? {} : { jobId }),
+						...(skillId === undefined ? {} : { skillId }),
+						...(agentId === undefined ? {} : { agentId }),
 					});
 					sendJson(res, 202, result);
 				} catch (error) {
