@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>管控平台 · Tao Agent</title>
+  <link rel="stylesheet" href="/control/control.css">
+  <script src="/assets/core.js" defer></script>
+  <script src="/control/control.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">跳到主内容</a>
+  <aside class="sidebar">
+    <a class="brand" href="/control/"><span class="brand-icon">T</span><span>Tao Agent<small>管控平台</small></span></a>
+    <p class="nav-label">运行管理</p>
+    <nav aria-label="管控导航">
+      <a href="#usage" class="nav-link" aria-current="page"><span aria-hidden="true">◫</span> 用量总览</a>
+      <a href="#audit" class="nav-link"><span aria-hidden="true">≡</span> 审计日志</a>
+    </nav>
+    <div class="sidebar-bottom"><span class="scope-label">管理员空间</span><p>查看当前租户用量与工具审计记录。</p><a href="/chat.html">← 返回工作区</a></div>
+  </aside>
+  <div class="shell">
+    <header class="topbar"><span>组织运行 / <strong>管控概览</strong></span><div class="account"><span id="identity">正在验证身份…</span><button id="signOut" type="button">退出登录</button></div></header>
+    <main id="main">
+      <div class="page-heading"><div><p class="eyebrow">运行管理</p><h1>让每一次执行，清晰可见。</h1><p class="muted">从实际用量到操作审计，掌握当前租户的运行情况。</p></div><span class="admin-badge">管理员专属</span></div>
+      <p id="accessError" class="notice error" role="alert" hidden></p>
+      <div id="panel" hidden>
+        <form id="filters" class="filters">
+          <label>时间范围<select id="range"><option value="month">本月</option><option value="week">最近 7 天</option><option value="custom">自定义</option></select></label>
+          <label>开始日期<input id="from" type="date" required></label>
+          <span class="date-separator" aria-hidden="true">—</span>
+          <label>结束日期<input id="to" type="date" required></label>
+          <button id="refresh" class="primary" type="submit">刷新数据</button>
+          <span id="updated" class="muted" role="status" aria-live="polite">尚未刷新</span>
+        </form>
+        <p id="filterError" class="notice error" role="alert" hidden></p>
+        <section id="usage" aria-labelledby="usageTitle">
+          <div class="section-heading"><h2 id="usageTitle">用量总览</h2><span id="period" class="muted"></span></div>
+          <p id="usageError" class="notice error" role="alert" hidden></p>
+          <div id="usageData" hidden>
+            <div class="stats"><article class="stat"><span>总 Token 用量</span><strong id="totalTokens">—</strong><small id="tokenSplit"></small></article><article class="stat"><span>执行任务数</span><strong id="taskCount">—</strong><small>当前筛选时段</small></article><article class="stat"><span>估算费用</span><strong id="cost">—</strong><small>人民币 · 按已配置单价估算</small></article></div>
+            <p id="unpriced" class="notice warning" hidden></p>
+            <div class="card quota-card"><h3>配额使用情况</h3><div id="quota"></div></div>
+            <div class="breakdowns"><article class="card"><div class="card-heading"><h3>按用户查看</h3><span class="muted">用量分布</span></div><div class="table-scroll"><table><thead><tr><th>用户</th><th>Token</th><th>任务</th><th>费用 / 元</th><th>占比</th></tr></thead><tbody id="byUser"></tbody></table></div></article><article class="card"><div class="card-heading"><h3>按模型查看</h3><span class="muted">资源消耗</span></div><div class="table-scroll"><table><thead><tr><th>模型</th><th>Token</th><th>任务</th><th>费用 / 元</th></tr></thead><tbody id="byModel"></tbody></table></div></article></div>
+          </div>
+        </section>
+        <section id="audit" aria-labelledby="auditTitle"><div class="section-heading"><div><h2 id="auditTitle">审计日志</h2><p class="muted">工具调用决策与执行记录</p></div><span id="auditCount" class="muted"></span></div><p id="auditError" class="notice error" role="alert" hidden></p><div id="auditData" class="card table-scroll" hidden><table><thead><tr><th>时间</th><th>用户</th><th>工具</th><th>决策</th><th>原因</th></tr></thead><tbody id="auditRows"></tbody></table></div></section>
+      </div>
+      <footer>管控数据仅对管理员开放 · 数据范围由当前登录身份决定</footer>
+    </main>
+  </div>
+</body>
+</html>

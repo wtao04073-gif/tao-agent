@@ -350,8 +350,11 @@
 		}
 	}
 </style>
+<link rel="stylesheet" href="/assets/workspace.css">
+<link rel="stylesheet" href="/assets/chat-theme.css">
 </head>
 <body>
+<button class="rail-scrim" id="railScrim" aria-label="收起导航"></button>
 	<button class="rail-toggle" id="railToggle" title="展开任务列表">☰</button>
 
 	<!-- 左栏：任务会话与记录（原型白侧栏） -->
@@ -360,23 +363,23 @@
 			<span class="bot">🤖</span><b>Tao Agent</b>
 		</div>
 		<div class="rail-search">
-			<div class="sbox">🔍<input placeholder="搜索应用、记录…" disabled title="试用版搜索暂未开放"></div>
+			<div class="sbox">🔍<input id="historySearch" placeholder="搜索对话与任务…" aria-label="搜索对话与任务"></div>
 		</div>
 		<nav class="rail-nav">
-			<div class="nav-label">主导航</div>
+			<button class="nav-item front-new-chat" id="frontNewChat">＋ 新对话</button>
 			<button class="nav-item active" id="navChat"><span>💬</span> 对话</button>
 			<button class="nav-item" id="navTasks"><span>🗂</span> 任务中心</button>
-			<button class="nav-item" id="navWorkbench"><span>▦</span> 场景工作台</button>
+			<button class="nav-item" id="navWorkbench"><span>▦</span> 场景</button>
 			<button class="nav-item" id="navKnowledge"><span>📚</span> 知识库</button>
-			<button class="nav-item" id="navAdmin" style="display:none"><span>🛡</span> 管理后台</button>
+
 
 			<div class="rail-group">
-				<button class="recent-head" id="jobHead" type="button"><span>任务（长程）</span><span class="recent-caret">▾</span></button>
+				<button class="recent-head" id="jobHead" type="button"><span>项目与长期任务</span><span class="recent-caret">▾</span></button>
 				<button class="new-job-btn" id="newJobBtn" type="button">＋ 新建任务</button>
 				<div id="jobList"></div>
 			</div>
 			<div class="recent">
-				<button class="recent-head" id="recentHead" type="button"><span>对话（临时）</span><span class="recent-caret">▾</span></button>
+				<button class="recent-head" id="recentHead" type="button"><span>最近对话</span><span class="recent-caret">▾</span></button>
 				<div id="recentList"></div>
 			</div>
 		</nav>
@@ -392,12 +395,12 @@
 	<!-- 空态：单对话入口 -->
 	<div class="landing" id="landing">
 		<div class="hero-ic">✨</div>
-		<h1>有什么我可以帮您的？</h1>
-		<p class="lead">直接提问，或上传表格 / 文档让我核对、汇总、写报告</p>
+		<h1>今天，我们一起完成什么？</h1>
+		<p class="lead">从一个问题、一份资料或一个目标开始。</p>
 		<div class="lcard">
 			<div class="inputcard">
 				<div class="ta">
-					<textarea id="lInput" rows="2" placeholder="请输入问题或任务，例如：核对这两份对账单并标出差异"></textarea>
+					<textarea id="lInput" aria-label="输入任务" rows="2" placeholder="请输入问题或任务，例如：核对这两份对账单并标出差异"></textarea>
 				</div>
 				<div class="attach-row" id="lAttachRow"></div>
 				<div class="attach-row" id="lAddonRow"></div>
@@ -410,7 +413,7 @@
 					</div>
 					<div class="bar-right">
 						<label class="model-pick" title="选择本次任务使用的模型档位">⚡
-							<select id="lTier" class="tier-select">
+							<select id="lTier" aria-label="选择模型" class="tier-select">
 								<option value="flagship">旗舰模型</option>
 							</select>
 						</label>
@@ -448,7 +451,7 @@
 					<div class="attach-row" id="sAddonRow"></div>
 					<div class="inputcard">
 						<div class="ta">
-							<textarea id="sInput" rows="1" placeholder="请输入问题或任务；任务执行中也可继续补充要求"></textarea>
+							<textarea id="sInput" aria-label="继续对话" rows="1" placeholder="请输入问题或任务；任务执行中也可继续补充要求"></textarea>
 						</div>
 						<input type="file" id="sFile" class="hidden" multiple>
 						<div class="composer-bar">
@@ -460,7 +463,7 @@
 							</div>
 							<div class="bar-right">
 								<label class="model-pick" title="选择本次任务使用的模型档位">⚡
-									<select id="sTier" class="tier-select">
+									<select id="sTier" aria-label="选择模型" class="tier-select">
 										<option value="flagship">旗舰模型</option>
 									</select>
 								</label>
@@ -487,7 +490,7 @@
 	</div>
 
 	<!-- 技能 / 智能体 选择与上传弹层 -->
-	<div class="modal-mask" id="addonModal">
+	<div class="modal-mask" id="addonModal" role="dialog" aria-modal="true" aria-labelledby="addonTitle">
 		<div class="modal">
 			<div class="modal-head">
 				<h3 id="addonTitle">选择技能</h3>
@@ -526,6 +529,9 @@
 
 	<div class="toast" id="toast"></div>
 <script src="/assets/core.js"></script>
+<script src="/assets/forms.js"></script>
+<script src="/assets/workspace.js"></script>
+<script src="/assets/chat-interactions.js"></script>
 <script>
 (function () {
 	"use strict";
@@ -538,8 +544,12 @@
 	// generation：页面/任务代次，每次重置 +1；旧代次发起的上传即使晚完成也作废，
 	// 不得再写入新代次的 pending，杜绝跨任务污染。
 	var generation = 0;
+    var drafts=Object.create(null),currentDraft="new";
+    function saveDraft(){drafts[currentDraft]=$('#sInput').value;}
+    function selectDraft(key){currentDraft=key;$('#sInput').value=drafts[key]||'';}
+
 	var state = { taskId: null, conversationId: null, jobId: null, mode: "chat", sub: null,
-		running: false, booting: false, steps: null,
+		running: false, booting: false, previewOnly: false, steps: null,
 		pending: [], inFlight: [], role: "member",
 		answerP: null,
 		// 本次草稿选用的技能 / 智能体（跨轮沿用，直到手动移除或新建清空）。
@@ -629,8 +639,15 @@
 
 	/* ---------- 左栏：折叠 + 最近任务 ---------- */
 	function setRail(collapsed) {
+        $("#railScrim").classList.toggle("open", isMobile() && !collapsed);
 		$("#rail").classList.toggle("collapsed", collapsed);
 		document.body.classList.toggle("rail-off", collapsed);
+        ['#railToggle','#collapseRail'].forEach(function(selector){
+          var button=$(selector);button.setAttribute('aria-expanded',String(!collapsed));
+          button.setAttribute('aria-controls','rail');
+          button.setAttribute('aria-label',collapsed?'展开导航':'收起导航');
+          button.title=collapsed?'展开导航':'收起导航';
+        });
 	}
 	var scenarioMap = { "general.free-task": "通用任务" };
 	function loadScenarioMap(cb) {
@@ -646,7 +663,7 @@
 		return (t.title && t.title.trim()) || scenarioMap[t.scenarioId] ||
 			(t.scenarioId ? t.scenarioId : "未命名对话");
 	}
-	// 左栏「对话（临时）」：只显示不属于任何长程任务的会话，按 conversationId 聚合。
+	// 左栏「最近对话」：只显示不属于任何长程任务的会话，按 conversationId 聚合。
 	function loadRecent() {
 		App.api("GET", "/api/tasks").then(function (r) {
 			if (!r.ok || !Array.isArray(r.data.tasks)) return;
@@ -672,7 +689,7 @@
 		});
 	}
 
-	// 左栏「任务（长程）」：拉取长程任务列表。
+	// 左栏「项目与长期任务」：拉取长程任务列表。
 	function loadJobs() {
 		App.api("GET", "/api/jobs").then(function (r) {
 			if (!r.ok || !Array.isArray(r.data.jobs)) return;
@@ -705,9 +722,10 @@
 
 	// 打开长程任务：显示目标与历次会话，可继续发起新会话。
 	function openJob(jobId) {
+        saveDraft();
 		enterSessionShell("任务");
 		var gen = generation;
-		state.mode = "job"; state.jobId = jobId; state.booting = true;
+		state.mode = "job"; state.jobId = jobId; state.booting = true;selectDraft("job:"+jobId);
 		App.api("GET", "/api/jobs/" + encodeURIComponent(jobId)).then(function (r) {
 			if (gen !== generation || state.jobId !== jobId) return;
 			if (!r.ok || !r.data) { detailLoadFailed(); return; }
@@ -716,7 +734,7 @@
 			renderJobHeader(job);
 			renderJobHistory(gen, job, function () {
 				if (gen !== generation) return;
-				state.running = false; state.booting = false;
+				state.booting = false;
 				updateTopStatus(); updateSendEnabled();
 			});
 		}).catch(function () {
@@ -783,13 +801,15 @@
 
 	// 打开一个历史对话：按 conversationId 聚合其全部轮次渲染，并订阅最新一轮。
 	function openExisting(taskId) {
+        if(taskId===state.taskId && !state.booting){TaoWorkspace.showChat();return;}
+        saveDraft();
 		enterSessionShell("对话");
 		var gen = generation;
 		state.taskId = taskId;
 		App.api("GET", "/api/tasks/" + encodeURIComponent(taskId)).then(function (r) {
 			if (gen !== generation || state.taskId !== taskId) return;
 			if (!r.ok || !r.data) { detailLoadFailed(); return; }
-			state.conversationId = r.data.conversationId || taskId;
+			state.conversationId = r.data.conversationId || taskId;selectDraft(state.conversationId);
 			$("#chatTitle").textContent = taskTitle(r.data);
 			state.running = r.data.status === "RUNNING" || r.data.status === "QUEUED" ||
 				r.data.status === "AWAIT_CONFIRM";
@@ -847,11 +867,11 @@
 		state.steps = holder;
 		events.forEach(function (e) {
 			if (e.type === "step") renderStepEvent(e);
-			if (e.type === "artifact" && e.final) renderArtifactEvent(e);
+			if (e.type === "artifact" && e.final) renderArtifactEvent(Object.assign({},e,{taskId:task.taskId}));
 		});
 		if (answerText) {
 			var p = bot.querySelector("p");
-			p.classList.add("bottext", "answer"); p.textContent = answerText;
+			p.classList.add("bottext", "answer"); ChatUI.renderAnswer(p,answerText);
 		}
 		state.steps = savedSteps;
 		// 最新轮已由历史回放渲染：把它已落盘事件的 seq 标记为已见，
@@ -874,6 +894,7 @@
 			'<span class="summary">执行步骤</span><span class="state"></span></div>' +
 			'<div class="steps-body"></div>';
 		bot.appendChild(steps);
+        steps.querySelector(".steps-head").addEventListener("click",function(){steps.classList.toggle("collapsed");});
 		return { root: steps, body: $(".steps-body", steps), state: $(".state", steps),
 			head: $(".steps-head", steps), rows: {} };
 	}
@@ -895,6 +916,9 @@
 
 	/* ---------- 进入会话态（统一重置任务级状态） ---------- */
 	function enterSessionShell(title) {
+        state.previewOnly=false;
+        TaoWorkspace.showChat();
+        ChatUI.clearPreview();
 		// 进入任一任务视图即进入新代次：关闭旧 SSE、作废仍在路上的上传回调、
 		// 重置任务级去重集合。所有新任务/历史任务入口都经过这里。
 		closeSub();
@@ -945,7 +969,7 @@
 		state.steps = { root: steps, body: $(".steps-body", steps), state: $(".state", steps),
 			head: $(".steps-head", steps), rows: {} };
 		steps.querySelector(".steps-head").addEventListener("click", function () {
-			if (!state.running) steps.classList.toggle("collapsed");
+			steps.classList.toggle("collapsed");
 		});
 	}
 
@@ -963,12 +987,12 @@
 		m.innerHTML = '<div class="av">' + (role === "user" ? "T" : "🤖") + "</div>" +
 			'<div class="bubble"><div class="who"></div><p></p></div>';
 		m.querySelector(".who").textContent = who;
-		m.querySelector("p").textContent = text || "";
+		if(role === "bot" && text) ChatUI.renderAnswer(m.querySelector("p"), text); else m.querySelector("p").textContent = text || "";
 		$("#inner").appendChild(m);
 		scrollDown();
 		return m.querySelector(".bubble");
 	}
-	function scrollDown() { var s = $("#stream"); s.scrollTop = s.scrollHeight; }
+	function scrollDown() { var s = $('#stream'); if(s.scrollHeight-s.scrollTop-s.clientHeight<280 || state.booting) s.scrollTop=s.scrollHeight; }
 
 	/* ---------- 发起一轮对话（首轮或同会话续聊） ---------- */
 	// continueConv=true 表示在当前已结束的会话里追问：复用 conversationId、追加气泡，
@@ -986,14 +1010,14 @@
 		if (state.mode === "job" && state.jobId) {
 			// 长程任务下发送 = 开始一次新会话（新上下文组，但带 jobId 共享长期记忆）。
 			closeSub(); generation++; gen = generation;
-			beginRoundView(text, true);
+			beginRoundView(text + (files.length ? "\n\n引用资料："+files.map(function(f){return f.name;}).join("、") : ""), true);
 			state.conversationId = null; // 新会话，等响应返回新 conversationId
 		} else if (continueConv && state.conversationId) {
 			// 临时对话续聊：关旧订阅、升代次，但保留 conversationId 与既有消息。
 			closeSub(); generation++; gen = generation;
-			beginRoundView(text, true);
+			beginRoundView(text + (files.length ? "\n\n引用资料："+files.map(function(f){return f.name;}).join("、") : ""), true);
 		} else {
-			enterSession(text); // 全新临时对话首轮：清空并重建视图
+			enterSession(text + (files.length ? "\n\n引用资料："+files.map(function(f){return f.name;}).join("、") : "")); // 全新临时对话首轮：清空并重建视图
 			gen = generation;
 		}
 		state.running = true; state.booting = true;
@@ -1013,7 +1037,7 @@
 				if (gen !== generation) return;
 				if (!r.ok) { fail((r.data && r.data.error) || "任务提交失败"); return; }
 				state.taskId = r.data.taskId;
-				if (r.data.conversationId) state.conversationId = r.data.conversationId;
+				if (r.data.conversationId) {state.conversationId = r.data.conversationId;currentDraft=state.conversationId;drafts[currentDraft]="";}
 				state.booting = false; updateSendEnabled();
 				subscribe(gen, r.data.taskId); loadRecent(); loadJobs();
 			})
@@ -1127,7 +1151,7 @@
 			// 定稿：用完整答案替换打字机增量（同一气泡）。去重已在外层按 seq 处理。
 			if (ev.text) {
 				var pf = answerParagraph();
-				pf.textContent = ev.text;
+				ChatUI.renderAnswer(pf,ev.text);
 				state.answerP = null; // 下一轮用新气泡
 				scrollDown();
 			}
@@ -1216,20 +1240,22 @@
 	}
 
 	function addArtifact(ev) {
-		if (!state.deliverCleared) { $("#deliverBody").innerHTML = ""; state.deliverCleared = true; }
-		var el = document.createElement("div"); el.className = "art";
-		el.innerHTML = '<div class="ic"></div><div class="meta"><div class="nm"></div><div class="sub"></div></div>' +
-			'<a href="javascript:void(0)">下载</a>';
-		el.querySelector(".ic").textContent = App.fileIcon(ev.name);
-		el.querySelector(".nm").textContent = ev.name;
-		el.querySelector(".sub").textContent = App.fmtBytes(ev.sizeBytes);
-		el.querySelector("a").addEventListener("click", function () { App.downloadArtifact(state.taskId, ev.name); });
-		$("#deliverBody").appendChild(el);
-		showDeliver();
-		var note = addMsg("bot", "智能体", "");
-		note.querySelector("p").classList.add("bottext");
-		note.querySelector("p").textContent = "已生成交付物：" + ev.name + "（可在右侧预览/下载）";
-	}
+        var owner=ev.taskId || state.taskId;
+        if (!state.deliverCleared) { $("#deliverBody").innerHTML = ""; state.deliverCleared = true; }
+        var el=document.createElement("div");el.className="art";
+        el.innerHTML='<div class="ic">▤</div><div class="meta"><div class="nm"></div><div class="sub"></div></div><div class="art-actions"><button type="button">预览</button><button type="button">下载</button><button type="button">修改</button></div>';
+        el.querySelector('.nm').textContent=ev.name;el.querySelector('.sub').textContent=App.fmtBytes(ev.sizeBytes);
+        var buttons=el.querySelectorAll('button');
+        buttons[0].addEventListener('click',function(){ChatUI.preview(owner,ev.name);showDeliver();});
+        buttons[1].addEventListener('click',function(){App.downloadArtifact(owner,ev.name);});
+        buttons[2].addEventListener('click',async function(){
+            if(state.running||state.booting){toast('请等待当前任务完成，再修改产物');return;}
+            try {var result=await App.api('POST','/api/workspace/artifacts/reference',{taskId:owner,name:ev.name});if(!result.ok)throw new Error(result.data.error);
+             attachReference(result.data);$('#sInput').value='请修改「'+ev.name+'」：';$('#sInput').focus();
+            }catch(error){toast(error.message||'无法引用产物');}
+        });
+        $('#deliverBody').appendChild(el);if(!isMobile())showDeliver();
+    }
 
 	function updateTopStatus() {
 		$("#topStatus").textContent = state.running ? "执行中…" : "";
@@ -1297,10 +1323,10 @@
 	/* ---------- 绑定 ---------- */
 	function autosize(ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 160) + "px"; }
 	$("#lInput").addEventListener("keydown", function (e) {
-		if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doLanding(); }
+		if (!e.isComposing && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doLanding(); }
 	});
 	$("#sInput").addEventListener("keydown", function (e) {
-		if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); steer(); }
+		if (!e.isComposing && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); steer(); }
 	});
 	["#lInput", "#sInput"].forEach(function (sel) {
 		$(sel).addEventListener("input", function () { autosize(this); });
@@ -1548,13 +1574,13 @@
 	$("#deliverClose").addEventListener("click", hideDeliver);
 	$("#newTask").addEventListener("click", resetAll);
 	$("#cancelTask").addEventListener("click", cancelCurrentTask);
-	$("#collapseRail").addEventListener("click", function () { setRail(true); });
+	$("#collapseRail").addEventListener("click", function () { setRail(!$('#rail').classList.contains('collapsed')); });
 	$("#railToggle").addEventListener("click", function () { setRail(false); });
 	$("#signOut").addEventListener("click", function () { App.Auth.signOut(); });
-	$("#navTasks").addEventListener("click", function () { location.href = "/desktop/tasks.html"; });
-	$("#navWorkbench").addEventListener("click", function () { location.href = "/desktop/workbench.html"; });
-	$("#navKnowledge").addEventListener("click", function () { location.href = "/desktop/knowledge.html"; });
-	$("#navAdmin").addEventListener("click", function () { location.href = "/desktop/admin.html"; });
+
+
+
+
 	$("#recentHead").addEventListener("click", function () {
 		$(".recent").classList.toggle("collapsed");
 	});
@@ -1567,6 +1593,9 @@
 	});
 
 	function resetAll() {
+        state.previewOnly=false;
+        saveDraft();selectDraft("new");
+        TaoWorkspace.showChat();ChatUI.clearPreview();
 		// 升代次 + 关 SSE：仍在完成的旧上传回调因 gen 不符不再写入 pending，
 		// 旧任务事件也不会回流到新页面，实现跨任务隔离。
 		closeSub();
@@ -1582,7 +1611,7 @@
 		stepOrder.length = 0;
 		$("#session").classList.add("hidden");
 		$("#landing").classList.remove("hidden");
-		setRail(false); hideDeliver();
+		setRail(isMobile()); hideDeliver();
 		$("#lInput").value = "";
 		["#attachRow", "#lAttachRow"].forEach(function (sel) {
 			$(sel).innerHTML = ""; $(sel).style.display = "none";
@@ -1591,14 +1620,49 @@
 		updateTopStatus(); updateSendEnabled();
 	}
 
+    function attachReference(file){
+        if(state.running||state.booting){toast('请等待当前任务完成后引用资料');return false;}
+        if(!file.path){toast('该资料没有可引用的文件');return false;}
+        if(state.pending.some(function(f){return f.path===file.path;}))return true;
+        state.pending.push({name:file.name,path:file.path});
+        var row=(state.taskId||state.jobId||state.previewOnly)?$('#attachRow'):$('#lAttachRow');
+        var chip=document.createElement('button');chip.type='button';chip.className='chipfile';chip.textContent='▤ '+file.name+' ×';
+        chip.addEventListener('click',function(){state.pending=state.pending.filter(function(f){return f.path!==file.path;});chip.remove();refreshAttachRow();});row.append(chip);row.style.display='flex';return true;
+    }
+    function restoreChatView(){
+        var hasSession=!!state.taskId||!!state.jobId||state.booting||state.previewOnly;
+        $('#landing').classList.toggle('hidden',hasSession);$('#session').classList.toggle('hidden',!hasSession);
+        $('#navChat').classList.add('active');
+        if(isMobile())setRail(true);
+    }
+    TaoWorkspace.init({openTask:openExisting,openJob:openJob,newJob:newJob,
+      attachFile:attachReference,showChat:restoreChatView,
+      openPreview:function(file){
+        if(!state.taskId&&!state.jobId&&!state.booting&&!state.previewOnly){
+          state.previewOnly=true;$('#chatTitle').textContent='资料预览';
+          $('#inner').replaceChildren();$('#sInput').value=$('#lInput').value;
+          var from=$('#lAttachRow'),to=$('#attachRow');to.replaceChildren();
+          while(from.firstChild)to.append(from.firstChild);
+          from.style.display='none';to.style.display=to.children.length?'flex':'none';
+        }
+        TaoWorkspace.showChat();
+        showDeliver();ChatUI.preview(null,file.name);
+      }});
+    $('#navChat').addEventListener('click',function(){TaoWorkspace.showChat();});
+    $('#frontNewChat').addEventListener('click',resetAll);
+    $('#railScrim').addEventListener('click',function(){setRail(true);});
+    $('#historySearch').addEventListener('input',function(){var q=this.value.trim().toLowerCase();document.querySelectorAll('#recentList .recent-item,#jobList .recent-item').forEach(function(el){el.hidden=!!q&&!el.textContent.toLowerCase().includes(q);});});
+    document.addEventListener('keydown',function(e){
+      if(e.key==='Escape'){closePlusMenus();closeAddonPicker();hideDeliver();if(isMobile())setRail(true);}
+      if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();setRail(false);$('#historySearch').focus();}
+    });
+    window.addEventListener('hashchange',function(){if(isMobile())setRail(true);});
+    if(isMobile())setRail(true);
 	App.api("GET", "/api/me").then(function (r) {
 		if (!r.ok || !r.data) return;
 		if (r.data.name) $("#userName").textContent = r.data.name;
 		state.role = r.data.role || "member";
-		// 管理员才显示管理后台入口
-		if (r.data.role === "TENANT_ADMIN" || r.data.role === "PLATFORM_ADMIN") {
-			$("#navAdmin").style.display = "";
-		}
+
 		// 模型选择器：旗舰常驻；后端配置了轻量档才出现该选项
 		var flagship = (r.data.models && r.data.models.flagship) || "旗舰模型";
 		var lite = r.data.models && r.data.models.lite;
