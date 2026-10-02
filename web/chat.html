@@ -350,8 +350,8 @@
 		}
 	}
 </style>
-<link rel="stylesheet" href="/assets/workspace.css">
-<link rel="stylesheet" href="/assets/chat-theme.css">
+<link rel="stylesheet" href="/assets/workspace.css?v=rag-stream-1">
+<link rel="stylesheet" href="/assets/chat-theme.css?v=rag-stream-1">
 </head>
 <body>
 <button class="rail-scrim" id="railScrim" aria-label="收起导航"></button>
@@ -446,10 +446,10 @@
 			<div class="stream" id="stream"><div class="inner" id="inner"></div></div>
 			<div class="composer">
 				<div class="cbox">
+					<div class="inputcard">
 					<div class="queue-note" id="queueNote">⏳ 任务执行中，消息将在当前步骤完成后送达</div>
 					<div class="attach-row" id="attachRow"></div>
 					<div class="attach-row" id="sAddonRow"></div>
-					<div class="inputcard">
 						<div class="ta">
 							<textarea id="sInput" aria-label="继续对话" rows="1" placeholder="请输入问题或任务；任务执行中也可继续补充要求"></textarea>
 						</div>
@@ -530,7 +530,7 @@
 	<div class="toast" id="toast"></div>
 <script src="/assets/core.js"></script>
 <script src="/assets/forms.js"></script>
-<script src="/assets/workspace.js"></script>
+<script src="/assets/workspace.js?v=rag-stream-1"></script>
 <script src="/assets/chat-interactions.js"></script>
 <script>
 (function () {
@@ -786,7 +786,7 @@
 						renderOneRound(t, evs, isLast);
 						// 若最新会话仍在运行，订阅它
 						if (isLast) {
-							var live = ["RUNNING","QUEUED","AWAIT_CONFIRM"].indexOf(t.status) >= 0;
+							var live = state.running;
 							state.taskId = t.taskId; state.conversationId = t.conversationId || null;
 							state.running = live;
 							updateTopStatus();
@@ -853,33 +853,45 @@
 	// 由一轮事件流重建：用户问题、步骤、助手回答、产物。
 	function renderOneRound(task, events, isLast) {
 		var userText = "";
-		var answerText = "";
+		var answerText = "", answerTexts = [];
 		for (var i = 0; i < events.length; i++) {
 			var e0 = events[i];
 			if (e0.type === "user_message" && !userText) userText = e0.text;
-			if (e0.type === "assistant_message") answerText = e0.text;
+			if (e0.type === "assistant_message") { answerText = e0.text; answerTexts.push(e0.text); }
 		}
 		if (!userText) userText = task.title || "(本轮请求)";
 		addMsg("user", "我", userText);
 		var bot = addMsg("bot", "智能体", "");
 		var savedSteps = state.steps;
-		var holder = addStepsShell(bot, isLast && state.running);
+        var effectiveStatus = task.status;
+        events.forEach(function (e) { if (e.type === 'status' && ['QUEUED','RUNNING','AWAIT_CONFIRM'].includes(task.status)) effectiveStatus = e.to; });
+        if (isLast) state.running = ['QUEUED','RUNNING','AWAIT_CONFIRM'].includes(effectiveStatus);
+        var holder = addStepsShell(bot, isLast && state.running);
 		state.steps = holder;
 		events.forEach(function (e) {
 			if (e.type === "step") renderStepEvent(e);
 			if (e.type === "artifact" && e.final) renderArtifactEvent(Object.assign({},e,{taskId:task.taskId}));
 		});
-		if (answerText) {
-			var p = bot.querySelector("p");
-			p.classList.add("bottext", "answer"); ChatUI.renderAnswer(p,answerText);
-		}
-        if(task.status==='FAILED'){
+        answerTexts.forEach(function (text, index) {
+            var p = index === 0 ? bot.querySelector('p') : document.createElement('p');
+            if (index > 0) bot.insertBefore(p, isLast && state.running ? state.statusEl : holder.root);
+            p.classList.add('bottext', 'answer'); ChatUI.renderAnswer(p, text); p.dataset.final = 'true';
+        });
+        if(effectiveStatus==='FAILED'){
           var failure=document.createElement('div');failure.className='task-error';failure.setAttribute('role','alert');
           failure.textContent=ChatUI.errorMessage(task.reason);bot.appendChild(failure);
           holder.state.textContent='失败';
           if(!Object.keys(holder.rows).length)holder.root.hidden=true;
         }
-		state.steps = savedSteps;
+		if (isLast) {
+            state.steps = holder;
+            state.activityStatus = effectiveStatus;
+            state.activityAt = events.length ? events[events.length - 1].at : Date.now();
+            state.activityKind = 'waiting';
+            if (answerText && state.answerP) { state.answerP.dataset.final = 'true'; state.answerP = null; }
+            if (state.running) updateActivity();
+            else { settleSteps(effectiveStatus); state.statusEl = null; state.answerP = null; }
+        } else { settleSteps(effectiveStatus); state.steps = savedSteps; }
 		// 最新轮已由历史回放渲染：把它已落盘事件的 seq 标记为已见，
 		// 避免随后 SSE backlog / 轮询把同一批事件再渲染一遍（重复气泡/步骤）。
 		if (isLast) {
@@ -902,17 +914,26 @@
 		bot.appendChild(steps);
         steps.querySelector(".steps-head").addEventListener("click",function(){steps.classList.toggle("collapsed");});
 		return { root: steps, body: $(".steps-body", steps), state: $(".state", steps),
-			head: $(".steps-head", steps), rows: {} };
+			head: $(".steps-head", steps), rows: {}, order: [] };
 	}
 	function renderStepEvent(ev) {
-		if (!state.steps) return;
-		var row = ensureStep(ev);
-		row.querySelector(".t").textContent = ev.step + ". " + (ev.action || "");
-		if (ev.detail) row.querySelector(".d").textContent = ev.detail;
-		if (ev.phase === "failed") { row.className = "step run"; row.querySelector(".k").textContent = "✕"; }
-		else if (ev.phase === "finished") { row.className = "step done"; row.querySelector(".k").textContent = "✓"; }
-		updateStepSummary();
-	}
+        if (!state.steps) return;
+        // 旧宿主的工具内部进度可能没有步骤编号；作为进展说明展示，不伪造第 0 步。
+        if (!Number.isInteger(ev.step) || ev.step < 1) {
+            if (ev.detail) state.steps.unscopedDetail = ev.detail;
+            return;
+        }
+        var row = ensureStep(ev), phase = ev.phase;
+        if (phase === 'started' || phase === 'finished' || phase === 'failed') state.steps.unscopedDetail = '';
+        row.dataset.phase = phase;
+        row.querySelector('.t').textContent = ev.step + '. ' + (ev.action || '执行操作');
+        if (ev.detail !== undefined) row.querySelector('.d').textContent = ev.detail;
+        var active = phase === 'started' || phase === 'progress';
+        row.className = 'step ' + (active ? 'run' : phase === 'failed' ? 'failed' : 'done');
+        row.querySelector('.k').textContent = active ? '◌' : phase === 'failed' ? '✕' : '✓';
+        row.querySelector('.sst').textContent = active ? '进行中' : phase === 'failed' ? '失败' : '已完成';
+        updateStepSummary();
+    }
 	function renderArtifactEvent(ev) {
 		var key = ev.artifactId || (ev.name + "#" + ev.seq);
 		if (state.seenArtifact[key]) return;
@@ -936,7 +957,7 @@
 		// 进入会话壳即清空旧任务标识并复位运行态：详情/创建接口返回前以 booting 闸门
 		// 拦截一切发送，避免空窗期沿用上一任务 taskId/running 走错分支。
 		state.taskId = null; state.conversationId = null; state.running = false; state.booting = true;
-		state.pending = []; state.inFlight = []; state.answerP = null;
+		state.pending = []; state.inFlight = []; state.answerP = null; state.steps = null; state.statusEl = null;
 		// 默认进入临时对话模式；openJob 会在 shell 之后覆盖为 job 模式。
 		state.mode = "chat"; state.jobId = null;
 		// 同步清空附件标签行与文件输入：保证 pending/inFlight/发送按钮/可见标签四者一致，
@@ -947,7 +968,6 @@
 		$("#lFile").value = ""; $("#sFile").value = "";
 		$("#inner").innerHTML = "";
 		$("#deliverBody").innerHTML = '<div class="deliver-empty">交付物将在这里预览</div>';
-		stepOrder.length = 0;
 		state.seenSeq = Object.create(null);
 		state.seenArtifact = Object.create(null);
 		state.seenConfirm = Object.create(null);
@@ -963,7 +983,9 @@
 		state.answerP = bot.querySelector("p");
 		if (state.answerP) state.answerP.classList.add("bottext", "answer");
 		var status = document.createElement("div");
-		status.className = "statusline"; status.innerHTML = '<span class="running">● 正在思考…</span>';
+		status.className = "statusline activity-line";
+        status.innerHTML = '<span class="activity-dot" aria-hidden="true"></span><span class="activity-label" role="status" aria-live="polite">正在提交任务…</span><small class="activity-time" aria-hidden="true"></small>';
+        state.activityStatus = 'QUEUED'; state.activityKind = 'waiting'; state.activityAt = Date.now(); state.streamDelayed = false;
 		bot.appendChild(status); state.statusEl = status;
 		var steps = document.createElement("div");
 		steps.className = "steps";
@@ -973,7 +995,7 @@
 			'<div class="steps-body"></div>';
 		bot.appendChild(steps);
 		state.steps = { root: steps, body: $(".steps-body", steps), state: $(".state", steps),
-			head: $(".steps-head", steps), rows: {} };
+			head: $(".steps-head", steps), rows: {}, order: [] };
 		steps.querySelector(".steps-head").addEventListener("click", function () {
 			steps.classList.toggle("collapsed");
 		});
@@ -1056,7 +1078,6 @@
 		state.taskId = null;
 		state.seenSeq = Object.create(null);
 		state.seenConfirm = Object.create(null);
-		stepOrder.length = 0;
 		addMsg("user", "我", userText);
 		var bot = addMsg("bot", "智能体", "");
 		ensureRunView(bot);
@@ -1064,6 +1085,7 @@
 	}
 
 	function closeSub() {
+        clearInterval(activityTimer); activityTimer = null;
 		if (state.sub) { try { state.sub.close(); } catch (e) {} state.sub = null; }
 	}
 	// 订阅绑定创建时的 taskId：旧任务流即使晚到，也会因 taskId/generation 不符被丢弃，
@@ -1072,16 +1094,20 @@
 	// 避免“订阅读到的是切换后的新代次、绑定的却是旧任务”的竞态。
 	function subscribe(gen, subTaskId) {
 		closeSub();
+        if (!state.running) return;
 		state.sub = App.subscribe(subTaskId, {
 			onEvent: function (ev) {
 				if (gen !== generation || subTaskId !== state.taskId) return;
-				onEvent(ev);
-			},
-		});
-	}
+                onEvent(ev);
+            },
+            onOpen: function () { if (gen === generation && subTaskId === state.taskId) { state.streamDelayed = false; updateActivity(); } },
+            onError: function () { if (gen === generation && subTaskId === state.taskId) { state.streamDelayed = true; updateActivity(); } }
+        });
+        if (state.running) activityTimer = setInterval(function () { updateActivity(); }, 1000);
+    }
 
 	/* ---------- 事件 → 步骤/交付物（seq 去重 + 幂等键） ---------- */
-	var stepOrder = [];
+	var activityTimer = null;
 	function ensureStep(ev) {
 		var key = ev.step;
 		var row = state.steps.rows[key];
@@ -1091,7 +1117,7 @@
 			row.innerHTML = '<div class="sic"><span class="k">◷</span></div>' +
 				'<div class="sact"><div class="t"></div><div class="d"></div></div><div class="sst"></div>';
 			state.steps.body.appendChild(row);
-			state.steps.rows[key] = row; stepOrder.push(key);
+			state.steps.rows[key] = row; state.steps.order.push(key);
 		}
 		return row;
 	}
@@ -1103,8 +1129,9 @@
 		// 兜底：找到当前轮气泡（含 statusEl 的那个机器人消息）。
 		var bot = state.statusEl ? state.statusEl.closest(".bubble") : null;
 		if (!bot) { bot = addMsg("bot", "智能体", ""); }
-		var p = bot.querySelector("p");
-		p.classList.add("bottext", "answer");
+		var p = Array.from(bot.children).find(function (n) { return n.tagName === 'P' && n.dataset.final !== 'true'; });
+        if (!p) { p = document.createElement('p'); bot.insertBefore(p, state.statusEl && state.statusEl.parentNode === bot ? state.statusEl : null); }
+        p.classList.add("bottext", "answer");
 		state.answerP = p;
 		return p;
 	}
@@ -1112,7 +1139,13 @@
 	function onEvent(ev) {
 		// 流式增量（seq=0）：不参与 seq 去重，直接做打字机追加。
 		if (ev.type === "assistant_delta") {
-			var pd = answerParagraph();
+            if (!state.running) return;
+            if (state.answerP && state.answerP.dataset.mid && state.answerP.dataset.mid !== ev.messageId) {
+                state.answerP.dataset.final = 'true'; state.answerP = null;
+            }
+            state.activityKind = 'generating'; state.activityAt = Date.now();
+            updateActivity();
+            var pd = answerParagraph();
 			pd.setAttribute("data-mid", ev.messageId || "cur");
 			pd.textContent += ev.delta;
 			scrollDown();
@@ -1123,27 +1156,14 @@
 			if (state.seenSeq[ev.seq]) return;
 			state.seenSeq[ev.seq] = true;
 		}
-		if (ev.type === "status") {
-			var map = App.STATUS[ev.to] ? App.STATUS[ev.to].label : ev.to;
-			if (state.statusEl) state.statusEl.textContent = ev.to==='FAILED'
-                ? ChatUI.errorMessage(ev.reason) : "状态：" + map + (ev.reason ? " · " + ChatUI.errorMessage(ev.reason) : "");
-			if (state.statusEl) state.statusEl.classList.toggle('task-error',ev.to==='FAILED');
-			if (["SUCCEEDED","FAILED","CANCELLED","EXCEEDED"].indexOf(ev.to) >= 0) finishRun(ev.to, ev.reason);
-		} else if (ev.type === "step") {
-			var row = ensureStep(ev);
-			row.querySelector(".t").textContent = ev.step + ". " + (ev.action || "");
-			if (ev.detail) row.querySelector(".d").textContent = ev.detail;
-			if (ev.phase === "started" || ev.phase === "progress") {
-				row.className = "step run"; row.querySelector(".sst").textContent = "进行中";
-				row.querySelector(".k").textContent = "▶"; state.steps.state.textContent = "执行中";
-			} else if (ev.phase === "finished") {
-				row.className = "step done"; row.querySelector(".sst").textContent = "已完成";
-				row.querySelector(".k").textContent = "✓";
-			} else if (ev.phase === "failed") {
-				row.className = "step run"; row.querySelector(".k").textContent = "✕";
-				row.querySelector(".sst").textContent = "失败";
-			}
-			updateStepSummary(); scrollDown();
+        if (ev.type === "status") {
+            state.activityStatus = ev.to; state.activityAt = Date.now(); state.activityKind = 'waiting';
+            updateActivity();
+            if (["SUCCEEDED","FAILED","CANCELLED","EXCEEDED","INTERRUPTED"].indexOf(ev.to) >= 0) finishRun(ev.to, ev.reason);
+        } else if (ev.type === "step") {
+            renderStepEvent(ev);
+            state.activityKind = 'waiting'; state.activityAt = Date.now();
+            updateActivity(); scrollDown();
 		} else if (ev.type === "tool_decision") {
 			if (ev.decision === "await_confirm") {
 				var ckey = ev.toolName + "#" + ev.seq;
@@ -1159,40 +1179,71 @@
 			if (ev.text) {
 				var pf = answerParagraph();
 				ChatUI.renderAnswer(pf,ev.text);
-				state.answerP = null; // 下一轮用新气泡
+				pf.dataset.final = 'true'; state.answerP = null;
+                state.activityKind = 'waiting'; state.activityAt = Date.now(); updateActivity();
 				scrollDown();
 			}
 		} else if (ev.type === "user_message") {
 			// 运行中插话由后端补发；正常首轮/续聊的用户气泡已在提交时上屏，这里幂等去重。
 		}
 	}
-	function updateStepSummary() {
-		var n = stepOrder.length;
-		state.steps.head.querySelector(".summary").textContent =
-			n ? ("已生成 " + n + " 个执行步骤") : "执行步骤";
-	}
-	function finishRun(to, reason) {
-		state.running = false; updateTopStatus();
-		if (state.sub) { state.sub.close(); state.sub = null; }
-		if (to === "SUCCEEDED") {
-			state.steps.state.textContent = "已完成";
-			state.steps.root.classList.add("collapsed");
-			state.steps.head.querySelector(".summary").textContent =
-				"✓ 本轮操作已完成 · 共 " + stepOrder.length + " 步（点击展开）";
-		} else {
-			state.steps.state.textContent = to === "FAILED" ? "失败" : "已停止";
-		}
-        if(to==='FAILED'){
-          if(!state.statusEl){var b=addMsg('bot','智能体','');b.querySelector('p').textContent=ChatUI.errorMessage(reason);}
-          if(stepOrder.length===0)state.steps.root.hidden=true;
+    function updateStepSummary() {
+        if (!state.steps) return;
+        var rows = Object.values(state.steps.rows), done = rows.filter(function (r) { return r.dataset.phase === 'finished'; }).length;
+        var running = rows.filter(function (r) { return ['started','progress'].includes(r.dataset.phase); }).length;
+        var failed = rows.filter(function (r) { return r.dataset.phase === 'failed'; }).length;
+        state.steps.head.querySelector('.summary').textContent = rows.length
+            ? '已完成 ' + done + ' / ' + rows.length + ' 步' + (running ? ' · ' + running + ' 步进行中' : '') + (failed ? ' · ' + failed + ' 步失败' : '') : '等待执行步骤';
+    }
+    function updateActivity() {
+        if (!state.running || !state.statusEl || !state.steps) return;
+        var rows = state.steps.order.map(function (key) { return state.steps.rows[key]; });
+        var active = rows.filter(function (r) { return ['started','progress'].includes(r.dataset.phase); });
+        var current = active[active.length - 1], label;
+        if (state.activityStatus === 'AWAIT_CONFIRM') label = '等待你确认后继续';
+        else if (state.activityStatus === 'QUEUED') label = '任务排队中，等待开始';
+        else if (current) label = '正在执行：' + current.querySelector('.t').textContent + (current.querySelector('.d').textContent ? ' · ' + current.querySelector('.d').textContent : '');
+        else label = state.activityKind === 'generating' ? '正在生成回答…' : state.steps.unscopedDetail ? '执行进展：' + state.steps.unscopedDetail : '正在等待模型响应…';
+        if (current && state.steps.unscopedDetail) label += ' · ' + state.steps.unscopedDetail;
+        if (state.streamDelayed) label = '实时连接恢复中，正在同步进度 · ' + label;
+        var target = state.statusEl.querySelector('.activity-label');
+        if (target && target.textContent !== label) target.textContent = label;
+        var elapsed = Math.max(0, Math.floor((Date.now() - (state.activityAt || Date.now())) / 1000));
+        var clock = state.statusEl.querySelector('.activity-time');
+        if (clock) clock.textContent = elapsed >= 5 ? '距上次进展 ' + elapsed + ' 秒' : '';
+        state.steps.state.textContent = state.activityStatus === 'AWAIT_CONFIRM' ? '待确认' : '执行中';
+        state.statusEl.classList.add('is-active');
+    }
+    function settleSteps(to) {
+        if (!state.steps) return;
+        Object.values(state.steps.rows).forEach(function (row) {
+            if (['started','progress'].includes(row.dataset.phase)) {
+                row.dataset.phase = 'stopped'; row.className = 'step wait';
+                row.querySelector('.k').textContent = '—';
+                row.querySelector('.sst').textContent = to === 'SUCCEEDED' ? '未收到结果' : '已停止';
+            }
+        });
+        updateStepSummary();
+        state.steps.state.textContent = to === 'SUCCEEDED' ? '已完成' : to === 'FAILED' ? '失败' : '已停止';
+        if (!state.steps.order.length) state.steps.root.hidden = true;
+        if (to === 'SUCCEEDED') state.steps.root.classList.add('collapsed');
+    }
+    function finishRun(to, reason) {
+        state.running = false; updateTopStatus(); updateSendEnabled(); closeSub();
+        settleSteps(to);
+        if (state.statusEl) {
+            state.statusEl.classList.remove('is-active');
+            state.statusEl.classList.toggle('task-error', to === 'FAILED');
+            state.statusEl.textContent = to === 'FAILED' ? ChatUI.errorMessage(reason)
+                : to === 'SUCCEEDED' ? '本轮已完成' : to === 'EXCEEDED' ? '已达到执行限额，等待继续' : to === 'INTERRUPTED' ? '任务已中断' : '任务已取消';
         }
-		loadRecent(); scrollDown();
-	}
+        loadRecent(); scrollDown();
+    }
 	function fail(msg) {
 		msg=ChatUI.errorMessage(msg);
-		state.running = false; state.booting = false;
+		state.running = false; state.booting = false; closeSub();
 		updateTopStatus(); updateSendEnabled();
-		if (state.statusEl) state.statusEl.textContent = msg;
+		if (state.statusEl) { state.statusEl.classList.remove('is-active'); state.statusEl.textContent = msg; }
 		toast(msg);
 	}
 	// 历史任务详情加载失败（业务失败或网络异常）：**保持启动闸门锁定**（running=false、
@@ -1617,7 +1668,6 @@
 		state.skill = null; state.agent = null;
 		state.seenSeq = null; state.seenArtifact = null; state.seenConfirm = null;
 		state.deliverCleared = false;
-		stepOrder.length = 0;
 		$("#session").classList.add("hidden");
 		$("#landing").classList.remove("hidden");
 		setRail(isMobile()); hideDeliver();
