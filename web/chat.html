@@ -873,6 +873,12 @@
 			var p = bot.querySelector("p");
 			p.classList.add("bottext", "answer"); ChatUI.renderAnswer(p,answerText);
 		}
+        if(task.status==='FAILED'){
+          var failure=document.createElement('div');failure.className='task-error';failure.setAttribute('role','alert');
+          failure.textContent=ChatUI.errorMessage(task.reason);bot.appendChild(failure);
+          holder.state.textContent='失败';
+          if(!Object.keys(holder.rows).length)holder.root.hidden=true;
+        }
 		state.steps = savedSteps;
 		// 最新轮已由历史回放渲染：把它已落盘事件的 seq 标记为已见，
 		// 避免随后 SSE backlog / 轮询把同一批事件再渲染一遍（重复气泡/步骤）。
@@ -1119,8 +1125,9 @@
 		}
 		if (ev.type === "status") {
 			var map = App.STATUS[ev.to] ? App.STATUS[ev.to].label : ev.to;
-			if (state.statusEl) state.statusEl.innerHTML = "状态：" + esc(map) +
-				(ev.reason ? " · " + esc(ev.reason) : "");
+			if (state.statusEl) state.statusEl.textContent = ev.to==='FAILED'
+                ? ChatUI.errorMessage(ev.reason) : "状态：" + map + (ev.reason ? " · " + ChatUI.errorMessage(ev.reason) : "");
+			if (state.statusEl) state.statusEl.classList.toggle('task-error',ev.to==='FAILED');
 			if (["SUCCEEDED","FAILED","CANCELLED","EXCEEDED"].indexOf(ev.to) >= 0) finishRun(ev.to, ev.reason);
 		} else if (ev.type === "step") {
 			var row = ensureStep(ev);
@@ -1175,12 +1182,14 @@
 		} else {
 			state.steps.state.textContent = to === "FAILED" ? "失败" : "已停止";
 		}
-		if (reason && to === "FAILED") {
-			var b = addMsg("bot", "智能体", ""); b.querySelector("p").textContent = "任务失败：" + reason;
-		}
+        if(to==='FAILED'){
+          if(!state.statusEl){var b=addMsg('bot','智能体','');b.querySelector('p').textContent=ChatUI.errorMessage(reason);}
+          if(stepOrder.length===0)state.steps.root.hidden=true;
+        }
 		loadRecent(); scrollDown();
 	}
 	function fail(msg) {
+		msg=ChatUI.errorMessage(msg);
 		state.running = false; state.booting = false;
 		updateTopStatus(); updateSendEnabled();
 		if (state.statusEl) state.statusEl.textContent = msg;
