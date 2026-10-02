@@ -1,0 +1,318 @@
+/* Front-office views share the chat shell and its active conversation. */
+(function (global) {
+  "use strict";
+  var hooks, page, content, route = "chat", revision = 0, initialized = false;
+  var titles = { tasks: "任务中心", scenarios: "场景", knowledge: "知识库" };
+  var statusNames = { QUEUED: "排队中", RUNNING: "执行中", AWAIT_CONFIRM: "等待确认", SUCCEEDED: "已完成", FAILED: "失败", CANCELLED: "已取消", EXCEEDED: "等待继续", INTERRUPTED: "已中断", active: "进行中", done: "已完成", archived: "已归档" };
+  function node(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+  function button(text, action, cls) {
+    var n = node("button", cls || "ws-button", text); n.type = "button";
+    n.addEventListener("click", action); return n;
+  }
+  function input(label, placeholder) {
+    var n = node("input", "ws-search"); n.type = "search"; n.placeholder = placeholder || label;
+    n.setAttribute("aria-label", label); return n;
+  }
+  function message(host, text, error) {
+    host.replaceChildren(node("p", "ws-state" + (error ? " ws-error" : ""), text));
+    host.setAttribute("role", error ? "alert" : "status");
+  }
+  function notice(host, text) { host.textContent = text; }
+  function valid(version) { return version === revision && route !== "chat"; }
+  async function api(method, path, body) {
+    var result = await App.api(method, path, body);
+    if (!result.ok) throw new Error(result.data && result.data.error || "请求失败，请稍后重试");
+    return result.data || {};
+  }
+  function date(value) { var d = new Date(value); return value && !isNaN(d.getTime()) ? d.toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""; }
+  function badge(status) { return node("span", "ws-badge ws-status-" + String(status || "").toLowerCase().replace(/[^a-z_]/g, ""), statusNames[status] || status || "待开始"); }
+  function go(next) {
+    if (location.hash === "#" + next) renderRoute();
+    else location.hash = next;
+  }
+  function restoreChat() {
+    page.hidden = true;
+    document.body.classList.remove("workspace-active");
+    if (hooks.showChat) hooks.showChat();
+  }
+  function openChat(action) {
+    // Render synchronously so shell callbacks can reveal a session immediately.
+    if (location.hash !== "#chat") location.hash = "chat";
+    route = "chat"; revision++; restoreChat();
+    if (action) action();
+  }
+  function heading(title, description, action) {
+    var head = node("header", "ws-heading"), text = node("div");
+    text.append(node("p", "ws-eyebrow", "工作空间"), node("h1", "", title), node("p", "ws-description", description));
+    head.append(text); if (action) head.append(action); content.append(head);
+  }
+  function renderRoute() {
+    var next = location.hash.replace(/^#\/?/, "").split("?")[0];
+    route = titles[next] ? next : "chat";
+    revision++;
+    document.querySelectorAll("#navTasks, #navWorkbench, #navKnowledge").forEach(function (n) {
+      var selected = n.dataset.workspaceRoute === route;
+      n.classList.toggle("active", selected);
+      if (selected) n.setAttribute("aria-current", "page"); else n.removeAttribute("aria-current");
+    });
+    if (route === "chat") { restoreChat(); return; }
+    var chatNav=document.getElementById("navChat");if(chatNav)chatNav.classList.remove("active");
+    page.hidden = false; document.body.classList.add("workspace-active");
+    ["landing", "session"].forEach(function (id) { var el = document.getElementById(id); if (el) el.classList.add("hidden"); });
+    content.replaceChildren(); page.scrollTop = 0;
+    var current = revision;
+    if (route === "tasks") tasks(current);
+    if (route === "scenarios") scenarios(current);
+    if (route === "knowledge") knowledge(current);
+  }
+  function filters(host, options, onChange) {
+    var group = node("div", "ws-filters"); group.setAttribute("aria-label", "筛选");
+    options.forEach(function (option, index) {
+      var b = button(option[1], function () {
+        group.querySelectorAll("button").forEach(function (x) { x.setAttribute("aria-pressed", String(x === b)); });
+        onChange(option[0]);
+      }, "ws-filter");
+      b.setAttribute("aria-pressed", String(index === 0)); group.append(b);
+    }); host.append(group); return group;
+  }
+  async function tasks(version) {
+    heading("让每一项工作，持续向前", "在这里查看执行进展，回到对话继续协作。", button("＋ 新建长期任务", function () { if (hooks.newJob) hooks.newJob(); }, "ws-button ws-primary"));
+    var toolbar = node("div", "ws-toolbar"), search = input("搜索任务", "搜索任务名称或目标…");
+    toolbar.append(search, button("刷新", function () { renderRoute(); })); content.append(toolbar);
+    var kind = "all", state = "all", all = [], jobs = [], scenarioNames = {};
+    filters(content, [["all", "全部"], ["tasks", "对话任务"], ["jobs", "长期任务"]], function (value) { kind = value; draw(); });
+    var select = node("select", "ws-select"); select.setAttribute("aria-label", "按任务状态筛选");
+    [["all", "全部状态"], ["running", "进行中"], ["waiting", "等待确认"], ["done", "已完成"], ["failed", "失败 / 中断"], ["cancelled", "已取消 / 归档"]].forEach(function (pair) { var o = node("option", "", pair[1]); o.value = pair[0]; select.append(o); });
+    toolbar.append(select); select.addEventListener("change", function () { state = select.value; draw(); });
+    var list = node("div", "ws-list"), error = node("p", "ws-inline-error"); error.setAttribute("role", "alert"); content.append(error, list); message(list, "正在加载任务…");
+    search.addEventListener("input", draw);
+    function matches(s) {
+      if (state === "all") return true;
+      var groups = { running: ["QUEUED", "RUNNING", "active"], waiting: ["AWAIT_CONFIRM", "EXCEEDED"], done: ["SUCCEEDED", "done"], failed: ["FAILED", "INTERRUPTED"], cancelled: ["CANCELLED", "archived"] };
+      return (groups[state] || []).indexOf(s) >= 0;
+    }
+    function draw() {
+      if (!valid(version)) return;
+      list.replaceChildren();
+      var q = search.value.trim().toLowerCase();
+      var entries = all.map(function (t) { return { value: t, job: false }; }).concat(jobs.map(function (j) { return { value: j, job: true }; }));
+      entries = entries.filter(function (entry) {
+        var t = entry.value;
+        return (kind === "all" || (kind === "jobs") === entry.job) && matches(t.status) && (!q || [t.title, t.goal, t.taskId, t.scenarioTitle, scenarioNames[t.scenarioId]].join(" ").toLowerCase().indexOf(q) >= 0);
+      }).sort(function (a, b) { return new Date(b.value.updatedAt || b.value.createdAt || 0) - new Date(a.value.updatedAt || a.value.createdAt || 0); });
+      if (!entries.length) { message(list, "还没有匹配的任务。发起一次对话，或从场景开始。" ); return; }
+      entries.forEach(function (entry) {
+        var t = entry.value, row = node("article", "ws-task-row"), info = node("div", "ws-row-main");
+        var title = t.title || t.scenarioTitle || scenarioNames[t.scenarioId] || (entry.job ? "长期任务" : "未命名任务");
+        var open = function () { openChat(function () { if (entry.job) hooks.openJob(t.jobId); else hooks.openTask(t.taskId); }); };
+        info.append(button(title, open, "ws-title-button"), node("p", "ws-meta", (entry.job ? "长期任务" : "对话任务") + " · " + date(t.updatedAt || t.createdAt) + (entry.job ? " · " + (t.conversationIds || []).length + " 次会话" : " · " + (t.artifacts || []).length + " 份产物")));
+        if (entry.job && t.goal) info.append(node("p", "ws-row-summary", t.goal));
+        if (t.reason) info.append(node("p", "ws-row-summary", t.reason));
+        var actions = node("div", "ws-actions"); actions.append(badge(t.status), button("打开", open));
+        if (!entry.job && ["QUEUED", "RUNNING", "AWAIT_CONFIRM", "EXCEEDED"].indexOf(t.status) >= 0) {
+          var cancel = button("取消", async function () {
+            cancel.disabled = true; notice(error, "");
+            try { await api("POST", "/api/tasks/" + encodeURIComponent(t.taskId) + "/cancel", { reason: "用户取消" }); if (valid(version)) { t.status = "CANCELLED"; draw(); } }
+            catch (e) { if (valid(version)) { notice(error, e.message); cancel.disabled = false; } }
+          }, "ws-button ws-danger"); actions.append(cancel);
+        }
+        row.append(node("span", "ws-row-icon", entry.job ? "◈" : "◷"), info, actions); list.append(row);
+      });
+    }
+    var results = await Promise.allSettled([api("GET", "/api/tasks"), api("GET", "/api/jobs"), api("GET", "/api/scenarios")]);
+    if (!valid(version)) return;
+    if (results[0].status === "fulfilled") all = results[0].value.tasks || [];
+    if (results[1].status === "fulfilled") jobs = results[1].value.jobs || [];
+    if (results[2].status === "fulfilled") (results[2].value.scenarios || []).forEach(function (c) { scenarioNames[c.id] = c.title; });
+    var errors = results.slice(0, 2).filter(function (r) { return r.status === "rejected"; });
+    if (errors.length) notice(error, "部分任务加载失败：" + errors.map(function (r) { return r.reason.message; }).join("；"));
+    draw();
+  }
+  async function scenarios(version) {
+    heading("从一个好场景开始", "选择适合的工作方式，补充材料，让智能体帮你完成。" );
+    var search = input("搜索场景", "搜索场景、用途或关键词…"), controls = node("div", "ws-toolbar"), categories = node("div"), grid = node("div", "ws-scenario-grid");
+    controls.append(search); content.append(controls, categories, grid); message(grid, "正在加载场景…");
+    var cards = [], category = "all";
+    function draw() {
+      grid.replaceChildren(); var q = search.value.trim().toLowerCase();
+      var visible = cards.filter(function (c) { return (category === "all" || c.industry === category) && (!q || [c.title, c.summary, c.category].join(" ").toLowerCase().indexOf(q) >= 0); });
+      if (!visible.length) { message(grid, "暂无匹配场景，试试其他关键词。" ); return; }
+      visible.forEach(function (c) {
+        var card = button("", function () { scenarioForm(c, version); }, "ws-scenario-card");
+        card.append(node("span", "ws-scene-icon", { university: "▥", manufacturing: "▦", general: "✧" }[c.industry] || "✧"), node("h2", "", c.title), node("p", "", c.summary || "填写需求，开始这项工作。"));
+        var foot = node("div", "ws-card-foot"); foot.append(node("span", "ws-badge", c.category || "办公场景"), node("span", "ws-card-link", "开始使用 →")); card.append(foot); grid.append(card);
+      });
+    }
+    search.addEventListener("input", draw);
+    try {
+      var result = await api("GET", "/api/scenarios"); if (!valid(version)) return;
+      cards = result.scenarios || [];
+      var industries = [["all", "全部场景"]], names = { general: "通用办公", university: "高校服务", manufacturing: "制造业" };
+      Array.from(new Set(cards.map(function (c) { return c.industry; }).filter(Boolean))).forEach(function (k) { industries.push([k, names[k] || k]); });
+      filters(categories, industries, function (k) { category = k; draw(); }); draw();
+    } catch (e) { if (valid(version)) { message(grid, e.message, true); grid.append(button("重新加载", renderRoute)); } }
+  }
+  function scenarioForm(card, version) {
+    content.replaceChildren();
+    content.append(button("← 返回场景", renderRoute, "ws-back"));
+    heading(card.title, card.summary || "补充以下信息，即可开始任务。");
+    var form = node("form", "ws-form"), error = node("p", "ws-inline-error"), actions = node("div", "ws-form-actions");
+    error.setAttribute("role", "alert");
+    var pending = 0, submitting = false, submit = node("button", "ws-button ws-primary", "开始任务"); submit.type = "submit";
+    var fields = Array.isArray(card.fields) ? card.fields : []; form._fields = fields;
+    var Forms = App.Forms || global.ScenarioForms;
+    fields.forEach(function (f, index) {
+      var wrap = node("div", "ws-field"), id = "fld-" + f.name, label = node("label", "", f.label + (f.required ? " *" : "")); label.htmlFor = id;
+      var control;
+      if (f.type === "file" || f.type === "filelist") {
+        var box = node("div", "ws-upload-field"), picker = node("input"), rows = node("div", "ws-upload-list"), sequence = 0;
+        box.dataset.name = f.name; box.dataset.type = f.type; box._paths = [];
+        picker.type = "file"; picker.id = id; picker.multiple = f.type === "filelist";
+        if (f.accept) picker.accept = Array.isArray(f.accept) ? f.accept.join(",") : f.accept;
+        picker.addEventListener("change", async function () {
+          var files = Array.from(picker.files || []); if (!files.length) return;
+          var current = ++sequence, multi = f.type === "filelist";
+          if (!multi) { box._paths.length = 0; rows.replaceChildren(); }
+          pending++; submit.disabled = true;
+          try {
+            for (var file of files) {
+              var row = node("p", "ws-upload-item", file.name + " · 上传中…"); rows.append(row);
+              try {
+                var r = await App.upload("/api/files", file, "file");
+                if (!multi && current !== sequence) { row.remove(); continue; }
+                if (!r.ok || !r.data.path) throw new Error(r.data && r.data.error || "上传失败");
+                box._paths.push(r.data.path); row.textContent = file.name + " · 已就绪";
+              } catch (e) { row.textContent = file.name + " · " + e.message; row.classList.add("ws-error"); }
+            }
+          } finally { pending--; submit.disabled = pending > 0; if (multi || current === sequence) picker.value = ""; }
+        });
+        box.append(picker, rows); control = box;
+      } else if (f.type === "multiselect") {
+        control = node("div", "ws-checkboxes"); control.id = id; control.setAttribute("role", "group"); control.setAttribute("aria-label", f.label); control.dataset.name = f.name; control.dataset.type = f.type;
+        (f.options || []).forEach(function (o) { var l = node("label"), cb = node("input"); cb.type = "checkbox"; cb.value = o.value; l.append(cb, node("span", "", o.label)); control.append(l); });
+      } else {
+        control = node(f.type === "textarea" ? "textarea" : f.type === "select" ? "select" : "input");
+        if (control.tagName === "INPUT") control.type = f.type === "boolean" ? "checkbox" : ["number", "date"].indexOf(f.type) >= 0 ? f.type : "text";
+        if (f.type === "select") { var empty = node("option", "", "请选择…"); empty.value = ""; control.append(empty); (f.options || []).forEach(function (o) { var opt = node("option", "", o.label); opt.value = o.value; control.append(opt); }); }
+        control.id = id; control.dataset.name = f.name; control.dataset.type = f.type || "text";
+        if (f.type === "textarea") control.rows = 4;
+        if (f.min !== undefined) control.min = f.min;
+        if (f.max !== undefined) control.max = f.max;
+        if (f.required && f.type !== "boolean") control.required = true;
+      }
+      if(f.defaultValue!==undefined){if(f.type==='boolean')control.checked=!!f.defaultValue;else if(f.type==='multiselect')control.querySelectorAll('input').forEach(function(cb){cb.checked=Array.isArray(f.defaultValue)&&f.defaultValue.includes(cb.value);});else if(f.type!=='file'&&f.type!=='filelist')control.value=String(f.defaultValue);}
+      if (f.hint) { var hint = node("p", "ws-field-hint", f.hint); hint.id = "ws-hint-" + index; control.setAttribute("aria-describedby", hint.id); wrap.append(label, control, hint); }
+      else wrap.append(label, control);
+      form.append(wrap);
+    });
+    if (!fields.length) form.append(node("p", "ws-description", "这个场景已经准备就绪，点击下方按钮开始。"));
+    actions.append(submit, button("返回场景", renderRoute)); form.append(error, actions); content.append(form);
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault(); if (submitting) return; if (pending) { notice(error, "请等待附件上传完成。" ); return; }
+      if (!Forms) { notice(error, "表单组件加载失败，请刷新页面重试。" ); return; }
+      var got = Forms.collect(form); if (!got.ok) { notice(error, got.errors.join("；")); return; }
+      var payload = { scenarioId: card.id, fields: got.values }; submitting = true; submit.disabled = true; submit.textContent = "正在创建任务…"; notice(error, "");
+      try {
+        var result = await api("POST", "/api/tasks", payload);
+        if (!valid(version)) return;
+        if (!result.taskId) throw new Error("任务已提交，但未返回任务编号，请到任务中心查看。" );
+        if (hooks.submitScenario) hooks.submitScenario(payload, result);
+        openChat(function () { hooks.openTask(result.taskId); });
+      } catch (e) { if (valid(version)) notice(error, e.message); }
+      finally { submitting = false; submit.disabled = false; submit.textContent = "开始任务"; }
+    });
+    var first = form.querySelector("input, textarea, select"); if (first) first.focus();
+  }
+  async function knowledge(version) {
+    var picker = node("input"); picker.type = "file"; picker.multiple = true; picker.hidden = true;
+    heading("让你的知识，成为协作的底气", "上传常用资料，搜索内容片段，随时引用到对话。", button("＋ 上传资料", function () { picker.click(); }, "ws-button ws-primary"));
+    var search = input("搜索知识库", "搜索文件名或资料中的内容…"), toolbar = node("form", "ws-toolbar"), searchButton = node("button", "ws-button", "搜索"); searchButton.type = "submit";
+    toolbar.append(search, searchButton, button("刷新", function () { load(); }));
+    var progress = node("p", "ws-upload-progress"), error = node("p", "ws-inline-error"), resultTitle = node("h2", "ws-section-title", "我的资料"), list = node("div", "ws-list");
+    progress.setAttribute("role", "status"); error.setAttribute("role", "alert"); content.append(picker, toolbar, progress, error, resultTitle, list);
+    var documents = [], request = 0, loadRequest = 0, timer, uploading = false;
+    function actionsFor(doc) {
+      var actions = node("div", "ws-actions");
+      actions.append(button("预览", function () { if (hooks.openPreview) hooks.openPreview({ kind: "file", name: doc.name }); }));
+      var cite = button("引用到对话", function () {
+        if (!hooks.attachFile) return;
+        // The shell may reject attaching while its task is running.
+        api("POST","/api/workspace/files/reference",{name:doc.fileName||doc.name}).then(function(file){var attached=hooks.attachFile(file);if(attached!==false)openChat();}).catch(function(e){notice(error,e.message);});
+      });
+      cite.disabled = !doc.fileName; actions.append(cite); return actions;
+    }
+    function drawDocs() {
+      list.replaceChildren(); resultTitle.textContent = "我的资料 · " + documents.length;
+      if (!documents.length) { message(list, "知识库还空着。上传一份资料，让后续对话有据可依。" ); return; }
+      documents.forEach(function (doc) {
+        var row = node("article", "ws-document-row"), info = node("div", "ws-row-main");
+        info.append(node("h3", "", doc.name), node("p", "ws-meta", (doc.indexed ? "已索引 · " + (doc.chunks || 0) + " 个片段" : "未索引") + " · " + date(doc.updatedAt)));
+        if (doc.error) info.append(node("p", "ws-inline-error", doc.error));
+        var actions = actionsFor(doc), remove = button("移除", async function () {
+          if (!global.confirm("从知识库移除「" + doc.name + "」？原始文件会保留。")) return;
+          remove.disabled = true;
+          try { await api("DELETE", "/api/knowledge/" + encodeURIComponent(doc.id)); if (valid(version)) load(); }
+          catch (e) { if (valid(version)) { notice(error, e.message); remove.disabled = false; } }
+        }, "ws-button ws-danger"); actions.append(remove); row.append(node("span", "ws-row-icon", "▤"), info, actions); list.append(row);
+      });
+    }
+    async function load() {
+      var current = ++loadRequest; request++; message(list, "正在加载资料…"); notice(error, "");
+      try { var data = await api("GET", "/api/knowledge"); if (!valid(version) || current !== loadRequest) return; documents = (data.documents || []).map(function(d){return Object.assign({},d,{id:d.documentId,indexed:d.status==="ready",path:d.path});}); if (search.value.trim()) find(); else drawDocs(); }
+      catch (e) { if (valid(version) && current === loadRequest) { message(list, e.message, true); list.append(button("重新加载", load)); } }
+    }
+    async function find() {
+      clearTimeout(timer); var q = search.value.trim(), current = ++request;
+      if (!q) { drawDocs(); return; }
+      message(list, "正在搜索相关内容…"); notice(error, "");
+      try {
+        var data = await api("GET", "/api/knowledge?q=" + encodeURIComponent(q)); if (!valid(version) || current !== request) return;
+        list.replaceChildren(); var hits = data.hits || []; resultTitle.textContent = "搜索结果 · " + hits.length;
+        if (!hits.length) { message(list, "没有找到相关内容。试试其他关键词，或上传更多资料。" ); return; }
+        hits.forEach(function (hit) {
+          var row = node("article", "ws-search-hit"), doc = documents.find(function (d) { return d.id === hit.chunk.documentId; }) || { name: hit.chunk.documentName };
+          row.append(node("h3", "", hit.chunk.documentName), node("p", "ws-hit-text", hit.chunk.text || ""), actionsFor(doc)); list.append(row);
+        });
+      } catch (e) { if (valid(version) && current === request) message(list, e.message, true); }
+    }
+    toolbar.addEventListener("submit", function (e) { e.preventDefault(); find(); });
+    search.addEventListener("input", function () { clearTimeout(timer); request++; timer = setTimeout(function () { if (valid(version)) find(); }, 300); });
+    picker.addEventListener("change", async function () {
+      var files = Array.from(picker.files || []); if (!files.length || uploading) return;
+      uploading = true; picker.disabled = true; notice(error, ""); var failed = [];
+      for (var i = 0; i < files.length; i++) {
+        var file = files[i]; if (valid(version)) notice(progress, "正在上传并入库 " + (i + 1) + "/" + files.length + "：" + file.name);
+        try {
+          var uploaded = await App.upload("/api/files", file, "file");
+          if (!uploaded.ok) throw new Error(uploaded.data && uploaded.data.error || "上传失败");
+          var name = uploaded.data.name || (uploaded.data.path && uploaded.data.path.replace(/\\/g, "/").split("/").pop()) || file.name;
+          await api("POST", "/api/knowledge", { name: name, fileName:name });
+        } catch (e) { failed.push(file.name + "：" + e.message); }
+      }
+      uploading = false; picker.disabled = false; picker.value = "";
+      if (valid(version)) { notice(progress, "已完成 " + (files.length - failed.length) + " 份资料入库。"); await load(); if (valid(version)) notice(error, failed.join("；")); }
+    });
+    await load();
+  }
+  global.TaoWorkspace = {
+    init: function (options) {
+      hooks = options || {};
+      if (initialized) return;
+      initialized = true;
+      page = node("main", "workspace-page"); page.id = "workspacePage"; page.hidden = true; page.setAttribute("aria-label", "工作空间");
+      content = node("div", "ws-content"); page.append(content); document.body.append(page);
+      [["navTasks", "tasks"], ["navWorkbench", "scenarios"], ["navKnowledge", "knowledge"]].forEach(function (pair) {
+        var nav = document.getElementById(pair[0]); if (!nav) return;
+        nav.dataset.workspaceRoute = pair[1]; nav.addEventListener("click", function (e) { e.preventDefault(); go(pair[1]); });
+      });
+      global.addEventListener("hashchange", renderRoute); renderRoute();
+    },
+    navigate: go,
+    showChat: function () { openChat(); }
+  };
+})(window);

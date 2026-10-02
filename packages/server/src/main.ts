@@ -43,7 +43,7 @@ import {
 	MemorySessionFactory,
 } from "@tao/agent-host";
 import { TaskOrchestrator } from "@tao/orchestrator";
-import { createApp, ticketResource, type Principal } from "./app.ts";
+import { createApp, ticketResource, readJsonBody, sendJson, sendError, type Principal } from "./app.ts";
 import { listVisibleSkills, listVisibleAgents, newAddonId, resolveAddons } from "./addons.ts";
 import {
 	authenticateToken,
@@ -59,6 +59,11 @@ import { SseHub } from "./sse.ts";
 import { TicketService } from "./tickets.ts";
 import { resolveWebDir } from "./static.ts";
 
+import {createWorkspaceServices, workspaceFile} from "./workspace-services.ts";
+import {createWorkspaceHandler} from "./workspace-api.ts";
+import {handleControlGate} from "./control-gate.ts";
+import {copyFileSync,constants as fsConstants} from "node:fs";
+import {randomUUID} from "node:crypto";
 const { config, errors } = loadConfig(process.env);
 
 /**
@@ -543,6 +548,7 @@ function toolsFor(tenant: TenantContext, taskId: string) {
 		tools: [
 			...createOfficeToolset({ workspace: artifactDir }),
 			...createDocToolset({ workspace: artifactDir }),
+            workspaceServices.createKnowledgeTool(tenant),
 		],
 	};
 }
@@ -716,6 +722,16 @@ if (webDir === undefined) {
 	process.stderr.write("[Web] 未找到前端目录（web/login.html），本次启动仅提供 API，不托管页面。\n");
 }
 
+const workspaceServices=createWorkspaceServices({workspaceRoot:config.workspaceDir});
+function ownedTask(tenant:TenantContext,taskId:string) {
+ const task=orchestrator.get(taskId);
+ return task && task.tenant.tenantId===tenant.tenantId && task.tenant.workspaceId===tenant.workspaceId ? task : undefined;
+}
+function ownedArtifact(tenant:TenantContext,taskId:string,name:string) {
+ const task=ownedTask(tenant,taskId);if(!task)return undefined;
+ return resolveRegisteredArtifact({workspaceRoot:resolveWorkspaceDir(config.workspaceDir,tenant.tenantId,tenant.workspaceId),artifacts:task.artifacts,name});
+}
+const workspaceHandler=createWorkspaceHandler({authenticate,workspaceRoot:config.workspaceDir,getTask:ownedTask,artifactPath:ownedArtifact,services:workspaceServices});
 const app = createApp({
 	authenticate,
 	modelInfo: () => ({
@@ -823,7 +839,7 @@ const app = createApp({
 		const taskId = `task-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 		const { dir: workspaceDir, artifactDir, tools } = toolsFor(tenant, taskId);
 		const quota = currentQuota(tenant.tenantId);
-		const basePolicies = restrictPolicies([...OFFICE_TOOL_POLICIES, ...DOC_TOOL_POLICIES], card.tools);
+		const basePolicies = restrictPolicies([...OFFICE_TOOL_POLICIES, ...DOC_TOOL_POLICIES, {tool:"search_knowledge"}], card.tools);
 		// 输入文件白名单：只有表单实际引用、且确为共享根现存上传文件的路径才放行，
 		// 精确到文件、不扩目录；不授权整个共享根，从执行侧隔离其他任务的产物。
 		const allowedFiles = collectAllowedInputFiles(workspaceDir, input.fields);
@@ -941,7 +957,7 @@ const app = createApp({
 		 * 执行失败不会让提交接口报错，失败通过事件流回投（状态转 FAILED）。
 		 */
 		runningTasks.add(taskId);
-		void orchestrator.run(taskId, prompt, rawQuery)
+		void orchestrator.run(taskId, prompt, rawQuery + (allowedFiles.length ? "\n\n引用资料：" + allowedFiles.map(file => basename(file)).join("、") : ""))
 			.then(() => {
 				// 长程任务：本轮（一次会话）跑完后，登记会话并把结论沉淀为长期记忆，
 				// 供跨天/下一组上下文继续。失败不影响本次结果，只告警。
@@ -1067,8 +1083,53 @@ const app = createApp({
 	auditLog: async (tenant, window) => auditStore.list(tenant.tenantId, window.from, window.to),
 }, webDir === undefined ? {} : { webDir });
 
+const controlSessions=new Map<string,{token:string;expires:number}>();
+async function controlIdentity(req:IncomingMessage):Promise<Principal|undefined>{
+ const direct=await authenticate(req);if(direct)return direct;
+ const cookie=(req.headers.cookie??'').split(';').map(v=>v.trim()).find(v=>v.startsWith('tao_control='))?.slice(12);
+ if(!cookie)return undefined;const session=controlSessions.get(cookie);
+ if(!session||session.expires<Date.now()){controlSessions.delete(cookie);return undefined;}
+ const account=authenticateToken(accounts,session.token);
+ return account ? {tenant:account.tenant,role:account.role,name:account.name} : undefined;
+}
 const server = createServer((req, res) => {
-	void app(req, res).catch((error) => {
+ void (async()=>{
+  if(req.url==='/control/logout' && req.method==='POST'){
+   const cookie=(req.headers.cookie??'').split(';').map(v=>v.trim()).find(v=>v.startsWith('tao_control='))?.slice(12);
+   if(cookie)controlSessions.delete(cookie);
+   res.setHeader('Set-Cookie','tao_control=; Path=/control; Max-Age=0; HttpOnly; SameSite=Strict');
+   sendJson(res,200,{ok:true});return;
+  }
+  if(req.url==='/api/control/session' && req.method==='POST'){
+   const principal=await authenticate(req);
+   if(!principal){sendError(res,401,'登录无效');return;}
+   if(!['TENANT_ADMIN','PLATFORM_ADMIN'].includes(principal.role)){sendError(res,403,'需要管理员权限');return;}
+   for(const [key,value] of controlSessions)if(value.expires<Date.now())controlSessions.delete(key);
+   if(controlSessions.size>=1000){sendError(res,429,'登录会话过多');return;}
+   const id=randomUUID();controlSessions.set(id,{token:(req.headers.authorization??'').replace(/^Bearer\s+/i,''),expires:Date.now()+30*60*1000});
+   res.setHeader('Set-Cookie','tao_control='+id+'; Path=/control; Max-Age=1800; HttpOnly; SameSite=Strict'+(req.headers['x-forwarded-proto']==='https'?'; Secure':''));
+   sendJson(res,200,{ok:true});return;
+  }
+  if(webDir && await handleControlGate(req,res,{webDir,authenticate:controlIdentity}))return;
+  const path=new URL(req.url??'/', 'http://localhost').pathname;
+  if(req.method==='POST' && ['/api/workspace/files/reference','/api/workspace/artifacts/reference'].includes(path)){
+   const principal=await authenticate(req);if(!principal){sendError(res,401,'请先登录');return;}
+   const parsed=await readJsonBody(req);if(!parsed.ok||!parsed.value||typeof parsed.value!=='object'){sendError(res,400,'请求参数不正确');return;}
+   const body=parsed.value as {name?:unknown;taskId?:unknown};
+   if(typeof body.name!=='string'){sendError(res,400,'缺少文件名');return;}
+   try {
+    if(path.includes('/artifacts/')){
+     if(typeof body.taskId!=='string'){sendError(res,400,'缺少任务');return;}
+     const source=ownedArtifact(principal.tenant,body.taskId,body.name);if(!source){sendError(res,404,'产物不存在');return;}
+     const root=resolveWorkspaceDir(config.workspaceDir,principal.tenant.tenantId,principal.tenant.workspaceId);
+     const name=randomUUID().slice(0,8)+'-'+sanitizeUploadName(body.name),target=join(root,name);
+     copyFileSync(source,target,fsConstants.COPYFILE_EXCL);sendJson(res,200,{name,path:target});
+    } else {const source=workspaceFile(config.workspaceDir,principal.tenant,body.name);sendJson(res,200,{name:body.name,path:source});}
+   }catch{sendError(res,404,'文件不存在或无法引用');}return;
+  }
+  if(await workspaceHandler(req,res))return;
+  await app(req,res);
+ })().catch((error) => {
 		// 兜底：路由层漏掉的异常不该让连接挂死
 		process.stderr.write(`[HTTP] 未处理异常：${error instanceof Error ? error.message : error}\n`);
 		if (!res.headersSent) {
