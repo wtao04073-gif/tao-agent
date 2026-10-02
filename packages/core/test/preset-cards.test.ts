@@ -17,7 +17,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { cardsByIndustry, PRESET_CARDS } from "../src/preset-cards.ts";
+import { cardsByIndustry, GENERAL_TASK_CARD_ID, PRESET_CARDS } from "../src/preset-cards.ts";
 import {
 	compilePrompt,
 	FieldType,
@@ -118,9 +118,15 @@ describe("预置场景卡 · 不写 prompt 即可提交（核心验收项）", (
 			// 没有残留占位符 —— 有残留说明模板引用了不存在的字段，
 			// 指令里会出现字面量 {{xxx}}，模型会把它当成待填内容
 			expect(prompt).not.toMatch(/\{\{/);
-			// 产出要求由场景卡提供，不靠用户描述
-			expect(prompt).toContain("要求：");
-			expect(prompt.length).toBeGreaterThan(50);
+			if (card.id === GENERAL_TASK_CARD_ID) {
+				// 通用自由任务卡刻意原样透传用户 query：不替用户补「要求：」，
+				// 短指令也合法。这里只要求 query 被完整透传。
+				expect(prompt).toContain(String(fillRequired(card).query));
+			} else {
+				// 行业卡：产出要求由场景卡提供，不靠用户描述
+				expect(prompt).toContain("要求：");
+				expect(prompt.length).toBeGreaterThan(50);
+			}
 		},
 	);
 

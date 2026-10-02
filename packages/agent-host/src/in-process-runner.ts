@@ -26,6 +26,7 @@ import {
 import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
 import { createModels, type Model, type Api } from "@earendil-works/pi-ai";
 import type {
+	ChatTurn,
 	PermissionGate,
 	PlatformTool,
 	Runner,
@@ -129,6 +130,50 @@ function extractOutputPath(details: unknown): string | undefined {
 	if (typeof details !== "object" || details === null) return undefined;
 	const p = (details as { outputPath?: unknown }).outputPath;
 	return typeof p === "string" && p !== "" ? p : undefined;
+}
+
+/**
+ * 从一条内核助手消息里抽取给用户看的纯文本。
+ *
+ * 助手 content 是块数组：text 块是回答，toolCall 块是工具调用（不是给用户的文字）。
+ * content 也可能直接是字符串。工具调用回合（无 text 块）返回空串，调用方据此跳过，
+ * 避免把一次"仅调用工具、没有文字"的回合误当成空回答推给前端。
+ */
+function assistantText(content: unknown): string {
+	if (typeof content === "string") return content.trim();
+	if (!Array.isArray(content)) return "";
+	const parts: string[] = [];
+	for (const block of content) {
+		if (
+			block !== null &&
+			typeof block === "object" &&
+			(block as { type?: unknown }).type === "text" &&
+			typeof (block as { text?: unknown }).text === "string"
+		) {
+			const t = (block as { text: string }).text.trim();
+			if (t !== "") parts.push(t);
+		}
+	}
+	return parts.join("\n\n").trim();
+}
+
+/**
+ * 把多轮历史与本轮问题拼成一段提示。
+ *
+ * 不依赖内核的会话复用（每轮独立 Session、且内存 Session 重启即失），而是把
+ * 过往问答以清晰的角色分隔写进本轮输入。只要历史事件还在，进程重启后也能续聊。
+ * 无历史时原样返回本轮问题。
+ */
+function withHistory(text: string, history: readonly ChatTurn[] | undefined): string {
+	if (!history || history.length === 0) return text;
+	const lines: string[] = ["以下是我们之前的对话，请结合上下文回答最后的新问题。", ""];
+	for (const turn of history) {
+		lines.push("用户：" + turn.user);
+		lines.push("助手：" + turn.assistant);
+		lines.push("");
+	}
+	lines.push("新问题：" + text);
+	return lines.join("\n");
 }
 
 /** 把平台工具适配成内核工具。参数 schema 与执行签名在此转换。 */
@@ -241,6 +286,21 @@ class InProcessRunner implements Runner {
 		}
 	}
 
+	/**
+	 * 发布一个**瞬时**事件（流式增量）：seq 固定 0、eventId 每次唯一，
+	 * 供编排器识别后只实时 fanout、不进事件日志/不落盘、不参与断线补发。
+	 */
+	async emitTransient(event: Omit<TaskEvent, "seq" | "eventId" | "taskId" | "tenant" | "at">): Promise<void> {
+		await this.publish({
+			...(event as object),
+			eventId: `${this.spec.taskId}-delta-${this.translatorContext.now()}-${Math.random().toString(36).slice(2, 8)}`,
+			seq: 0,
+			taskId: this.spec.taskId,
+			tenant: this.spec.tenant,
+			at: this.translatorContext.now(),
+		} as TaskEvent);
+	}
+
 	/** 由权限门与工具回调用来直接发事件（不经内核事件流）。 */
 	async emit(
 		build: (base: {
@@ -295,9 +355,20 @@ class InProcessRunner implements Runner {
 		}));
 	}
 
-	async prompt(text: string): Promise<void> {
+	async prompt(text: string, rawUserText?: string): Promise<void> {
 		this.assertOpen();
 		this.runFailure = undefined;
+
+		// 先落本轮用户原文（持久化、进事件流）：多轮历史重建与前端展示都依赖它。
+		// 在模型调用前发，失败也已记录用户意图。
+		if (rawUserText !== undefined && rawUserText.trim() !== "") {
+			await this.emit((base) => ({
+				...base,
+				type: "user_message",
+				text: rawUserText,
+				delivery: "queued_after_current_step",
+			}));
+		}
 
 		/**
 		 * 出网前配额闸（M5-5）。在第一次模型调用之前 await —— 超配额则直接
@@ -315,7 +386,8 @@ class InProcessRunner implements Runner {
 				release = await this.enterPreflight();
 			}
 
-			await this.lane.prompt(text, [], BACKGROUND_CONTEXT);
+			// 多轮续聊：每轮是独立 Session，把历史问答显式拼进本轮输入，模型才记得上文。
+			await this.lane.prompt(withHistory(text, this.spec.history), [], BACKGROUND_CONTEXT);
 			// 内核不会因生成失败而让 prompt reject，所以这里必须显式检查。
 			// 抛出去让编排层把任务转入 FAILED —— 静默成功比报错难查得多。
 			if (this.runFailure !== undefined) throw new Error(this.runFailure);
@@ -495,6 +567,20 @@ export class InProcessRunnerFactory implements RunnerFactory {
 				model: selectedModel,
 				systemPrompt: spec.systemPrompt,
 				tools,
+				// 用户选择的技能 → 内核原生 resources.skills：模型可见技能说明，
+				// 命中使用场景时按指令正文执行。filePath 非文件时给稳定逻辑名。
+				...(spec.skills && spec.skills.length > 0
+					? {
+							resources: {
+								skills: spec.skills.map((s) => ({
+									name: s.name,
+									description: s.description,
+									content: s.content,
+									filePath: `skill:${s.name}`,
+								})),
+							},
+						}
+					: {}),
 				// 白名单让工具在模型侧不可见；权限门在执行侧兜底。两层叠加。
 				...(spec.activeTools === undefined
 					? {}
@@ -544,6 +630,45 @@ export class InProcessRunnerFactory implements RunnerFactory {
 				void runner.ingest(event);
 			}) as never);
 		}
+
+		/**
+		 * 接模型的最终文字回答 → assistant_message。
+		 *
+		 * 自由问答不产出文件，只能靠它把答案下发。message_end 对同一条助手消息
+		 * 可能在不同路径各发一次，且一次任务有多轮（含工具回合），故按 entryId
+		 * （缺失时按文本）在本 run 内去重；仅工具调用、无文字的回合不推。
+		 */
+		const emittedAssistant = new Set<string>();
+
+		/**
+		 * 流式增量：message_update 的 text_delta 帧带本次新增文本。
+		 * 用瞬时事件下发（不落盘/不编号）；思考链(thinking_delta)与工具参数
+		 * (toolcall_delta) 不推给用户。messageId 用 entryId/runId，让前端把
+		 * 同一条消息的增量归并，message_end 的定稿再整体替换。
+		 */
+		harness.events.on("message_update", ((event: {
+			runId?: string;
+			message?: { role?: string; entryId?: string };
+			frame?: { type?: string; delta?: string; contentIndex?: number };
+		}) => {
+			const msg = event?.message;
+			const frame = event?.frame;
+			if (msg?.role !== "assistant" || frame?.type !== "text_delta") return;
+			if (typeof frame.delta !== "string" || frame.delta === "") return;
+			const messageId = String(msg.entryId ?? event.runId ?? "current");
+			void runner.emitTransient({ type: "assistant_delta", messageId, delta: frame.delta } as never);
+		}) as never);
+
+		harness.events.on("message_end", ((event: { message?: { role?: string; content?: unknown; entryId?: string } }) => {
+			const msg = event?.message;
+			if (msg?.role !== "assistant") return;
+			const text = assistantText(msg.content);
+			if (text === "") return;
+			const key = typeof msg.entryId === "string" && msg.entryId !== "" ? "id:" + msg.entryId : "t:" + text;
+			if (emittedAssistant.has(key)) return;
+			emittedAssistant.add(key);
+			void runner.emit((base) => ({ ...base, type: "assistant_message", text }));
+		}) as never);
 
 		/**
 		 * 接生成失败。

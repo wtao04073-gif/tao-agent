@@ -64,6 +64,34 @@ export interface TaskArtifactEvent extends TaskEventBase {
 	readonly final: boolean;
 }
 
+/**
+ * 模型（智能体）给出的最终文字回答。
+ *
+ * 自由问答 / 纯文本任务不产出文件，没有 artifact 事件；必须靠它把答案下发给前端，
+ * 否则任务显示成功、用户却看不到回答。一条助手消息（一次模型回合的完整文本）发一条，
+ * 不做流式增量；同一条内核消息可能被重复投递，宿主侧按消息 id/文本去重。
+ */
+export interface TaskAssistantMessageEvent extends TaskEventBase {
+	readonly type: "assistant_message";
+	readonly text: string;
+}
+
+/**
+ * 模型文字回答的**流式增量**（打字机效果）。
+ *
+ * 与 assistant_message 的关键区别：delta 是高频临时帧，**只实时 fanout、不落盘、
+ * 不占持久化 seq**（seq 固定为 0），断线/轮询也不补发——重连后由该轮最终的
+ * assistant_message 给出完整答案。前端按 messageId 聚合同一轮的 delta，收到
+ * assistant_message 后用定稿文本替换。
+ */
+export interface TaskAssistantDeltaEvent extends TaskEventBase {
+	readonly type: "assistant_delta";
+	/** 同一条助手消息在一次流式过程中的稳定标识，用于前端归并增量。 */
+	readonly messageId: string;
+	/** 本帧的增量文本（不是累计值）。 */
+	readonly delta: string;
+}
+
 /** 用户在执行期间插入的消息。 */
 export interface TaskUserMessageEvent extends TaskEventBase {
 	readonly type: "user_message";
@@ -94,6 +122,8 @@ export type TaskEvent =
 	| TaskStepEvent
 	| TaskToolDecisionEvent
 	| TaskArtifactEvent
+	| TaskAssistantMessageEvent
+	| TaskAssistantDeltaEvent
 	| TaskUserMessageEvent
 	| TaskUsageEvent;
 

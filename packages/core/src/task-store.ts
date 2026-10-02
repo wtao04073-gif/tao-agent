@@ -35,6 +35,22 @@ export interface StoredTask {
 	/** 创建该任务时的会话标识。恢复后用于判断能否续跑（M5-1 不续跑会话）。 */
 	readonly sessionId: string;
 	/**
+	 * 所属多轮对话 id。一次对话由多轮「任务」组成，每轮独立 taskId/sessionId，
+	 * 但共享 conversationId；前端据此把多轮问答聚合成一条会话并续聊。
+	 * 早期数据无此字段时按 taskId 单轮处理。
+	 */
+	readonly conversationId?: string;
+	/**
+	 * 对话标题（取首轮用户 query 的摘要）。用于左侧最近对话与任务中心展示，
+	 * 让用户能认出每个会话，而不是一律显示「通用任务」。
+	 */
+	readonly title?: string;
+	/**
+	 * 所属长程任务（Job）id。属于某长程任务的会话才带；临时对话缺省。
+	 * 一个 Job 下有多个 conversation，跨天多次会话据此归并。
+	 */
+	readonly jobId?: string;
+	/**
 	 * 发起任务所用的场景卡 id（M5-3）。
 	 *
 	 * 可选：早期数据与非场景入口（自由对话）没有它。任务中心据此显示场景标题，
@@ -64,6 +80,11 @@ export interface TaskChange {
 	 * 折叠当前态时从首条读取。后续迁移省略。
 	 */
 	readonly scenarioId?: string;
+	/** 对话归属与标题：同为静态属性，只在首条 create 变更上携带。 */
+	readonly conversationId?: string;
+	readonly title?: string;
+	/** 长程任务归属：静态属性，只在首条 create 变更上携带。 */
+	readonly jobId?: string;
 	/** 变更序号，在任务内从 1 单调递增；即事件流里 status 事件的 seq。 */
 	readonly seq: number;
 	readonly at: number;

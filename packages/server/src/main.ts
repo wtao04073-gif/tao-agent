@@ -27,9 +27,15 @@ import {
 	type StoredAuditEntry,
 	type TenantContext,
 	type UsageRecord,
+	type ChatTurn,
+	type TaskEvent,
+	type StoredJob,
+	type JobMemoryEntry,
+	type StoredSkill,
+	type StoredAgent,
 } from "@tao/core";
 import { createDocToolset, createOfficeToolset, DOC_TOOL_POLICIES, OFFICE_TOOL_POLICIES } from "@tao/office";
-import { FileAuditStore, FileMeteringStore, FileTaskStore } from "@tao/knowledge";
+import { FileAuditStore, FileJobStore, FileJsonStore, FileMeteringStore, FileTaskStore } from "@tao/knowledge";
 import {
 	createModelRuntime,
 	InProcessRunnerFactory,
@@ -37,6 +43,7 @@ import {
 } from "@tao/agent-host";
 import { TaskOrchestrator } from "@tao/orchestrator";
 import { createApp, ticketResource, type Principal } from "./app.ts";
+import { listVisibleSkills, listVisibleAgents, newAddonId, resolveAddons } from "./addons.ts";
 import {
 	authenticateToken,
 	hasDefaultTokens,
@@ -123,6 +130,18 @@ const auditStore = new FileAuditStore({
 	onCorruptLine: ({ file, skipped }) => {
 		process.stderr.write(`[审计] ${file} 有 ${skipped} 行无法解析，已跳过\n`);
 	},
+});
+/**
+ * 长程任务（Job）落盘：一个任务一个 JSON，跨天多次会话与长期记忆都在其中。
+ */
+const jobStore = new FileJobStore({ dir: join(config.workspaceDir, ".jobs") });
+/** 技能 / 智能体扩展（用户上传 + 系统预置），按记录内 tenant 隔离。 */
+const addonDir = join(config.workspaceDir, ".addons");
+const skillStore = new FileJsonStore<StoredSkill>({
+	dir: addonDir, collection: "skills", idOf: (s) => s.skillId,
+});
+const agentStore = new FileJsonStore<StoredAgent>({
+	dir: addonDir, collection: "agents", idOf: (a) => a.agentId,
 });
 const hub = new SseHub();
 
@@ -275,6 +294,7 @@ const { models, model, modelForTier } = createModelRuntime({
 		baseUrl: config.modelBaseUrl,
 		apiKey: config.modelApiKey,
 		modelName: config.modelName,
+		maxTokens: config.modelMaxTokens,
 		...(config.modelInputPriceYuan === undefined ? {} : { inputCostPerMillion: config.modelInputPriceYuan }),
 		...(config.modelOutputPriceYuan === undefined ? {} : { outputCostPerMillion: config.modelOutputPriceYuan }),
 		...(config.modelCacheReadPriceYuan === undefined
@@ -287,6 +307,7 @@ const { models, model, modelForTier } = createModelRuntime({
 					baseUrl: config.modelLiteBaseUrl as string,
 					apiKey: config.modelLiteApiKey as string,
 					modelName: config.modelLiteName as string,
+					maxTokens: config.modelMaxTokens,
 					...(config.modelLiteInputPriceYuan === undefined
 						? {}
 						: { inputCostPerMillion: config.modelLiteInputPriceYuan }),
@@ -359,6 +380,129 @@ orchestrator.subscribe((event) => {
  * 因此 `artifacts/<其他任务>/…` 既不在本任务 workspace 子树、也不在白名单，
  * 知道路径也读不到（见 submitTask）。
  */
+/**
+ * 由首条 query 生成对话标题：去空白/换行，截断到 24 字。
+ *
+ * 不额外调用模型做摘要 —— 标题要在提交瞬间可得（左侧列表立刻可认），
+ * 且省一次模型开销；用户的首句话本身通常已能表达意图。超长加省略号。
+ */
+function summarizeTitle(query: string): string {
+	const oneLine = query.replace(/\s+/g, " ").trim();
+	if (oneLine === "") return "新对话";
+	return oneLine.length > 24 ? oneLine.slice(0, 24) + "…" : oneLine;
+}
+
+/**
+ * 把长程任务的长期记忆转成跨轮上下文（ChatTurn）。
+ * 每条记忆是一次会话沉淀的「结论」，以统一的虚拟问答形式带给模型：
+ * 用户侧标注是第几次会话的诉求，助手侧是该次结论。
+ */
+function jobMemoryAsTurns(job: StoredJob): ChatTurn[] {
+	return job.memory.map((m, i) => ({
+		user: `（第 ${i + 1} 次会话的进展记录）`,
+		assistant: m.summary,
+	}));
+}
+
+/** 给长程任务会话的系统提示加上任务目标与历次结论，让模型一开始就有全局背景。 */
+function withJobContext(systemPrompt: string, job: StoredJob): string {
+	const lines = [
+		systemPrompt,
+		"",
+		"【你正在协助推进一个长期任务】",
+		"任务标题：" + job.title,
+		"任务目标：" + job.goal,
+	];
+	if (job.memory.length > 0) {
+		lines.push("此前各次会话已沉淀的结论：");
+		job.memory.forEach((m, i) => lines.push(`${i + 1}. ${m.summary}`));
+	}
+	lines.push("请在上述背景下继续推进本次诉求，不要让用户重复已提供过的信息。");
+	return lines.join("\n");
+}
+
+/**
+ * 一次会话跑完后沉淀到长程任务：登记 conversationId，并追加一条记忆
+ * （取本轮最终助手回答的摘要）。只保留最近若干条，避免无限增长。
+ */
+function commitJobConversation(job: StoredJob, conversationId: string, taskId: string): void {
+	const events = orchestrator.events(taskId);
+	let answer = "";
+	for (const e of events) {
+		if (e.type === "assistant_message") answer = e.text;
+	}
+	const summary = answer.trim() === "" ? "本次会话未产生文字结论。" : summarizeMemory(answer);
+	const entry: JobMemoryEntry = { conversationId, at: Date.now(), summary };
+	const conversationIds = job.conversationIds.includes(conversationId)
+		? job.conversationIds
+		: [...job.conversationIds, conversationId];
+	const updated: StoredJob = {
+		...job,
+		conversationIds,
+		memory: [...job.memory, entry].slice(-20),
+		updatedAt: Date.now(),
+	};
+	jobStore.put(updated);
+}
+
+/**
+ * 会话结论 → 记忆摘要：剥离 markdown/表格符号，取第一个自然句，去空白、限长。
+ * 不额外调用模型，即时可用；重点是留下干净、可被下次会话读懂的进展要点。
+ */
+function summarizeMemory(text: string): string {
+	const cleaned = text
+		.replace(/```[\s\S]*?```/g, " ") // 代码块
+		.replace(/^\s*\|.*\|\s*$/gm, " ") // 表格行
+		.replace(/[#>*_`-]{2,}/g, " ") // markdown 强调/标题符号
+		.replace(/\s+/g, " ")
+		.trim();
+	// 优先取首个句读；没有句号就整段截断
+	const m = cleaned.match(/^[^。！？!?\n]{6,160}[。！？!?]/);
+	const one = (m ? m[0] : cleaned).trim();
+	return one.length > 160 ? one.slice(0, 160) + "…" : one;
+}
+
+/**
+ * 取某多轮对话的标题与过往问答（按任务创建顺序、事件 seq 顺序配对）。
+ *
+ * 从该 conversationId 下各轮任务的事件流里，按出现顺序收集 user_message 与
+ * assistant_message，相邻配对成 {user, assistant}。仅含已完整回答的轮次
+ * （有问有答），未回答完的半截不进上下文。
+ *
+ * @returns 无权/对话不存在返回 undefined；存在但首轮为空也返回空 turns。
+ */
+async function conversationTurns(
+	tenant: TenantContext,
+	conversationId: string,
+): Promise<{ title: string; turns: ChatTurn[] } | undefined> {
+	const tasks = orchestrator
+		.list(tenant)
+		.filter((t) => (t as { conversationId?: string }).conversationId === conversationId)
+		.sort((a, b) => a.createdAt - b.createdAt);
+	if (tasks.length === 0) return undefined;
+
+	const title =
+		(tasks[0] as { title?: string }).title?.trim() || summarizeTitle("对话");
+
+	const turns: ChatTurn[] = [];
+	for (const t of tasks) {
+		const events: readonly TaskEvent[] = orchestrator.events(t.taskId);
+		let pendingUser: string | undefined;
+		for (const e of events) {
+			if (e.type === "user_message") {
+				pendingUser = e.text;
+			} else if (e.type === "assistant_message") {
+				if (pendingUser !== undefined && e.text.trim() !== "") {
+					turns.push({ user: pendingUser, assistant: e.text });
+					pendingUser = undefined;
+				}
+			}
+		}
+	}
+	// 只保留最近若干轮，避免历史无限增长撑爆上下文（一期取最近 10 轮）。
+	return { title, turns: turns.slice(-10) };
+}
+
 function toolsFor(tenant: TenantContext, taskId: string) {
 	// 账号校验已限制标识为安全单段，这里再经 resolveWorkspaceDir 做一次边界断言，
 	// 防止任何逃逸标识（如 ../）把工作区目录解析到根之外后再 mkdir。
@@ -548,6 +692,10 @@ if (webDir === undefined) {
 
 const app = createApp({
 	authenticate,
+	modelInfo: () => ({
+		flagshipName: config.modelName,
+		...(liteConfigured ? { liteName: config.modelLiteName as string } : {}),
+	}),
 	hub,
 	tickets,
 	taskEvents: (tenant, taskId, afterSeq) => {
@@ -563,6 +711,74 @@ const app = createApp({
 		if (task.tenant.tenantId !== tenant.tenantId) return undefined;
 		if (task.tenant.workspaceId !== tenant.workspaceId) return undefined;
 		return task;
+	},
+	createJob: async (tenant, input) => {
+		const now = Date.now();
+		const jobId = `job-${now}-${Math.floor(Math.random() * 1e6)}`;
+		const stored: StoredJob = {
+			jobId,
+			tenant,
+			title: summarizeTitle(input.title || input.goal),
+			goal: input.goal,
+			status: "active",
+			createdAt: now,
+			updatedAt: now,
+			conversationIds: [],
+			memory: [],
+		};
+		if (!jobStore.create(stored)) throw new Error("任务创建失败，请重试");
+		return { jobId };
+	},
+	listJobs: (tenant) => jobStore.listByTenant(tenant.tenantId, tenant.workspaceId),
+	getJob: (tenant, jobId) => {
+		const job = jobStore.get(jobId);
+		if (job === undefined) return undefined;
+		if (job.tenant.tenantId !== tenant.tenantId) return undefined;
+		if (job.tenant.workspaceId !== tenant.workspaceId) return undefined;
+		return job;
+	},
+	listSkills: (tenant) => listVisibleSkills(skillStore, tenant),
+	listAgents: (tenant) => listVisibleAgents(agentStore, tenant),
+	createSkill: async (tenant, input) => {
+		const now = Date.now();
+		const skillId = newAddonId("skill");
+		const stored: StoredSkill = {
+			skillId,
+			tenant,
+			name: input.name,
+			description: input.description,
+			content: input.content,
+			builtin: false,
+			createdAt: now,
+			updatedAt: now,
+		};
+		if (!skillStore.create(stored)) throw new Error("技能创建失败，请重试");
+		return { skillId };
+	},
+	createAgent: async (tenant, input) => {
+		const now = Date.now();
+		const agentId = newAddonId("agent");
+		// 挂载的技能必须是本租户可见（内置或自有）的，全部不可见则拒，防止挂空引用。
+		const visible = new Set(
+			listVisibleSkills(skillStore, tenant).map((s) => s.skillId),
+		);
+		const skillIds = [...new Set(input.skillIds)].filter((id) => visible.has(id));
+		if (input.skillIds.length > 0 && skillIds.length === 0) {
+			throw new Error("所选技能均不可用，请重新选择");
+		}
+		const stored: StoredAgent = {
+			agentId,
+			tenant,
+			name: input.name,
+			description: input.description,
+			systemPrompt: input.systemPrompt,
+			skillIds,
+			builtin: false,
+			createdAt: now,
+			updatedAt: now,
+		};
+		if (!agentStore.create(stored)) throw new Error("智能体创建失败，请重试");
+		return { agentId };
 	},
 	submitTask: async (tenant, input) => {
 		const card = resolveCard(PRESET_CARDS, input.scenarioId, tenant.tenantId) as
@@ -626,17 +842,66 @@ const app = createApp({
 
 		const prompt = compilePrompt(card, input.fields);
 
+		// 用户本轮原文：自由对话取 fields.query；场景卡也尽量取 query 字段，用于标题与历史。
+		const rawQuery = typeof input.fields.query === "string" ? input.fields.query : prompt;
+
+		// 解析本次选用的智能体 / 技能（内置或本租户上传，越权 / 不存在即抛错拒建）。
+		// 智能体的 systemPrompt 覆盖场景默认人设；其挂载技能 + 显式技能合并注入内核。
+		const addons = resolveAddons({
+			tenant,
+			skillStore,
+			agentStore,
+			...(input.skillId === undefined ? {} : { skillId: input.skillId }),
+			...(input.agentId === undefined ? {} : { agentId: input.agentId }),
+		});
+		const personaPrompt = addons.systemPromptOverride ?? card.systemPrompt;
+
+		// ── 会话 / 长程任务归属 ────────────────────────────────────
+		// 临时对话：首轮生成 conversationId；续聊（带 conversationId）聚合本对话历史。
+		// 长程任务（带 jobId）：每次发送都是该任务下的一次新会话，上下文来自任务的
+		// 长期记忆（历次会话结论）而非单个对话窗口，从而跨天、跨上下文组也能接上。
+		let conversationId: string;
+		let title: string;
+		let history: ChatTurn[] = [];
+		let job: StoredJob | undefined;
+		if (input.jobId !== undefined) {
+			job = jobStore.get(input.jobId);
+			if (job === undefined ||
+				job.tenant.tenantId !== tenant.tenantId ||
+				job.tenant.workspaceId !== tenant.workspaceId) {
+				throw new Error("任务不存在或无权访问");
+			}
+			// 长程任务下：新会话；标题沿用任务名；上下文 = 任务目标 + 历次会话记忆。
+			conversationId = `conv-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+			title = job.title;
+			history = jobMemoryAsTurns(job);
+		} else if (input.conversationId !== undefined) {
+			const prior = await conversationTurns(tenant, input.conversationId);
+			if (prior === undefined) throw new Error("对话不存在或无权访问");
+			conversationId = input.conversationId;
+			title = prior.title;
+			history = prior.turns;
+		} else {
+			conversationId = `conv-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+			title = summarizeTitle(rawQuery);
+		}
+
 		await orchestrator.submit({
 			tenant,
 			taskId,
 			sessionId: taskId,
 			scenarioId: input.scenarioId,
+			conversationId,
+			title,
+			...(job === undefined ? {} : { jobId: job.jobId }),
 			// 显式档位选路：HTTP 层已白名单校验，缺省旗舰
 			tier: input.tier,
 			prompt,
-			systemPrompt: card.systemPrompt,
+			systemPrompt: job === undefined ? personaPrompt : withJobContext(personaPrompt, job),
 			tools,
 			gate,
+			history,
+			...(addons.skills.length === 0 ? {} : { skills: addons.skills }),
 			activeTools: activateableTools(
 				card.tools,
 				tools.map((t) => t.name),
@@ -649,13 +914,27 @@ const app = createApp({
 		 *
 		 * 执行失败不会让提交接口报错，失败通过事件流回投（状态转 FAILED）。
 		 */
-		void orchestrator.run(taskId, prompt).catch((error) => {
-			process.stderr.write(
-				`[任务] ${taskId} 执行异常：${error instanceof Error ? error.message : String(error)}\n`,
-			);
-		});
+		void orchestrator.run(taskId, prompt, rawQuery)
+			.then(() => {
+				// 长程任务：本轮（一次会话）跑完后，登记会话并把结论沉淀为长期记忆，
+				// 供跨天/下一组上下文继续。失败不影响本次结果，只告警。
+				if (job !== undefined) {
+					try {
+						commitJobConversation(job, conversationId, taskId);
+					} catch (error) {
+						process.stderr.write(
+							`[长程任务] 记忆沉淀失败：${error instanceof Error ? error.message : String(error)}\n`,
+						);
+					}
+				}
+			})
+			.catch((error) => {
+				process.stderr.write(
+					`[任务] ${taskId} 执行异常：${error instanceof Error ? error.message : String(error)}\n`,
+				);
+			});
 
-		return { taskId };
+		return { taskId, conversationId };
 	},
 	steerTask: async (tenant, taskId, text) => orchestrator.steer(taskId, text),
 	cancelTask: async (tenant, taskId, reason) => void (await orchestrator.cancel(taskId, reason)),

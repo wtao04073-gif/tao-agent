@@ -672,8 +672,63 @@ const projectApplication: ScenarioCard = {
 	].join("\n"),
 };
 
+/**
+ * 通用任务卡 —— 自由文本入口（SaaS 前台「一句话发起」的落点）。
+ *
+ * 十张行业卡走「结构化表单 → 稳定指令模板」保证产出收敛，但前台新形态允许
+ * 用户不选场景、直接说一句话。该卡给这类自由 query 一条不绕过任何平台机制
+ * 的通道：
+ *  - 只有一个多行 `query` 字段（必填），promptTemplate 原样透传，不替用户改写；
+ *  - 开放全部办公 / 文档工具，由模型按 query 自行决定读哪些附件、产出什么；
+ *  - 附件通过输入文件白名单（表单引用 ∩ 共享根现存文件）授权，权限门、产物
+ *    隔离、配额预检、审计、计量与行业卡完全一致，不因为是自由指令就放行。
+ *
+ * 它不出现在行业分组（cardsByIndustry 过滤 industry），前台把它作为隐式兜底，
+ * 而不是又一张让用户选择的卡片。
+ */
+const generalTask: ScenarioCard = {
+	...platform,
+	id: "general.free-task",
+	title: "通用任务",
+	summary: "用一句话描述你想完成的办公任务，可带附件；由智能体自行规划步骤并产出结果",
+	industry: "general",
+	category: "通用",
+	fields: [
+		{
+			name: "query",
+			label: "你想让我做什么",
+			type: FieldType.TextArea,
+			required: true,
+			hint: "直接说目标与要求即可，例如：把这两份表合并，按月份汇总金额",
+		},
+		{
+			name: "attachments",
+			label: "附件",
+			type: FieldType.FileList,
+			required: false,
+			accept: [".xlsx", ".xls", ".docx", ".doc", ".pdf", ".txt", ".csv"],
+			hint: "可选：本任务要处理的表格或文档，可一次选多个",
+		},
+	],
+	// 开放当前装配的全部办公 / 文档工具；模型按需调用。
+	tools: ["list_sheets", "read_table", "reconcile_tables", "read_document", "write_document"],
+	systemPrompt:
+		"你是面向高校与制造业办公人员的通用办公助手。用户用一句话提出需求，可能附带了上传的文件。" +
+		"请先判断需要读取哪些附件、用哪些工具，再规划并执行；产出要可直接使用（规范的 Word / Excel）。" +
+		"信息不足或列名不符时明确向用户说明，不要臆测数据，不要编造结果。",
+	promptTemplate: [
+		"{{query}}",
+		"用户上传的附件（可直接读取处理）：{{attachments}}",
+	].join("\n"),
+};
+
+/** 通用自由任务卡 id，供前台「一句话入口 / 意图未命中」兜底引用。 */
+export const GENERAL_TASK_CARD_ID = generalTask.id;
+
 /** 全部平台预置场景卡。 */
 export const PRESET_CARDS: readonly ScenarioCard[] = [
+	// 通用自由任务（隐式兜底，不进行业分组）
+	generalTask,
 	// 制造业 5 个
 	supplierReconcile,
 	eightDReport,

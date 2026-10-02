@@ -224,14 +224,52 @@ describe("任务接口", () => {
 		expect(passed.input.fields).toEqual({ subject: "正常字段" });
 	});
 
-	it("缺 scenarioId 时回可读的错误", async () => {
+	it("既无 scenarioId 也无 query 时回可读的错误", async () => {
 		const { port } = await serve();
 		const { status, body } = await call(port, "/api/tasks", {
 			method: "POST",
 			body: JSON.stringify({}),
 		});
 		expect(status).toBe(400);
-		expect(body.error).toContain("场景标识");
+		expect(body.error).toContain("query");
+	});
+
+	it("自由文本 query：无 scenarioId 时归一到通用任务卡", async () => {
+		const { port, calls } = await serve();
+		const { status } = await call(port, "/api/tasks", {
+			method: "POST",
+			body: JSON.stringify({ query: "把这两份表合并，按月份汇总金额" }),
+		});
+		expect(status).toBe(202);
+		const passed = calls.submitTask?.[0] as {
+			input: { scenarioId: string; fields: Record<string, unknown> };
+		};
+		expect(passed.input.scenarioId).toBe("general.free-task");
+		expect(passed.input.fields).toEqual({ query: "把这两份表合并，按月份汇总金额" });
+	});
+
+	it("空白 query 不能走自由入口（回 400）", async () => {
+		const { port } = await serve();
+		const { status } = await call(port, "/api/tasks", {
+			method: "POST",
+			body: JSON.stringify({ query: "   " }),
+		});
+		expect(status).toBe(400);
+	});
+
+	it("场景列表不返回隐式通用任务卡", async () => {
+		const { port } = await serve({
+			listScenarios: () => [
+				{ id: "general.free-task" },
+				{ id: "mfg.supplier-reconcile" },
+				{ id: "univ.official-notice" },
+			],
+		});
+		const { status, body } = await call(port, "/api/scenarios");
+		expect(status).toBe(200);
+		const ids = (body.scenarios as { id: string }[]).map((c) => c.id);
+		expect(ids).not.toContain("general.free-task");
+		expect(ids).toContain("mfg.supplier-reconcile");
 	});
 
 	it("tier 缺省按 flagship 透传", async () => {

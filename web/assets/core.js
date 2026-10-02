@@ -101,6 +101,7 @@
 	// 页面分布在 /、/desktop/、/mobile/，资源与跳转用绝对路径最稳妥（同源托管）。
 	var PATHS = {
 		login: "/login.html",
+		chat: "/chat.html",
 		workbench: "/desktop/workbench.html",
 		tasks: "/desktop/tasks.html",
 		session: "/desktop/session.html",
@@ -169,13 +170,54 @@
 	 * 401 后 EventSource 不会再用旧票（旧票已作废），这里关闭它、重新换票再连。
 	 * 返回带 close() 的句柄。onEvent 收解析后的事件对象；onOpen/onError 可选。
 	 */
+	// 轮询兜底间隔。SSE 直连可用时近乎实时；反代/隧道缓冲 SSE 时由轮询保证必达。
+	var EVENT_POLL_MS = 2000;
+
 	function subscribe(taskId, handlers) {
 		var es = null;
 		var closed = false;
 		var retryTimer = null;
+		var pollTimer = null;
+		// 事件按 seq 单调，中心去重：SSE 与轮询可能投递同一条，对外只发一次。
+		var seenSeq = Object.create(null);
+		var lastSeq = 0;
 
 		function ticketEndpoint() {
 			return "/api/events/ticket" + (taskId ? "?taskId=" + encodeURIComponent(taskId) : "");
+		}
+
+		// 两个来源（SSE / 轮询）统一经此下发，按 seq 去重并推进水位。
+		function deliver(data) {
+			// 瞬时流式帧 seq=0：不参与去重/水位，直接透传给打字机渲染。
+			if (data && data.type === "assistant_delta") {
+				if (handlers.onEvent) handlers.onEvent(data, undefined);
+				return;
+			}
+			if (data && typeof data.seq === "number") {
+				if (seenSeq[data.seq]) return;
+				seenSeq[data.seq] = true;
+				if (data.seq > lastSeq) lastSeq = data.seq;
+			}
+			if (handlers.onEvent) handlers.onEvent(data, data && data.seq != null ? String(data.seq) : undefined);
+		}
+
+		/**
+		 * 轮询兜底：GET 事件历史是普通 JSON 响应，任何反代/隧道都不会缓冲它。
+		 * 当 SSE 被 CDN/隧道缓冲（表现为长时间无帧）时，进度与结果仍由轮询送达。
+		 * 仅在订阅具体任务时可用（全工作区订阅无对应 REST 端点）。
+		 */
+		function pollOnce() {
+			if (closed || !taskId) return;
+			api("GET", "/api/tasks/" + encodeURIComponent(taskId) + "/events?afterSeq=" + lastSeq)
+				.then(function (r) {
+					if (closed || !r.ok || !r.data || !Array.isArray(r.data.events)) return;
+					r.data.events.forEach(deliver);
+					if (r.data.events.length && handlers.onOpen) handlers.onOpen();
+				})
+				.catch(function () { /* 静默，下一轮继续；401 已由 api() 统一处理 */ })
+				.finally(function () {
+					if (!closed && taskId) pollTimer = setTimeout(pollOnce, EVENT_POLL_MS);
+				});
 		}
 
 		function connect() {
@@ -191,12 +233,13 @@
 				var q = "?ticket=" + encodeURIComponent(r.data.ticket);
 				if (taskId) q += "&taskId=" + encodeURIComponent(taskId);
 				es = new EventSource("/api/events" + q, { withCredentials: false });
-				var types = ["status", "step", "tool_decision", "artifact", "user_message", "usage"];
+				var types = ["status", "step", "tool_decision", "artifact",
+					"assistant_message", "assistant_delta", "user_message", "usage"];
 				types.forEach(function (t) {
 					es.addEventListener(t, function (ev) {
 						var data;
 						try { data = JSON.parse(ev.data); } catch (e) { return; }
-						if (handlers.onEvent) handlers.onEvent(data, ev.lastEventId);
+						deliver(data);
 					});
 				});
 				es.onopen = function () { if (handlers.onOpen) handlers.onOpen(); };
@@ -219,10 +262,13 @@
 		}
 
 		connect();
+		// 订阅具体任务时立即开始轮询兜底（也负责打开历史任务时拉回全量 backlog）。
+		if (taskId) pollOnce();
 		return {
 			close: function () {
 				closed = true;
 				if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
+				if (pollTimer !== null) { clearTimeout(pollTimer); pollTimer = null; }
 				if (es) { try { es.close(); } catch (e) {} es = null; }
 			},
 		};
@@ -334,12 +380,14 @@
 	/* ----------------------------------------------------------- 侧栏导航 */
 
 	var NAV_ITEMS = [
+		{ key: "chat", href: PATHS.chat, label: "对话", icon: "chat", group: "工作" },
 		{ key: "workbench", href: PATHS.workbench, label: "场景工作台", icon: "grid", group: "工作" },
 		{ key: "tasks", href: PATHS.tasks, label: "任务中心", icon: "list", group: "工作", badge: true },
 		{ key: "knowledge", href: PATHS.knowledge, label: "知识资产", icon: "book", group: "资产" },
 		{ key: "admin", href: PATHS.admin, label: "管理后台", icon: "gear", group: "管理", admin: true },
 	];
 	var ICONS = {
+		chat: '<path d="M2.8 5.5A1.7 1.7 0 0 1 4.5 3.8h7a1.7 1.7 0 0 1 1.7 1.7v4.2a1.7 1.7 0 0 1-1.7 1.7H7l-2.7 2v-2H4.5a1.7 1.7 0 0 1-1.7-1.7z"/>',
 		grid: '<rect x="2.5" y="2.5" width="5" height="5" rx="1"/><rect x="8.5" y="2.5" width="5" height="5" rx="1"/><rect x="2.5" y="8.5" width="5" height="5" rx="1"/><rect x="8.5" y="8.5" width="5" height="5" rx="1"/>',
 		list: '<path d="M3 4h10M3 8h10M3 12h7" stroke-linecap="round"/>',
 		book: '<path d="M3 3h4.5a2 2 0 0 1 2 2v8a1.6 1.6 0 0 0-1.6-1.6H3z"/><path d="M13 3H8.5a2 2 0 0 0-2 2v8A1.6 1.6 0 0 1 8.1 11.4H13z"/>',
@@ -366,7 +414,7 @@
 			seen[it.group].push(it);
 		});
 
-		var html = '<a class="sidenav__brand" href="' + PATHS.workbench + '">' +
+		var html = '<a class="sidenav__brand" href="' + PATHS.chat + '">' +
 			'<span class="sidenav__logo" aria-hidden="true">章</span>' +
 			'<span><span class="sidenav__name">办公 Agent 平台</span>' +
 			'<span class="sidenav__env">私有化部署</span></span></a>';

@@ -724,5 +724,34 @@ describe("RunnerAdapter 适配层", () => {
 			rmSync(outPath, { force: true });
 			await runner.close();
 		});
+
+		it("纯文本回答下发 assistant_message，且工具回合不产生空回答", async () => {
+			const { factory, faux } = createRuntime();
+			const { tool } = spyTool("lookup", "查询资料");
+
+			const runner = await factory.createRunner({
+				tenant: TENANT,
+				taskId: "task-text",
+				sessionId: "session-text",
+				systemPrompt: "s",
+				tools: [tool],
+				gate: () => allowAll,
+			});
+			const answers: string[] = [];
+			runner.subscribe((e) => {
+				if (e.type === "assistant_message") answers.push(e.text);
+			});
+
+			faux.setResponses([
+				fauxAssistantMessage([fauxToolCall("lookup", { value: "v" })]), // 仅工具调用，无文字
+				fauxAssistantMessage("这是最终答案。"),
+			]);
+			await runner.prompt("查一下");
+
+			// 只有真正含文字的最终回合产生一条回答；纯工具回合不产生空回答。
+			expect(answers).toEqual(["这是最终答案。"]);
+
+			await runner.close();
+		});
 	});
 });

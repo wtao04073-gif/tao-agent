@@ -25,3 +25,5 @@ export * from "./fan-out.ts";
 export * from "./metering.ts";
 export * from "./dashboard.ts";
 export * from "./task-store.ts";
+export * from "./job.ts";
+export * from "./addon.ts";
