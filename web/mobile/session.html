@@ -45,7 +45,7 @@
   </footer>
 </div>
 
-<script src="/assets/core.js"></script>
+<script src="/assets/core.js?v=app-dialog-1"></script>
 <script>
 (function () {
 	var taskId = new URLSearchParams(location.search).get("task");
@@ -149,9 +149,16 @@
 	}
 	document.getElementById("btnConfirm").addEventListener("click", act("confirm", {}));
 	document.getElementById("btnReject").addEventListener("click", act("reject", { reason: "用户拒绝了该高危动作" }));
-	document.getElementById("btnCancel").addEventListener("click", function () {
-		if (confirm("确认取消该任务？")) act("cancel", { reason: "用户在移动端取消" })();
-	});
+    document.getElementById('btnCancel').addEventListener('click', async function () {
+        await App.Dialog.confirm({ title: '取消该任务？', danger: true,
+            description: '正在执行的任务将停止，已有产物会保留。', confirmText: '取消任务', cancelText: '继续执行',
+            onSubmit: async function () {
+                var r = await App.api('POST', '/api/tasks/' + encodeURIComponent(taskId) + '/cancel', { reason: '用户在页面取消' });
+                if (!r.ok) throw new Error(r.data && r.data.error || '取消失败，请稍后重试');
+                setTimeout(refresh, 500); return true;
+            }
+        });
+    });
 	document.getElementById("btnSteer").addEventListener("click", async function () {
 		var ta = document.getElementById("steerText");
 		var text = ta.value.trim();

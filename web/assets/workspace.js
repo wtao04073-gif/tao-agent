@@ -336,10 +336,12 @@
         var row = node('article', 'ws-document-row'), info = node('div', 'ws-row-main');
         info.append(node('h3', '', doc.name), node('p', 'ws-meta', '解析完成 · ' + doc.chunks + ' 个切片 · 版本 ' + (doc.version || 1) + ' · ' + date(doc.updatedAt)));
         var actions = actionsFor(doc), remove = button('移除', async function () {
-          if (!global.confirm('从知识库移除「' + doc.name + '」？原始文件会保留。')) return;
-          remove.disabled = true;
-          try { await api('DELETE', '/api/knowledge/' + encodeURIComponent(doc.documentId)); if (current()) { detailRequest++; detail.hidden = true; load(); } }
-          catch (e) { if (current()) { notice(error, e.message); remove.disabled = false; } }
+          var removed = await App.Dialog.confirm({ title: '移除知识资料？', danger: true,
+            description: '将从知识库移除「' + doc.name + '」及其检索索引，原始文件会保留。',
+            confirmText: '移除资料', cancelText: '保留资料', busyText: '正在移除…',
+            onSubmit: async function () { await api('DELETE', '/api/knowledge/' + encodeURIComponent(doc.documentId)); return true; }
+          });
+          if (removed && current()) { detailRequest++; detail.hidden = true; load(); }
         }, 'ws-button ws-danger');
         actions.append(remove); row.append(node('span', 'ws-row-icon', '▤'), info, actions); list.append(row);
       });

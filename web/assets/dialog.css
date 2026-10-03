@@ -1,0 +1,15 @@
+/* 应用内弹窗：与前台工作空间共用暖色背景和绿色操作按钮。 */
+.app-dialog{box-sizing:border-box;width:min(520px,calc(100vw - 32px));max-height:calc(100dvh - 40px);padding:0;margin:auto;overflow:auto;border:1px solid #deded4;border-radius:20px;background:#fffefa;color:#302f29;box-shadow:0 24px 80px #171c1640;font:14px/1.65 Inter,"PingFang SC","Noto Sans SC",sans-serif}
+.app-dialog::backdrop{background:#20261f66;backdrop-filter:blur(3px)}
+.app-dialog-form{padding:28px}.app-dialog-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 0 10px}.app-dialog-head h2{line-height:1.4;margin:0;font-size:21px;font-weight:600;color:inherit}
+.app-dialog-close{display:grid;place-items:center;flex:none;width:32px;height:32px;padding:0;border:0;border-radius:8px;background:transparent;color:#77796d;font:24px/1 sans-serif;cursor:pointer}.app-dialog-close:hover{background:#eeefe7}
+.app-dialog-description{margin:0 0 24px;color:#74776b;white-space:pre-wrap;overflow-wrap:anywhere}.app-dialog-description:empty{display:none}
+.app-dialog-label{display:block;margin:18px 0 8px;color:#454b3e;font-weight:500}
+.app-dialog .app-dialog-input{box-sizing:border-box;display:block;width:100%;min-width:0;max-height:35vh;min-height:44px;padding:12px 14px;border:1px solid #d7dbce;border-radius:11px;background:#fff;color:#30372b;font:inherit;line-height:1.7;resize:vertical;outline:none;box-shadow:none}
+.app-dialog textarea.app-dialog-input{min-height:120px}.app-dialog .app-dialog-input:focus{border-color:#839779;box-shadow:0 0 0 3px #71886618}.app-dialog .app-dialog-input[aria-invalid=true]{border-color:#b45f4a}
+.app-dialog-error{margin:12px 0 0;color:#a44d36;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.app-dialog-error:empty{display:none}
+.app-dialog-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:26px}.app-dialog-button{min-height:40px;padding:9px 20px;border:1px solid #dce0d4;border-radius:10px;background:#f6f7f1;color:#5c6454;font:inherit;font-size:13px;font-weight:500;cursor:pointer}
+.app-dialog-button:hover{background:#e9ede1}.app-dialog-primary{border-color:#446353;background:#446353;color:#fff}.app-dialog-primary:hover{background:#314b3c}.app-dialog-danger .app-dialog-primary{background:#a55340;border-color:#a55340}.app-dialog-danger .app-dialog-primary:hover{background:#8c422f}
+.app-dialog button:focus-visible{outline:2px solid #718866;outline-offset:3px}.app-dialog button:disabled,.app-dialog .app-dialog-input:disabled{opacity:.6;cursor:wait}
+@media(max-width:600px){.app-dialog-form{padding:22px}.app-dialog-head h2{font-size:19px}.app-dialog-footer .app-dialog-button{flex:1}}
+@media(prefers-reduced-motion:reduce){.app-dialog::backdrop{backdrop-filter:none}}

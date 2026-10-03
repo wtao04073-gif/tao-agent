@@ -528,9 +528,9 @@
 	</div>
 
 	<div class="toast" id="toast"></div>
-<script src="/assets/core.js"></script>
+<script src="/assets/core.js?v=app-dialog-1"></script>
 <script src="/assets/forms.js"></script>
-<script src="/assets/workspace.js?v=rag-stream-1"></script>
+<script src="/assets/workspace.js?v=app-dialog-1"></script>
 <script src="/assets/chat-interactions.js"></script>
 <script>
 (function () {
@@ -708,17 +708,21 @@
 		});
 	}
 	// 新建长程任务：询问目标，建 Job 后进入任务视图。
-	function newJob() {
-		var goal = window.prompt("这个长期任务的目标是什么？（如：开发一个 XX 系统）");
-		if (goal === null) return;
-		goal = goal.trim();
-		if (!goal) { toast("请填写任务目标"); return; }
-		App.api("POST", "/api/jobs", { goal: goal }).then(function (r) {
-			if (!r.ok) { toast((r.data && r.data.error) || "创建任务失败"); return; }
-			loadJobs();
-			openJob(r.data.jobId);
-		}).catch(function () { toast("网络异常，任务未创建"); });
-	}
+	async function newJob() {
+        var jobId = await App.Dialog.prompt({
+            title: '新建长期任务', label: '任务目标', multiline: true,
+            description: '为长期工作建立一个独立空间，持续记录对话、进展和交付物。',
+            placeholder: '例如：开发一个客户管理系统，先梳理需求，再逐步完成设计与开发',
+            requiredMessage: '请填写这个长期任务的目标', confirmText: '创建任务', busyText: '正在创建…',
+            onSubmit: async function (goal) {
+                var r = await App.api('POST', '/api/jobs', { goal: goal });
+                if (!r.ok) throw new Error(r.data && r.data.error || '创建失败，请稍后重试');
+                if (!r.data || !r.data.jobId) throw new Error('未收到任务编号，请先到任务中心确认创建结果');
+                return r.data.jobId;
+            }
+        });
+        if (jobId !== null) { loadJobs(); openJob(jobId); }
+    }
 
 	// 打开长程任务：显示目标与历次会话，可继续发起新会话。
 	function openJob(jobId) {
@@ -1332,14 +1336,19 @@
 	}
 
 	// 取消当前运行任务（二次确认），取消后状态由 SSE status 事件驱动刷新。
-	function cancelCurrentTask() {
-		if (!state.taskId || !state.running) return;
-		if (!window.confirm("确定取消当前任务吗？已生成的中间产物会保留。")) return;
-		var id = state.taskId;
-		App.api("POST", "/api/tasks/" + encodeURIComponent(id) + "/cancel", { reason: "用户取消" })
-			.then(function (r) { if (!r.ok) toast((r.data && r.data.error) || "取消失败"); })
-			.catch(function () { toast("网络异常，取消未送达"); });
-	}
+	async function cancelCurrentTask() {
+        if (!state.taskId || !state.running) return;
+        var id = state.taskId;
+        await App.Dialog.confirm({ title: '取消当前任务？', danger: true,
+            description: '正在执行的任务将停止，已生成的中间产物会保留。',
+            confirmText: '取消任务', cancelText: '继续执行', busyText: '正在取消…',
+            onSubmit: async function () {
+                var r = await App.api('POST', '/api/tasks/' + encodeURIComponent(id) + '/cancel', { reason: '用户取消' });
+                if (!r.ok) throw new Error(r.data && r.data.error || '取消失败，请稍后重试');
+                return true;
+            }
+        });
+    }
 
 	/* ---------- 追问 / 结束后再发（失败可见可重试） ---------- */
 	function steer() {
