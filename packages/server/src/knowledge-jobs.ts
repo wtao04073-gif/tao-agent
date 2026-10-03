@@ -6,6 +6,7 @@ import { readJsonBody, sendError, sendJson, type Principal } from "./app.ts";
 import { digest } from "./execution-registry.ts";
 import { WorkspaceError, type WorkspaceServices, type KnowledgeDocument } from "./workspace-services.ts";
 type Input = {
+    documentId?:string;
     name?: string;
     fileName?: string;
     text?: string;
@@ -31,7 +32,7 @@ export class KnowledgeJobs {
     recover(tenant: TenantContext) { for (const job of this.store.listByTenant(tenant.tenantId, tenant.workspaceId))
         if (job.status === "queued" || job.status === "processing")
             this.store.put({ ...job, status: "failed", error: "服务重启，入库未完成，请重试", updatedAt: Date.now() }); }
-    public(job: Job) { const { input: _input, tenant: _tenant, fingerprint: _fingerprint, ...data } = job; return data; }
+    public(job: Job) { const { input: _input, tenant: _tenant, fingerprint: _fingerprint, ...data } = job; return {...data,operation:job.input.documentId?"reindex":"ingest"}; }
     owned(tenant: TenantContext, id: string) { const job = this.store.get(id); return job?.tenant.tenantId === tenant.tenantId && job.tenant.workspaceId === tenant.workspaceId ? job : undefined; }
     create(tenant: TenantContext, input: Input, key?: string) {
         if (this.queue.length >= 100)
@@ -79,7 +80,7 @@ export class KnowledgeJobs {
                 const job = this.queue.shift()!;
                 try {
                     this.store.put({ ...job, status: "processing", updatedAt: Date.now() });
-                    const document = await this.services.ingestKnowledge(job.tenant, job.input);
+                    const document = job.input.documentId ? await this.services.reindexKnowledge(job.tenant,job.input.documentId) : await this.services.ingestKnowledge(job.tenant, job.input);
                     this.store.put({ ...job, status: "ready", document, updatedAt: Date.now() });
                 }
                 catch (error) {
@@ -94,14 +95,19 @@ export function createKnowledgeJobHandler(jobs: KnowledgeJobs, authenticate: (re
     return async (req: IncomingMessage, res: ServerResponse) => {
         const url = new URL(req.url ?? "/", "http://localhost"), parts = url.pathname.split("/").filter(Boolean);
         const creation = url.pathname === "/api/knowledge" && url.searchParams.get("async") === "true";
-        if (!creation && !(parts[0] === "api" && parts[1] === "knowledge" && parts[2] === "jobs"))
+        const reindex=parts.length===4 && parts[0]==="api" && parts[1]==="knowledge" && parts[3]==="reindex";
+        if (!creation && !reindex && !(parts[0] === "api" && parts[1] === "knowledge" && parts[2] === "jobs"))
             return false;
         try {
             const principal = await authenticate(req);
             if (!principal)
                 throw new WorkspaceError(401, "请先登录");
             const tenant = principal.tenant;
-            if (creation && req.method === "POST") {
+            if(reindex && req.method==="POST") {
+                if(!/^[a-f0-9]{64}$/.test(parts[2]!))throw new WorkspaceError(400,"文档标识无效");
+                const key=req.headers["idempotency-key"];
+                sendJson(res,202,{job:jobs.public(jobs.create(tenant,{documentId:parts[2]!},typeof key==="string"?key:undefined))});
+            }else if (creation && req.method === "POST") {
                 const body = await readJsonBody(req);
                 if (!body.ok)
                     throw new WorkspaceError(400, body.reason);

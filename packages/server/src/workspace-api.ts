@@ -34,7 +34,15 @@ export function createWorkspaceHandler(deps: WorkspaceDeps) {
 			try { path = raw.map(decodeURIComponent); } catch { throw new WorkspaceError(400, "请求路径无效"); }
 			const method = req.method ?? "GET";
 			if (knowledge) {
-				if (method === "GET" && path.length === 2) {
+				if(method === "GET" && path.length === 3 && path[2] === "status") {
+                    sendJson(res,200,{rag:services.ragStatus(tenant)});
+                }else if(method === "POST" && path.length === 3 && path[2] === "search") {
+                    const body=await readJsonBody(req);if(!body.ok)throw new WorkspaceError(400,body.reason);
+                    const input=body.value as {query?:unknown;mode?:unknown;limit?:unknown};
+                    if(typeof input.query!=="string"||!input.query.trim()||(input.mode!==undefined&&input.mode!=="semantic"&&input.mode!=="hybrid")||(input.limit!==undefined&&(!Number.isInteger(input.limit)||Number(input.limit)<1||Number(input.limit)>100)))throw new WorkspaceError(400,"检索参数无效");
+                    const hits=await services.searchKnowledge(tenant,input.query,{...(input.mode?{mode:input.mode as "semantic"|"hybrid"}:{}),...(input.limit?{limit:Number(input.limit)}:{})});
+                    sendJson(res,200,{hits,mode:input.mode??services.ragStatus(tenant).mode});
+                }else if (method === "GET" && path.length === 2) {
 					const query = url.searchParams.get("q")?.trim();
 					const documents = services.listKnowledge(tenant);
 					sendJson(res, 200, { documents, ...(query ? { hits: await services.searchKnowledge(tenant, query) } : {}) });

@@ -53,3 +53,6 @@ export {
 export { FileJobStore, type FileJobStoreOptions } from "./file-job-store.ts";
 export { MemoryJobStore } from "./memory-job-store.ts";
 export { FileJsonStore, type FileJsonStoreOptions } from "./file-json-store.ts";
+export { HttpEmbeddings, EmbeddingError, normalizeVector, type EmbeddingProvider } from "./embeddings.ts";
+export { indexChunks, retrieveVectors, RagIndexError, type VectorIndex, type VectorDocument } from "./vector-retrieval.ts";
+export { boundRagChunks } from "./rag-chunks.ts";

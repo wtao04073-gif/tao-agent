@@ -166,7 +166,7 @@ export function formatCitations(hits: readonly SearchHit[]): string {
 	const blocks = hits.map((hit, index) => {
 		const ref = index + 1;
 		return [
-			`[${ref}] 来源：${hit.chunk.documentName}（位置 ${hit.chunk.position}）`,
+			`[${ref}] 来源：${hit.chunk.documentName}（${hit.chunk.documentVersion === undefined ? "" : `版本 ${hit.chunk.documentVersion}，`}位置 ${hit.chunk.position}）`,
 			hit.chunk.text,
 		].join("\n");
 	});
