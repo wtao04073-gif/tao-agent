@@ -532,6 +532,7 @@
 <script src="/assets/forms.js"></script>
 <script src="/assets/workspace.js"></script>
 <script src="/assets/chat-interactions.js"></script>
+<script src="/assets/run-display.js"></script>
 <script>
 (function () {
 	"use strict";
@@ -555,6 +556,11 @@
 		// 本次草稿选用的技能 / 智能体（跨轮沿用，直到手动移除或新建清空）。
 		skill: null, agent: null,
 		seenSeq: null, seenArtifact: null, seenConfirm: null, deliverCleared: false };
+
+    var runDisplay=ChatRunDisplay.create({document:document,storage:{getItem:function(k){return localStorage.getItem(k);},setItem:function(k,v){localStorage.setItem(k,v);}},
+        answerNode:answerParagraph,currentBubble:function(){return state.statusEl?state.statusEl.closest(".bubble"):addMsg("bot","智能体","");},
+        renderAnswer:function(node,text){ChatUI.renderAnswer(node,text);},answerFinished:function(){state.answerP=null;},changed:scrollDown});
+    document.querySelectorAll(".composer-bar .bar-left").forEach(function(parent){runDisplay.mount(parent);});
 
 	// 当前选中的模型档位；两个输入卡的选择器始终保持同步。
 	function currentTier() {
@@ -858,22 +864,24 @@
 			var e0 = events[i];
 			if (e0.type === "user_message" && !userText) userText = e0.text;
 			if (e0.type === "assistant_message") answerText = e0.text;
+            if(e0.type === "message_progress" && e0.channel === "answer" && runDisplay.preferences.stream)answerText=e0.text;
 		}
 		if (!userText) userText = task.title || "(本轮请求)";
 		addMsg("user", "我", userText);
 		var bot = addMsg("bot", "智能体", "");
 		var savedSteps = state.steps;
-		var holder = addStepsShell(bot, isLast && state.running);
+		var holder = addStepsShell(bot, isLast && ["RUNNING","QUEUED","AWAIT_CONFIRM"].indexOf(task.status)>=0);
 		state.steps = holder;
 		events.forEach(function (e) {
 			if (e.type === "step") renderStepEvent(e);
 			if (e.type === "artifact" && e.final) renderArtifactEvent(Object.assign({},e,{taskId:task.taskId}));
 		});
-		if (answerText) {
+		runDisplay.history(bot,events);
+        if (answerText && !events.some(function(e){return e.type==="message_progress" || (e.type==="assistant_message"&&e.messageId);})) {
 			var p = bot.querySelector("p");
 			p.classList.add("bottext", "answer"); ChatUI.renderAnswer(p,answerText);
 		}
-		state.steps = savedSteps;
+		state.steps = isLast ? holder : savedSteps;
 		// 最新轮已由历史回放渲染：把它已落盘事件的 seq 标记为已见，
 		// 避免随后 SSE backlog / 轮询把同一批事件再渲染一遍（重复气泡/步骤）。
 		if (isLast) {
@@ -903,7 +911,7 @@
 		var row = ensureStep(ev);
 		row.querySelector(".t").textContent = ev.step + ". " + (ev.action || "");
 		if (ev.detail) row.querySelector(".d").textContent = ev.detail;
-		if (ev.phase === "failed") { row.className = "step run"; row.querySelector(".k").textContent = "✕"; }
+		if (ev.phase === "failed") { row.className = "step failed"; row.querySelector(".k").textContent = "✕"; }
 		else if (ev.phase === "finished") { row.className = "step done"; row.querySelector(".k").textContent = "✓"; }
 		updateStepSummary();
 	}
@@ -940,6 +948,7 @@
 		});
 		$("#lFile").value = ""; $("#sFile").value = "";
 		$("#inner").innerHTML = "";
+        runDisplay.reset();
 		$("#deliverBody").innerHTML = '<div class="deliver-empty">交付物将在这里预览</div>';
 		stepOrder.length = 0;
 		state.seenSeq = Object.create(null);
@@ -954,10 +963,11 @@
 	// 新建任务与打开历史任务都必须先调用，否则 SSE 回放 step/status 会访问空对象。
 	function ensureRunView(bot) {
 		// 本轮回答写入该气泡自带的 <p>
-		state.answerP = bot.querySelector("p");
+		runDisplay.begin(bot);
+        state.answerP = bot.querySelector("p");
 		if (state.answerP) state.answerP.classList.add("bottext", "answer");
 		var status = document.createElement("div");
-		status.className = "statusline"; status.innerHTML = '<span class="running">● 正在思考…</span>';
+		status.className = "statusline"; status.innerHTML = '<span class="running">● 正在准备执行…</span>';
 		bot.appendChild(status); state.statusEl = status;
 		var steps = document.createElement("div");
 		steps.className = "steps";
@@ -1105,18 +1115,14 @@
 
 	function onEvent(ev) {
 		// 流式增量（seq=0）：不参与 seq 去重，直接做打字机追加。
-		if (ev.type === "assistant_delta") {
-			var pd = answerParagraph();
-			pd.setAttribute("data-mid", ev.messageId || "cur");
-			pd.textContent += ev.delta;
-			scrollDown();
-			return;
-		}
+        if(ev.type === "assistant_delta" || ev.type === "thinking_delta") {runDisplay.consume(ev);return;}
+
 		// SSE 重连会从 seq=0 补投历史：按单调 seq 去重，避免重复交付物/确认卡/消息。
 		if (typeof ev.seq === "number") {
 			if (state.seenSeq[ev.seq]) return;
 			state.seenSeq[ev.seq] = true;
 		}
+        if(runDisplay.consume(ev))return;
 		if (ev.type === "status") {
 			var map = App.STATUS[ev.to] ? App.STATUS[ev.to].label : ev.to;
 			if (state.statusEl) state.statusEl.innerHTML = "状态：" + esc(map) +
@@ -1133,7 +1139,7 @@
 				row.className = "step done"; row.querySelector(".sst").textContent = "已完成";
 				row.querySelector(".k").textContent = "✓";
 			} else if (ev.phase === "failed") {
-				row.className = "step run"; row.querySelector(".k").textContent = "✕";
+				row.className = "step failed"; row.querySelector(".k").textContent = "✕";
 				row.querySelector(".sst").textContent = "失败";
 			}
 			updateStepSummary(); scrollDown();
@@ -1165,6 +1171,7 @@
 			n ? ("已生成 " + n + " 个执行步骤") : "执行步骤";
 	}
 	function finishRun(to, reason) {
+        runDisplay.finish();
 		state.running = false; updateTopStatus();
 		if (state.sub) { state.sub.close(); state.sub = null; }
 		if (to === "SUCCEEDED") {
@@ -1657,7 +1664,12 @@
       if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();setRail(false);$('#historySearch').focus();}
     });
     window.addEventListener('hashchange',function(){if(isMobile())setRail(true);});
-    if(isMobile())setRail(true);
+    var mobileLayout=window.matchMedia('(max-width: 980px)');
+    mobileLayout.addEventListener('change',function(event){
+      setRail(event.matches);
+      hideDeliver();
+    });
+    if(mobileLayout.matches)setRail(true);
 	App.api("GET", "/api/me").then(function (r) {
 		if (!r.ok || !r.data) return;
 		if (r.data.name) $("#userName").textContent = r.data.name;

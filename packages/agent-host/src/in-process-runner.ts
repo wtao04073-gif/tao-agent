@@ -1,3 +1,4 @@
+import { ResponseStream } from "./response-stream.ts";
 /**
  * 进程内 Runner 实现
  *
@@ -226,6 +227,13 @@ class InProcessRunner implements Runner {
 	readonly confirmations: Confirmations;
 	private readonly listeners = new Set<(event: TaskEvent) => void | Promise<void>>();
 	private readonly steps = new StepCounter();
+ private delivery:Promise<void>=Promise.resolve();
+ responseStream?:ResponseStream;
+ private responseStep=0;
+ async responsePhase(phase:"started"|"progress"|"finished"|"failed",detail?:string):Promise<void> {
+  if(phase==="started")this.responseStep=this.steps.start("model-response");
+  await this.emit(base=>({...base,type:"step",step:this.responseStep,action:"模型请求与响应",phase,...(detail?{detail}:{})}));
+ }
 	private readonly translatorContext: TranslatorContext;
 	private closed = false;
 	/**
@@ -277,15 +285,10 @@ class InProcessRunner implements Runner {
 	}
 
 	/** 发布一个平台事件。监听器异常不影响其他监听器，也不影响执行。 */
-	private async publish(event: TaskEvent): Promise<void> {
-		for (const listener of this.listeners) {
-			try {
-				await listener(event);
-			} catch {
-				// 事件消费方的问题不应中断任务执行 —— 进度上报失败不等于任务失败
-			}
-		}
-	}
+    private publish(event:TaskEvent):Promise<void> {
+        this.delivery=this.delivery.then(async()=>{for(const listener of this.listeners){try{await listener(event);}catch{/* 展示失败不改变模型执行结果 */}}});
+        return this.delivery;
+    }
 
 	/** 消费一个内核事件。由工厂在装配时接线。 */
 	async ingest(event: KernelEvent): Promise<void> {
@@ -391,6 +394,7 @@ class InProcessRunner implements Runner {
 		 * 在预检通过、席位预留后即释放，模型执行在锁外并发；席位在 finally 归还。
 		 */
 		let release: ReleaseReservation | undefined;
+        await this.responsePhase("started","正在准备请求并等待模型响应");
 		try {
 			if (this.enterPreflight !== undefined) {
 				release = await this.enterPreflight();
@@ -401,7 +405,13 @@ class InProcessRunner implements Runner {
 			// 内核不会因生成失败而让 prompt reject，所以这里必须显式检查。
 			// 抛出去让编排层把任务转入 FAILED —— 静默成功比报错难查得多。
 			if (this.runFailure !== undefined) throw new Error(this.runFailure);
-		} finally {
+            await this.responsePhase("finished","本轮模型执行已结束");
+        } catch(error) {
+            await this.responsePhase("failed","本轮未完成，请查看任务状态与失败原因");
+            throw error;
+        } finally {
+            this.responseStream?.close();
+            await this.delivery;
 			release?.();
 		}
 	}
@@ -652,35 +662,33 @@ export class InProcessRunnerFactory implements RunnerFactory {
 		 */
 		const emittedAssistant = new Set<string>();
 
-		/**
-		 * 流式增量：message_update 的 text_delta 帧带本次新增文本。
-		 * 用瞬时事件下发（不落盘/不编号）；思考链(thinking_delta)与工具参数
-		 * (toolcall_delta) 不推给用户。messageId 用 entryId/runId，让前端把
-		 * 同一条消息的增量归并，message_end 的定稿再整体替换。
-		 */
-		harness.events.on("message_update", ((event: {
-			runId?: string;
-			message?: { role?: string; entryId?: string };
-			frame?: { type?: string; delta?: string; contentIndex?: number };
-		}) => {
-			const msg = event?.message;
-			const frame = event?.frame;
-			if (msg?.role !== "assistant" || frame?.type !== "text_delta") return;
-			if (typeof frame.delta !== "string" || frame.delta === "") return;
-			const messageId = String(msg.entryId ?? event.runId ?? "current");
-			void runner.emitTransient({ type: "assistant_delta", messageId, delta: frame.delta } as never);
-		}) as never);
-
-		harness.events.on("message_end", ((event: { message?: { role?: string; content?: unknown; entryId?: string } }) => {
-			const msg = event?.message;
-			if (msg?.role !== "assistant") return;
-			const text = assistantText(msg.content);
-			if (text === "") return;
-			const key = typeof msg.entryId === "string" && msg.entryId !== "" ? "id:" + msg.entryId : "t:" + text;
-			if (emittedAssistant.has(key)) return;
-			emittedAssistant.add(key);
-			void runner.emit((base) => ({ ...base, type: "assistant_message", text }));
-		}) as never);
+        const stream=new ResponseStream({
+            delta:(channel,messageId,delta,offset)=>{void runner.emitTransient({type:channel==="answer"?"assistant_delta":"thinking_delta",messageId,delta,offset} as never);},
+            snapshot:(channel,messageId,text,complete)=>{void runner.emit(base=>({...base,type:"message_progress",messageId,channel,text,complete}));},
+        });
+        runner.responseStream=stream;
+        harness.events.on("message_start",((event:{runId?:string;message?:{role?:string}})=>{
+            if(event.message?.role==="assistant")stream.begin(event.runId);
+        }) as never);
+        harness.events.on("message_update",((event:{runId?:string;message?:{role?:string};frame?:{type?:string;delta?:string};event?:{type?:string;delta?:string}})=>{
+            if(event.message?.role!=="assistant")return;
+            const frame=event.frame??event.event;
+            if(typeof frame?.delta!=="string" || !frame.delta)return;
+            if(frame.type==="text_delta")stream.append(event.runId,"answer",frame.delta);
+            if(frame.type==="thinking_delta")stream.append(event.runId,"thinking",frame.delta);
+        }) as never);
+        harness.events.on("message_end",((event:{runId?:string;entryId?:string;message?:{role?:string;content?:unknown;entryId?:string}})=>{
+            const msg=event.message;if(msg?.role!=="assistant")return;
+            const messageId=stream.end(event.runId),text=assistantText(msg.content);
+            const key=event.entryId??msg.entryId??messageId;
+            if(emittedAssistant.has(key))return;emittedAssistant.add(key);
+            // 部分服务只提供最终思考块，不提供thinking_delta，同样保留可展示内容。
+            if(Array.isArray(msg.content)) {
+                const thinking=msg.content.filter(c=>c && c.type==="thinking" && typeof c.thinking==="string").map(c=>c.thinking).join("\n");
+                if(thinking)void runner.emit(base=>({...base,type:"message_progress",messageId,channel:"thinking",text:thinking,complete:true}));
+            }
+            if(text)void runner.emit(base=>({...base,type:"assistant_message",messageId,text}));
+        }) as never);
 
 		/**
 		 * 接生成失败。
@@ -697,7 +705,7 @@ export class InProcessRunnerFactory implements RunnerFactory {
 			if (event.status !== "failed") return;
 			const code = event.error?.code ?? "unknown";
 			const detail = event.error?.message ?? JSON.stringify(event.error?.data ?? {});
-			runner.noteRunFailure(`内核运行失败（${code}）：${detail}`);
+			runner.noteRunFailure(/rate.?limit|tpm|tokens?.*per.?min|too many|429|限流/i.test(detail+" "+code) ? "模型服务当前限流，本次未完成。请稍后重试；若持续出现，请检查模型服务配额。" : `内核运行失败（${code}）：${detail}`);
 		}) as never);
 
 		/**

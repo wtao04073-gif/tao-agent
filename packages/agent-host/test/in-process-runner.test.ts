@@ -170,15 +170,15 @@ describe("RunnerAdapter 适配层", () => {
 		await runner.prompt("两步");
 
 		// seq 必须连续 —— 前端靠它断线重连拉增量，有缺口就会误判丢事件
-		const seqs = events.map((e) => e.seq);
+		const seqs = events.filter(e=>e.seq>0).map((e) => e.seq);
 		expect(seqs).toEqual([...seqs].sort((x, y) => x - y));
 		expect(new Set(seqs).size).toBe(seqs.length); // 无重复
 
-		// 两个工具产生两个不同的步骤号
+		// 模型执行步骤和两个工具使用同一个步骤序号空间
 		const startedSteps = events
 			.filter((e) => e.type === "step" && e.phase === "started")
 			.map((e) => (e.type === "step" ? e.step : 0));
-		expect(startedSteps).toEqual([1, 2]);
+		expect(startedSteps).toEqual([1, 2, 3]);
 
 		await runner.close();
 	});

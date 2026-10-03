@@ -76,9 +76,10 @@ describe("M5-5 出网前配额闸", () => {
 		await expect(runner.prompt("随便写点什么")).rejects.toThrow(/额度已用完/);
 
 		expect(checked).toBe(1);
-		// 关键：模型一次都没被调用 —— 没有 usage、step、artifact 事件
+		// 模型零消耗；页面仍收到准备与失败步骤，不会伪装成没有执行反馈
 		expect(events.filter((e) => e.type === "usage")).toHaveLength(0);
-		expect(events.some((e) => e.type === "step")).toBe(false);
+		expect(events.filter(e=>e.type==="step").map(e=>e.type==="step"?e.phase:"")).toEqual(["started","failed"]);
+        expect(events.filter(e=>e.type==="artifact")).toHaveLength(0);
 		await runner.close();
 	});
 

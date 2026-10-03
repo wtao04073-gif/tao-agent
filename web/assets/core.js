@@ -189,7 +189,7 @@
 		// 两个来源（SSE / 轮询）统一经此下发，按 seq 去重并推进水位。
 		function deliver(data) {
 			// 瞬时流式帧 seq=0：不参与去重/水位，直接透传给打字机渲染。
-			if (data && data.type === "assistant_delta") {
+			if (data && (data.type === "assistant_delta" || data.type === "thinking_delta")) {
 				if (handlers.onEvent) handlers.onEvent(data, undefined);
 				return;
 			}
@@ -234,7 +234,7 @@
 				if (taskId) q += "&taskId=" + encodeURIComponent(taskId);
 				es = new EventSource("/api/events" + q, { withCredentials: false });
 				var types = ["status", "step", "tool_decision", "artifact",
-					"assistant_message", "assistant_delta", "user_message", "usage"];
+					"assistant_message", "assistant_delta", "thinking_delta", "message_progress", "user_message", "usage"];
 				types.forEach(function (t) {
 					es.addEventListener(t, function (ev) {
 						var data;
