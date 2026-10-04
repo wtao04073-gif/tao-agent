@@ -26,7 +26,7 @@ export interface ToolsetOptions {
 }
 
 /** 预览行数上限。给模型看样本即可，不必也不该把整表塞进上下文。 */
-const PREVIEW_ROWS = 5;
+const PREVIEW_ROWS = 50;
 
 /** 产出路径的校验结论。拒绝原因要能直接回给模型，所以带上说明文本。 */
 type OutputPath = { readonly ok: true; readonly path: string } | { readonly ok: false; readonly text: string };
@@ -109,7 +109,7 @@ export function createOfficeToolset(options: ToolsetOptions): PlatformTool[] {
 	const listSheetsTool: PlatformTool = {
 		name: "list_sheets",
 		label: "查看表格结构",
-		description: "列出一个 Excel 文件里的所有工作表名称。当不确定该读哪个表时先用它。",
+		description: "列出 XLS/XLSX、CSV/TSV 或 HTML/XML 导出表格里的所有工作表名称。当不确定该读哪个表时先用它。",
 		parameters: {
 			type: "object",
 			properties: {
@@ -132,31 +132,40 @@ export function createOfficeToolset(options: ToolsetOptions): PlatformTool[] {
 		name: "read_table",
 		label: "读取表格",
 		description:
-			"读取 Excel 工作表的列名与前几行样本，用于确认表结构与列名。不会返回全部数据。",
+			"读取表格数据，支持 XLS/XLSX、CSV/TSV、HTML/XML 导出表格。用 offset/limit 分页读完整表，不要仅凭首批样本总结全表；复杂表头可指定 headerRow。",
 		parameters: {
 			type: "object",
 			properties: {
 				path: { type: "string", description: "Excel 文件路径" },
 				sheet: { type: "string", description: "工作表名。省略则读第一个表" },
+                offset: { type: "integer", minimum: 0, description: "数据偏移，从0开始；按返回的 nextOffset 继续" },
+                limit: { type: "integer", minimum: 1, maximum: 200, description: "本次最多行数，默认50，上限200" },
+                headerRow: { type: "integer", minimum: 1, description: "表头所在的真实行号，从1开始，省略取首个非空行；表头之前内容不会返回" },
 			},
 			required: ["path"],
 		},
 		replay: "safe",
 		async execute({ args }) {
-			const { path, sheet } = args as { path: string; sheet?: string };
-			const data = await readSheet(path, sheet);
-			const preview = data.rows.slice(0, PREVIEW_ROWS);
-			return {
-				// 只给模型列名与少量样本 —— 几千行数据塞进上下文既贵又无用
-				text: [
-					`工作表「${data.name}」共 ${data.rows.length} 行。`,
-					`列：${data.columns.join("、")}`,
-					preview.length > 0
-						? `前 ${preview.length} 行样本：\n${preview.map((r) => JSON.stringify(r)).join("\n")}`
-						: "（无数据行）",
-				].join("\n"),
-				details: { sheet: data.name, columns: data.columns, rowCount: data.rows.length },
-			};
+            const { path, sheet, offset = 0, limit = PREVIEW_ROWS, headerRow } = args as { path: string; sheet?: string; offset?: number; limit?: number; headerRow?: number };
+            if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error("offset 须为非负整数，limit 须为1至200的整数");
+            const data = await readSheet(path, sheet, headerRow === undefined ? {} : { headerRow });
+            const preview: string[] = [];
+            let chars = 0;
+            for (let i = offset; i < Math.min(data.rows.length, offset + limit); i++) {
+                const line = `[第${data.rowNumbers[i]}行] ${JSON.stringify(data.rows[i])}`;
+                if (chars + line.length > 60000) {
+                    if (!preview.length) throw new Error("单行内容超过60000字符，请拆分该行后读取；未截断原数据");
+                    break;
+                }
+                preview.push(line); chars += line.length;
+            }
+            const nextOffset = offset + preview.length < data.rows.length ? offset + preview.length : null;
+            return {
+                text: [`工作表「${data.name}」共 ${data.rows.length} 行，格式 ${data.format}，表头第${data.headerRow}行。`,
+                    `列：${data.columns.join("、")}`, ...data.warnings, ...preview,
+                    nextOffset === null ? "本批已到表尾。" : `还有未读数据，请用 offset=${nextOffset} 继续读取，勿将本批当作全表。`].join("\n"),
+                details: { sheet: data.name, columns: data.columns, rowCount: data.rows.length, offset, returned: preview.length, nextOffset, format: data.format, headerRow: data.headerRow, warnings: data.warnings },
+            };
 		},
 	};
 

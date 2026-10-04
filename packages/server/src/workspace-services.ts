@@ -4,7 +4,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSy
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { checkAccess, ingestDocument, KeywordRetriever, Role, Scope, type Chunk, type PlatformTool, type SourceParagraph, type TenantContext } from "@tao/core";
 import { createKnowledgeToolset, MemoryKnowledgeStore, boundRagChunks, indexChunks, retrieveVectors, EmbeddingError, RagIndexError, type EmbeddingProvider, type VectorIndex } from "@tao/knowledge";
-import { readDocx, readSheet } from "@tao/office";
+import { readDocx, readSheet, listSheets } from "@tao/office";
 import { isSafeSegment, resolveWorkspaceDir } from "./accounts.ts";
 export const MAX_PREVIEW_BYTES = 20 * 1024 * 1024;
 export const MAX_KNOWLEDGE_CHARS = 500000;
@@ -108,12 +108,16 @@ async function extractText(path: string, name: string): Promise<string> {
         const doc = await readDocx(path);
         return doc.paragraphs.map((p) => `${p.isHeading ? "#".repeat(p.headingLevel ?? 1) + " " : ""}${p.text}`).join("\n");
     }
-    if (ext === ".xlsx") {
-        const sheet = await readSheet(path);
-        return [sheet.columns.join("\t"), ...sheet.rows.map((row) => sheet.columns.map((col) => String(row[col] ?? "")).join("\t"))].join("\n");
+    if ([".xlsx", ".xls", ".csv", ".tsv"].includes(ext)) {
+        const sections: string[] = [];
+        for (const name of await listSheets(path)) {
+            const sheet = await readSheet(path, name);
+            sections.push(`# 工作表：${name}\n` + [sheet.columns.join("\t"), ...sheet.rows.map((row) => sheet.columns.map((col) => String(row[col] ?? "")).join("\t"))].join("\n"));
+        }
+        return sections.join("\n\n");
     }
     if (!TEXT_EXTENSIONS.has(ext))
-        throw new WorkspaceError(415, "知识入库支持文本、Markdown、CSV、DOCX 和 XLSX 文件");
+        throw new WorkspaceError(415, "知识入库支持文本、Markdown、CSV/TSV、DOCX、XLS 和 XLSX 文件");
     const text = readFileSync(path, "utf8");
     if (text.includes("\0"))
         throw new WorkspaceError(415, "文件不是可读取的文本");
@@ -125,7 +129,7 @@ export async function previewFile(root: string, filePath: string, name: string):
     const mime = BINARY_TYPES[ext];
     if (mime !== undefined)
         return { kind: "binary", name, mime, bytes: readFileSync(path) };
-    if (ext === ".xlsx") {
+    if ([".xlsx", ".xls", ".csv", ".tsv"].includes(ext)) {
         const sheet = await readSheet(path);
         const columns = sheet.columns.slice(0, 50);
         return { kind: "sheet", name, columns, rows: sheet.rows.slice(0, 200).map((row) => Object.fromEntries(columns.map((col) => [col, String(row[col] ?? "").slice(0, 2000)]))), truncated: sheet.rows.length > 200 || sheet.columns.length > 50 };

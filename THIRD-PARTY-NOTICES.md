@@ -49,3 +49,8 @@ SOFTWARE.
 5. 新增任何第三方依赖时，须在本文件追加其许可声明。
 
 > ⚠️ 免责声明条款意味着上游不对软件质量担责。本产品对客户的质量责任由本产品承担，故核心链路须有自有测试覆盖。
+
+
+## SheetJS Community Edition 0.20.3
+
+表格读取使用 SheetJS CE（包名 xlsx），来源：https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz 。Copyright (C) 2012-present SheetJS LLC。采用 Apache License 2.0；完整许可随 npm 包的 LICENSE 文件分发：https://www.apache.org/licenses/LICENSE-2.0 。未修改其源码。ExcelJS 继续负责报告生成与公式、样式保留。

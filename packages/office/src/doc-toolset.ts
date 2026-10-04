@@ -1,3 +1,4 @@
+import { extname } from "node:path";
 /**
  * 文档工具集
  *
@@ -124,6 +125,8 @@ export function createDocToolset(options: DocToolsetOptions): PlatformTool[] {
 				outlineOnly?: boolean;
 				fromParagraph?: number;
 			};
+
+            if ([".xls", ".xlsx", ".csv", ".tsv"].includes(extname(path).toLowerCase())) return { isError: true, text: "这是表格文件，请使用 list_sheets 和 read_table（支持分页），不要使用 Word 文档读取器" };
 
 			if (outlineOnly === true) {
 				const outline = await readDocxOutline(path);

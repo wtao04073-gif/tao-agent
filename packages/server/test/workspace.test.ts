@@ -1,3 +1,4 @@
+import * as XLSX from "xlsx";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -70,6 +71,16 @@ describe("持久工作区知识库", () => {
 });
 
 describe("文件预览", () => {
+    it("旧版XLS预览和多工作表知识入库保留第二张表", async () => {
+        const { dir, services } = setup();
+        const book = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([["评估项", "结果"], ["权限管理", "通过"]]), "评估");
+        XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([["要求"], ["保密审计追踪必须留存"]]), "补充要求");
+        writeFileSync(join(dir,"评估.xls"), XLSX.write(book, {type:"buffer",bookType:"biff8"}));
+        expect(await previewFile(dir,join(dir,"评估.xls"),"评估.xls")).toMatchObject({kind:"sheet",rows:[{"评估项":"权限管理","结果":"通过"}]});
+        await services.ingestKnowledge(tenant,{fileName:"评估.xls"});
+        expect((await services.searchKnowledge(tenant,"保密审计追踪")).length).toBeGreaterThan(0);
+    });
 	it("DOCX 抽取正文，XLSX 抽取表格，均可入库检索", async () => {
 		const { dir, services } = setup();
 		await writeDocx({ title: "设备制度", blocks: [{ type: BlockType.Paragraph, text: "设备维护应每周执行" }] }, { workspace: dir, outputName: "制度.docx" });
