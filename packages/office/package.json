@@ -19,8 +19,10 @@
   },
   "dependencies": {
     "@tao/core": "*",
+    "@xmldom/xmldom": "0.9.12",
     "docx": "^9.7.2",
     "exceljs": "^4.4.0",
+    "fflate": "0.8.2",
     "mammoth": "^1.12.3"
   }
 }

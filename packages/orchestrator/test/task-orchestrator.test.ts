@@ -200,7 +200,7 @@ describe("任务编排 · 状态机守卫", () => {
 		expect(record.reason).toContain("请确认");
 	});
 
-	it("确认后可回到 RUNNING，拒绝则取消", async () => {
+	it("没有可恢复动作不能伪确认，拒绝则取消", async () => {
 		const { runner } = fakeRunner({
 			onPrompt: (emit) => {
 				emit({
@@ -215,7 +215,8 @@ describe("任务编排 · 状态机守卫", () => {
 		await orch.submit(baseSubmit);
 		await orch.run("task-1", "删除");
 
-		expect((await orch.confirm("task-1")).status).toBe(TaskStatus.Running);
+		await expect(orch.confirm("task-1")).rejects.toThrow(/确认|恢复/);
+        expect(orch.get("task-1")?.status).toBe(TaskStatus.AwaitConfirm);
 
 		// 另一个任务走拒绝路径
 		const second = fakeRunner({

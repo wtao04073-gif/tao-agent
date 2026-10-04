@@ -29,6 +29,10 @@ export interface ToolDescriptor {
 }
 
 export const TOOL_CATALOG: readonly ToolDescriptor[] = [
+	{ name: "edit_document", label: "修订文档", status: ToolStatus.Available, access: "write" },
+	{ name: "delegate_tasks", label: "委派子任务", status: ToolStatus.Available, access: "write" },
+	{ name: "mcp_list_tools", label: "查看外部工具", status: ToolStatus.Available, access: "read" },
+	{ name: "mcp_call", label: "调用外部工具", status: ToolStatus.Available, access: "write" },
 	// ── 表格（M1 已交付）──
 	{ name: "list_sheets", label: "查看表格结构", status: ToolStatus.Available, access: "read" },
 	{ name: "read_table", label: "读取表格", status: ToolStatus.Available, access: "read" },

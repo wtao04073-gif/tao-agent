@@ -120,7 +120,7 @@ describe("编排器 × 文件存储 · 真实重启恢复", () => {
 		expect(got?.reason).toContain("额度不足");
 	});
 
-	it("QUEUED 任务跨进程保持 QUEUED 且可被列出", async () => {
+	it("QUEUED 任务跨进程转为中断且可被列出", async () => {
 		const store1 = new FileTaskStore({ dir });
 		const orch1 = new TaskOrchestrator(factory, { store: store1 });
 		await orch1.submit(submit("task-queue-1")); // 不 run
@@ -129,7 +129,7 @@ describe("编排器 × 文件存储 · 真实重启恢复", () => {
 		orch2.recover();
 		const list = orch2.list(TENANT);
 		expect(list.map((t) => t.taskId)).toContain("task-queue-1");
-		expect(orch2.get("task-queue-1")?.status).toBe(TaskStatus.Queued);
+		expect(orch2.get("task-queue-1")?.status).toBe(TaskStatus.Interrupted);
 	});
 
 	it("事件流缺号、变更流更大时：真实文件上补的 INTERRUPTED 从 max+1 起号", () => {

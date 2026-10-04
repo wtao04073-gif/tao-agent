@@ -11,12 +11,30 @@
 import type { TaskEvent } from "./events.ts";
 import type { TenantContext } from "./tenant.ts";
 
+export interface PendingAction {
+	readonly actionId: string;
+	readonly taskId: string;
+	readonly tenant: TenantContext;
+	readonly toolCallId: string;
+	readonly toolName: string;
+	readonly argsHash: string;
+	readonly reason: string;
+	readonly createdAt: number;
+	readonly expiresAt: number;
+	readonly status: "pending" | "approved" | "executed" | "failed" | "rejected" | "expired" | "invalidated";
+}
+
+/** 仅在受控后端持久化，HTTP 动作列表不得输出 arguments。 */
+export interface StoredAction extends PendingAction {
+	readonly arguments: unknown;
+}
+
 /** 工具的权限决策结果。由权限门产生，Runner 执行。 */
 export type ToolDecision =
 	| { readonly kind: "allow" }
 	/** 拒绝。reason 会作为工具错误结果反馈给模型，也会展示给用户。 */
 	| { readonly kind: "block"; readonly reason: string }
-	/** 需用户确认。任务转入 AWAIT_CONFIRM，不占用执行资源。 */
+	/** 需用户确认。任务转入 AWAIT_CONFIRM，保留原调用等待授权。 */
 	| { readonly kind: "confirm"; readonly reason: string };
 
 /**
@@ -112,6 +130,7 @@ export interface RunnerSpec {
 	 * 历史事件仍在，就能重建这段记忆，因此比复用内存 Session 更稳。
 	 */
 	readonly history?: readonly ChatTurn[];
+    readonly inputReferences?: readonly { fileId: string; name: string; sha256: string }[];
 	/**
 	 * 本次运行注入的技能（可复用指令）。透传给内核 harness 的 resources.skills，
 	 * 模型命中使用场景时自动按指令执行。
@@ -157,6 +176,9 @@ export interface Runner {
 
 	/** 中止执行。这是唯一能取消进行中工具的手段。 */
 	abort(reason: string): Promise<void>;
+	/** 继续原来被挂起的工具调用，不重新发起模型请求。 */
+	confirmAction?(actionId?: string): Promise<void>;
+	listActions?(): readonly PendingAction[];
 
 	/** 订阅事件。返回取消订阅的函数。 */
 	subscribe(listener: (event: TaskEvent) => void | Promise<void>): () => void;

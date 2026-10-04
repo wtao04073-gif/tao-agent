@@ -1,3 +1,4 @@
+import { parseRagConfig, type RagConfig } from "./rag-config.ts";
 /**
  * 配置读取
  *
@@ -14,6 +15,7 @@ export interface ConfigError {
 }
 
 export interface AppConfig {
+    readonly rag?: RagConfig;
 	readonly port: number;
 	readonly workspaceDir: string;
 	readonly modelBaseUrl: string;
@@ -264,7 +266,10 @@ export function loadConfig(env: Record<string, string | undefined>): {
 
 	const workspaceDir = (env.WORKSPACE_DIR ?? "/data/workspace").trim();
 
-	const config: AppConfig = {
+	let rag:RagConfig|undefined;
+    try {rag=parseRagConfig(env);}catch(error){errors.push({key:"RAG",reason:error instanceof Error?error.message:"RAG配置无效",advice:"配置独立的嵌入模型服务；不要将聊天模型当作嵌入模型"});}
+    const config: AppConfig = {
+        ...(rag?{rag}:{}),
 		port: parseInteger("PORT", env.PORT, 8080, errors, {
 			min: 1,
 			max: 65535,

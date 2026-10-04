@@ -35,7 +35,7 @@ export interface KnowledgeStore {
 	/** 检索。membership 必填，不允许跨租户召回。 */
 	search(
 		membership: Membership,
-		options: { query: string; limit?: number; knowledgeBaseIds?: readonly string[] },
+		options: { query: string; limit?: number; knowledgeBaseIds?: readonly string[]; signal?: AbortSignal },
 	): Promise<SearchHit[]>;
 	/** 入库。 */
 	add(chunks: readonly Chunk[]): Promise<void>;
@@ -67,7 +67,7 @@ export function createKnowledgeToolset(options: KnowledgeToolsetOptions): Platfo
 			properties: {
 				query: {
 					type: "string",
-					description: "检索关键词。用明确的名词，不要用整句话提问",
+					description: "检索问题。可使用自然语言描述意图或给出准确关键词",
 				},
 				limit: {
 					type: "number",
@@ -82,7 +82,7 @@ export function createKnowledgeToolset(options: KnowledgeToolsetOptions): Platfo
 			required: ["query"],
 		},
 		replay: "safe", // 只读
-		async execute({ args }) {
+		async execute({ args, signal }) {
 			const input = args as {
 				query: string;
 				limit?: number;
@@ -98,6 +98,7 @@ export function createKnowledgeToolset(options: KnowledgeToolsetOptions): Platfo
 			 */
 			const hits = await options.store.search(options.membership, {
 				query: input.query,
+                signal,
 				limit: Math.min(input.limit ?? MAX_HITS, MAX_HITS),
 				...(input.knowledgeBaseIds !== undefined
 					? { knowledgeBaseIds: input.knowledgeBaseIds }

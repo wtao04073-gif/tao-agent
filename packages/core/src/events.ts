@@ -52,11 +52,14 @@ export interface TaskToolDecisionEvent extends TaskEventBase {
 	readonly decision: "allowed" | "blocked" | "await_confirm";
 	/** 拒绝或需确认的原因，会展示给用户。 */
 	readonly reason?: string;
+	readonly actionId?: string;
+	readonly expiresAt?: number;
 }
 
 /** 已产出的中间物或最终产物。失败任务也要保留中间物（验收要求）。 */
 export interface TaskArtifactEvent extends TaskEventBase {
 	readonly type: "artifact";
+    readonly revisionSummary?: string;
 	readonly artifactId: string;
 	readonly name: string;
 	readonly mimeType: string;
@@ -73,6 +76,7 @@ export interface TaskArtifactEvent extends TaskEventBase {
  */
 export interface TaskAssistantMessageEvent extends TaskEventBase {
 	readonly type: "assistant_message";
+    readonly messageId?: string;
 	readonly text: string;
 }
 
@@ -86,15 +90,26 @@ export interface TaskAssistantMessageEvent extends TaskEventBase {
  */
 export interface TaskAssistantDeltaEvent extends TaskEventBase {
 	readonly type: "assistant_delta";
+    readonly offset?: number;
 	/** 同一条助手消息在一次流式过程中的稳定标识，用于前端归并增量。 */
 	readonly messageId: string;
 	/** 本帧的增量文本（不是累计值）。 */
 	readonly delta: string;
 }
 
+/** 模型接口公开返回的思考增量；不含工具参数、签名或宿主内部信息。 */
+export interface TaskThinkingDeltaEvent extends TaskEventBase {
+ readonly type:"thinking_delta"; readonly messageId:string; readonly delta:string; readonly offset?:number;
+}
+/** 定期落盘的累积快照，用于首连补发、断线恢复和轮询兜底。 */
+export interface TaskMessageProgressEvent extends TaskEventBase {
+ readonly type:"message_progress"; readonly messageId:string; readonly channel:"answer"|"thinking"; readonly text:string; readonly complete:boolean;
+}
+
 /** 用户在执行期间插入的消息。 */
 export interface TaskUserMessageEvent extends TaskEventBase {
 	readonly type: "user_message";
+    readonly references?: readonly { fileId: string; name: string; sha256: string }[];
 	readonly text: string;
 	/**
 	 * 投递语义。
@@ -124,6 +139,8 @@ export type TaskEvent =
 	| TaskArtifactEvent
 	| TaskAssistantMessageEvent
 	| TaskAssistantDeltaEvent
+    | TaskThinkingDeltaEvent
+    | TaskMessageProgressEvent
 	| TaskUserMessageEvent
 	| TaskUsageEvent;
 

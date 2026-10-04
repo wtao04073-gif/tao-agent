@@ -40,7 +40,7 @@ interface Subscriber {
 /** 把事件序列化成 SSE 帧。`id` 用 `seq`，供 `Last-Event-ID` 重连。 */
 export function toSseFrame(event: TaskEvent): string {
 	return [
-		`id: ${event.seq}`,
+		...(event.seq>0 ? [`id: ${event.seq}`] : []),
 		`event: ${event.type}`,
 		`data: ${JSON.stringify(event)}`,
 		"",

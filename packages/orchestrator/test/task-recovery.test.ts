@@ -118,7 +118,7 @@ describe("持久化 · 重启恢复", () => {
 		expect(restored?.reason).toContain("重启");
 	});
 
-	it("QUEUED 与已取消任务原样恢复", async () => {
+	it("QUEUED 重启中断，已取消任务保持终态", async () => {
 		const store = new MemoryTaskStore();
 		const before = new TaskOrchestrator(factoryWith(scriptedRunner()), {
 			store,
@@ -135,7 +135,7 @@ describe("持久化 · 重启恢复", () => {
 		});
 		after.recover();
 
-		expect(after.get("queued-1")?.status).toBe(TaskStatus.Queued);
+		expect(after.get("queued-1")?.status).toBe(TaskStatus.Interrupted);
 		expect(after.get("cancel-1")?.status).toBe(TaskStatus.Cancelled);
 		expect(after.get("cancel-1")?.reason).toBe("用户取消");
 	});
@@ -156,7 +156,8 @@ describe("持久化 · 重启恢复", () => {
 		after.recover();
 
 		const replayed = after.events("evt-1");
-		expect(replayed).toHaveLength(total);
+		expect(replayed).toHaveLength(total + 1);
+        expect(replayed.at(-1)).toMatchObject({ type: "status", to: TaskStatus.Interrupted });
 		const seqs = replayed.map((e) => e.seq);
 		expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
 	});

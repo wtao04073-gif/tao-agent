@@ -92,6 +92,7 @@ export interface SubmitOptions {
 	readonly activeTools?: readonly string[];
 	/** 多轮续聊时本轮之前的历史问答。 */
 	readonly history?: RunnerSpec["history"];
+    readonly inputReferences?: RunnerSpec["inputReferences"];
 	/** 本次运行注入的技能（智能体挂载的技能 + 本次显式选择的技能）。 */
 	readonly skills?: RunnerSpec["skills"];
 }
@@ -196,8 +197,8 @@ export class TaskOrchestrator {
 	 * 从持久化存储恢复任务到内存（进程重启后调用一次）。
 	 *
 	 * 恢复语义见 [M5-1](../../../docs/M5.md)：
-	 *  - 终态、QUEUED、AWAIT_CONFIRM 原样恢复；
-	 *  - **RUNNING 改写为 INTERRUPTED** —— 执行器随旧进程消失，会话上下文也丢了，
+	 *  - 终态与已经中断的任务原样恢复；
+	 *  - **QUEUED/RUNNING/AWAIT_CONFIRM/EXCEEDED 改写为 INTERRUPTED** —— 执行器随旧进程消失，会话上下文也丢了，
 	 *    恢复成 RUNNING 是没有执行器的僵尸态；用户可从检查点重试。
 	 *
 	 * 恢复**不重建 Runner**（无法续跑会话），只恢复可读的任务列表与事件历史，
@@ -231,11 +232,11 @@ export class TaskOrchestrator {
 			const maxSeq = Math.max(eventMaxSeq, changeMaxSeq);
 			this.seqCursor.set(stored.taskId, maxSeq);
 
-			if (stored.status === TaskStatus.Running) {
+			if (!isTerminal(stored.status) && stored.status !== TaskStatus.Interrupted) {
 				// 落一条 RUNNING → INTERRUPTED 的变更，让恢复结果也持久化，
 				// 下次重启不会重复判定
 				const at = this.now();
-				const reason = "服务重启，任务中断，可从最后成功检查点重试";
+				const reason = "服务重启，执行上下文已失效；请新建关联原任务的重试";
 				const recovered: TaskRecord = {
 					...stored,
 					status: TaskStatus.Interrupted,
@@ -257,7 +258,7 @@ export class TaskOrchestrator {
 						tenant: stored.tenant,
 						at,
 						type: "status",
-						from: TaskStatus.Running,
+						from: stored.status,
 						to: TaskStatus.Interrupted,
 						reason,
 					},
@@ -333,6 +334,7 @@ export class TaskOrchestrator {
 				// 档位显式透传；缺省由 Runner 侧回落旗舰（RunnerSpec.tier 默认）
 				...(options.tier === undefined ? {} : { tier: options.tier }),
 				...(options.history === undefined ? {} : { history: options.history }),
+                ...(options.inputReferences === undefined ? {} : { inputReferences: options.inputReferences }),
 				...(options.skills === undefined ? {} : { skills: options.skills }),
 			});
 		} catch (error) {
@@ -424,13 +426,13 @@ export class TaskOrchestrator {
 			await runner.prompt(prompt, userText);
 			const current = this.tasks.get(taskId) as TaskRecord;
 			// 若执行过程中已进入终态（例如被取消），不再覆盖
-			if (!isTerminal(current.status) && current.status !== TaskStatus.AwaitConfirm) {
+			if (current.status === TaskStatus.Running) {
 				await this.transition(taskId, TaskStatus.Succeeded);
 			}
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
 			// 失败保留已产出的中间物（验收要求），只改状态不清 artifacts
-			await this.transition(taskId, TaskStatus.Failed, reason);
+			if (![TaskStatus.Exceeded, TaskStatus.Interrupted].includes((this.tasks.get(taskId) as TaskRecord).status as "EXCEEDED" | "INTERRUPTED") && !isTerminal((this.tasks.get(taskId) as TaskRecord).status)) await this.transition(taskId, TaskStatus.Failed, reason);
 		}
 		return this.tasks.get(taskId) as TaskRecord;
 	}
@@ -449,14 +451,26 @@ export class TaskOrchestrator {
 
 	/** 取消任务。这是唯一能中止进行中工具的手段。 */
 	async cancel(taskId: string, reason: string): Promise<TaskRecord> {
-		const runner = this.runners.get(taskId);
-		if (runner !== undefined) await runner.abort(reason);
-		return this.transition(taskId, TaskStatus.Cancelled, reason);
+		const record = await this.transition(taskId, TaskStatus.Cancelled, reason);
+        const runner = this.runners.get(taskId);
+        if (runner !== undefined) await runner.abort(reason);
+        return record;
 	}
 
 	/** 用户确认高危动作后继续执行。 */
-	async confirm(taskId: string): Promise<TaskRecord> {
-		return this.transition(taskId, TaskStatus.Running);
+	async confirm(taskId: string, actionId?: string): Promise<TaskRecord> {
+		const runner = this.runners.get(taskId);
+		if (!runner?.confirmAction) throw new Error("执行上下文不可恢复，请重新提交任务");
+		const actions = runner.listActions?.() ?? [];
+		const pending = actions.filter(a => a.status === "pending");
+		const chosen = actionId ? actions.find(a => a.actionId === actionId) : pending.length === 1 ? pending[0] : actions.length === 1 ? actions[0] : undefined;
+		if (!chosen) throw new Error("请指定唯一的待确认 actionId");
+		if (chosen.status === "approved" || chosen.status === "executed") return this.tasks.get(taskId) as TaskRecord;
+		if (chosen.status !== "pending" || chosen.expiresAt <= this.now()) throw new Error("动作已过期或不再等待确认");
+		await this.transition(taskId, TaskStatus.Running);
+		try { await runner.confirmAction(chosen.actionId); }
+		catch (error) { await this.transition(taskId, TaskStatus.Failed, "授权失败，动作未执行"); throw error; }
+		return this.tasks.get(taskId) as TaskRecord;
 	}
 
 	/** 用户拒绝高危动作 → 取消任务。 */

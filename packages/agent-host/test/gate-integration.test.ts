@@ -11,7 +11,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core/harness/contex
 import { MemoryStorage } from "../../../vendor/pi/agent/src/harness/session/memory.ts";
 import { StorageBackedSession } from "../../../vendor/pi/agent/src/harness/session/session.ts";
 import { type AuditEntry, createPermissionGate, type PlatformTool } from "@tao/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { InProcessRunnerFactory } from "../src/in-process-runner.ts";
 
 const WORKSPACE = "/workspace/task-1";
@@ -200,10 +200,17 @@ describe("权限门 × 真实内核", () => {
 			fauxAssistantMessage([fauxToolCall("read_file", { path: "out.xlsx" })]),
 			fauxAssistantMessage("done"),
 		]);
-		await runner.prompt("覆盖写入");
+		const running = runner.prompt("覆盖写入");
+        await vi.waitFor(() => expect(decisions).toEqual(["await_confirm"]));
 
 		expect(readPaths).toEqual([]);
 		expect(decisions).toEqual(["await_confirm"]);
+        const actionId = runner.listActions!()[0]!.actionId;
+        await runner.confirmAction!(actionId);
+        await running;
+        await runner.confirmAction!(actionId);
+        expect(readPaths).toEqual(["out.xlsx"]);
+        expect(runner.listActions!()[0]!.status).toBe("executed");
 
 		await runner.close();
 	});
