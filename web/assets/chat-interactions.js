@@ -23,6 +23,13 @@
  }
  function copy(value,button){navigator.clipboard.writeText(value).then(function(){var old=button.textContent;button.textContent='已复制';setTimeout(function(){button.textContent=old;},1500);}).catch(function(){button.textContent='复制失败，请手动选择';});}
  function renderAnswer(element,value){element.textContent='';element.append(markdown(value));element.dataset.raw=value;var bar=document.createElement('div');bar.className='message-actions';var button=text('button','复制回答');button.type='button';button.addEventListener('click',function(){copy(value,button);});bar.append(button);element.append(bar);}
+ function errorMessage(reason){
+  var message=String(reason||'');
+  if(/ModelAccountTpmRateLimitExceeded|Tokens Per Minute|\bTPM\b/i.test(message))return '模型的每分钟 Token 限额已用尽，本次未能完成。请稍后重新发送；若持续出现，请管理员检查方舟模型配额。';
+  if(/\b429\b|TooManyRequests|RateLimitExceeded/i.test(message))return '模型服务暂时限流，本次未能完成。请稍后重新发送，避免连续点击。';
+  if(/assistant_error|内核运行失败|\"error\"\s*:|\"code\"\s*:/.test(message))return '模型服务暂时无法完成请求，请稍后重试；若持续失败，请联系管理员查看任务记录。';
+  return message||'任务未能完成，请稍后重试。';
+ }
  var previewId=0,objectURL=null;
  function clearPreview(){previewId++;if(objectURL){URL.revokeObjectURL(objectURL);objectURL=null;}var host=document.getElementById('artifactPreview');if(host)host.remove();}
  function preview(taskId,name){
@@ -45,5 +52,5 @@
    if(data.truncated)host.append(text('p','内容较长，仅展示部分预览，请下载完整文件。'));
   }).catch(function(){if(generation===previewId)host.append(text('p','网络异常，请重新点击预览'));});
  }
- global.ChatUI={markdown:markdown,renderAnswer:renderAnswer,preview:preview,clearPreview:clearPreview};
+ global.ChatUI={markdown:markdown,renderAnswer:renderAnswer,errorMessage:errorMessage,preview:preview,clearPreview:clearPreview};
 })(window);

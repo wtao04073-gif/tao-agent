@@ -71,3 +71,14 @@ body.workspace-active #landing, body.workspace-active #session { display: none !
 @media (max-width: 1100px) { .ws-content { padding: 48px 32px; } .ws-scenario-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ws-task-row, .ws-document-row { flex-wrap: wrap; } .ws-task-row > .ws-actions, .ws-document-row > .ws-actions { margin-left: 53px; } }
 @media (max-width: 720px) { .ws-content { padding: 72px 20px 40px; } .ws-heading { align-items: flex-start; flex-direction: column; margin-bottom: 25px; gap: 16px; } .ws-heading h1 { font-size: 26px; } .ws-toolbar { flex-wrap: wrap; gap: 8px; } .ws-search { flex-basis: 100%; } .ws-select { max-width: none; flex: 1; } .ws-scenario-grid { grid-template-columns: 1fr; } .ws-form { padding: 22px 18px; } .ws-task-row, .ws-document-row { gap: 12px; padding: 16px; } .ws-actions { justify-content: flex-start; } .ws-task-row > .ws-actions, .ws-document-row > .ws-actions { margin-left: 49px; } .ws-row-main { flex-basis: calc(100% - 55px); } }
 @media (prefers-reduced-motion: reduce) { .ws-scenario-card { transition: none; } }
+
+/* 知识入库与真实切片浏览。 */
+.ws-knowledge-hint{font-size:12px;color:#75796d;line-height:1.8;margin:-12px 0 24px}
+.ws-ingest-row{display:flex;align-items:center;gap:16px;padding:14px 18px;margin:8px 0;background:#f0f3ed;border:1px solid #dfe6d9;border-radius:12px}
+.ws-ingest-row h3{font-size:13px;margin:0;overflow-wrap:anywhere}.ws-ingest-row .ws-inline-error{margin-bottom:0}
+.ws-chunk-detail{margin-top:30px;padding:24px;border:1px solid #d9e1d1;background:#f4f6ef;border-radius:16px;scroll-margin-top:20px}
+.ws-chunk-detail[hidden]{display:none!important}.ws-chunk-detail>.ws-section-title{margin-top:0;font-size:17px;color:#3f5039;overflow-wrap:anywhere}
+.ws-chunk-detail .ws-list{margin-top:20px}.ws-chunk-detail .ws-hit-text{max-height:360px;overflow:auto;color:#504e45}
+.ws-chunk-detail .ws-select{flex:none}.ws-pagination{display:flex;align-items:center;justify-content:center;gap:16px;margin-top:18px}
+.ws-jobs:empty{display:none}.ws-meta{color:#777368}
+@media(max-width:720px){.ws-chunk-detail{padding:16px}.ws-ingest-row{flex-wrap:wrap}.ws-ingest-row .ws-row-main{flex-basis:100%}}

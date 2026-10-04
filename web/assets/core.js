@@ -483,6 +483,100 @@
 	}
 	bindTicketDownloadClicks();
 
+	/* 应用内对话框：共用输入、确认与提示样式，不调用浏览器阻塞式弹窗。 */
+	var dialogSequence = 0, dialogQueue = Promise.resolve();
+	var dialogStyle = document.createElement('link');
+	dialogStyle.rel = 'stylesheet'; dialogStyle.href = '/assets/dialog.css?v=app-dialog-1';
+	document.head.appendChild(dialogStyle);
+	function showDialog(options) {
+		return new Promise(function (resolve) {
+			var id = 'app-dialog-' + (++dialogSequence), opener = document.activeElement;
+			var busy = false, settled = false, composing = false, result = null;
+			function element(tag, cls, text) {
+				var el = document.createElement(tag); el.className = cls || '';
+				if (text !== undefined) el.textContent = text;
+				return el;
+			}
+			var dialog = element('dialog', 'app-dialog' + (options.danger ? ' app-dialog-danger' : ''));
+			dialog.setAttribute('aria-labelledby', id + '-title');
+			dialog.setAttribute('aria-describedby', id + '-description');
+			var form = element('form', 'app-dialog-form'); form.noValidate = true;
+			var head = element('div', 'app-dialog-head'), heading = element('h2', '', options.title || '请确认'); heading.id = id + '-title';
+			var close = element('button', 'app-dialog-close', '×'); close.type = 'button'; close.setAttribute('aria-label', '关闭弹窗');
+			head.append(heading, close);
+			var description = element('p', 'app-dialog-description', options.description || ''); description.id = id + '-description';
+			form.append(head, description);
+			var field = null;
+			if (options.kind === 'prompt') {
+				var label = element('label', 'app-dialog-label', options.label || '请输入内容'); label.htmlFor = id + '-input';
+				field = element(options.multiline ? 'textarea' : 'input', 'app-dialog-input'); field.id = id + '-input';
+				if (options.multiline) field.rows = 4; else field.type = 'text';
+				field.value = options.value || ''; field.placeholder = options.placeholder || '';
+				field.setAttribute('aria-required', 'true'); field.setAttribute('aria-describedby', id + '-error');
+				form.append(label, field);
+			}
+			var error = element('p', 'app-dialog-error'); error.id = id + '-error'; error.setAttribute('role', 'alert');
+			var footer = element('div', 'app-dialog-footer');
+			var cancel = element('button', 'app-dialog-button', options.cancelText || '取消'); cancel.type = 'button';
+			var submit = element('button', 'app-dialog-button app-dialog-primary', options.confirmText || '确定'); submit.type = 'submit';
+			if (options.kind !== 'alert') footer.append(cancel);
+			footer.append(submit); form.append(error, footer); dialog.append(form);
+			function cleanup() {
+				if (settled) return; settled = true;
+				global.removeEventListener('hashchange', onRouteChange);
+				dialog.remove();
+				if (opener && opener.isConnected && !opener.disabled) opener.focus({ preventScroll: true });
+				resolve(result);
+			}
+			function dismiss() { if (!busy) { result = null; dialog.close(); } }
+			function onRouteChange() { dismiss(); }
+			function setBusy(value) {
+				busy = value; form.setAttribute('aria-busy', String(value));
+				[submit, cancel, close, field].filter(Boolean).forEach(function (el) { el.disabled = value; });
+				submit.textContent = value ? (options.busyText || '正在提交…') : (options.confirmText || '确定');
+			}
+			close.addEventListener('click', dismiss); cancel.addEventListener('click', dismiss);
+			dialog.addEventListener('cancel', function (event) { event.preventDefault(); dismiss(); });
+			dialog.addEventListener('close', cleanup);
+			if (field) field.addEventListener('input', function () { error.textContent = ''; field.removeAttribute('aria-invalid'); });
+			form.addEventListener('compositionstart', function () { composing = true; });
+			form.addEventListener('compositionend', function () { composing = false; });
+			form.addEventListener('keydown', function (event) {
+				if (event.isComposing) return;
+				if (options.multiline && event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); form.requestSubmit(); }
+			});
+			form.addEventListener('submit', async function (event) {
+				event.preventDefault(); if (busy || composing) return;
+				var value = field ? field.value.trim() : true;
+				if (field && !value) {
+					error.textContent = options.requiredMessage || '请填写内容后再提交';
+					field.setAttribute('aria-invalid', 'true'); field.focus(); return;
+				}
+				setBusy(true); error.textContent = '';
+				try {
+					result = options.onSubmit ? await options.onSubmit(value) : value;
+					dialog.close();
+				} catch (e) {
+					error.textContent = e && /failed to fetch|networkerror|load failed/i.test(e.message || '') ? '网络连接异常，请稍后重试，填写的内容已保留。' : e && e.message || '提交失败，请稍后重试';
+					setBusy(false); (field || submit).focus();
+				}
+			});
+			global.addEventListener('hashchange', onRouteChange);
+			document.body.append(dialog); dialog.showModal();
+			// 输入框自动聚焦；危险操作默认落在取消，避免回车误操作。
+			(field || (options.danger ? cancel : submit)).focus();
+		});
+	}
+	var Dialog = {
+		open: function (options) {
+			var pending = dialogQueue.then(function () { return showDialog(options); });
+			dialogQueue = pending.catch(function () {}); return pending;
+		},
+		prompt: function (options) { return this.open(Object.assign({}, options, { kind: 'prompt' })); },
+		confirm: function (options) { return this.open(Object.assign({}, options, { kind: 'confirm' })).then(function (value) { return value !== null; }); },
+		alert: function (options) { return this.open(Object.assign({}, options, { kind: 'alert' })); }
+	};
+
 	/* --------------------------------------------------------------- 导出 */
 
 	global.App = {
@@ -497,6 +591,7 @@
 		Theme: Theme,
 		Toast: Toast,
 		Modal: Modal,
+		Dialog: Dialog,
 		STATUS: STATUS,
 		INDUSTRY: INDUSTRY,
 		statusTag: statusTag,
