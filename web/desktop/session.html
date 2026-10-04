@@ -75,7 +75,7 @@
   </div>
 </div>
 
-<script src="/assets/core.js"></script>
+<script src="/assets/core.js?v=app-dialog-1"></script>
 <script>
 (function () {
 	var taskId = new URLSearchParams(location.search).get("task");
@@ -278,10 +278,16 @@
 			else { App.Toast.show("已提交", r.data.message || "", "ok"); setTimeout(refreshTask, 500); }
 		};
 	}
-	document.getElementById("btnCancel").addEventListener("click", function () {
-		if (!confirm("确认取消该任务？进行中的动作将被中止。")) return;
-		postAction("cancel", { reason: "用户在页面取消" }, this)();
-	});
+    document.getElementById('btnCancel').addEventListener('click', async function () {
+        await App.Dialog.confirm({ title: '取消该任务？', danger: true,
+            description: '正在执行的任务将停止，已有产物会保留。', confirmText: '取消任务', cancelText: '继续执行',
+            onSubmit: async function () {
+                var r = await App.api('POST', '/api/tasks/' + encodeURIComponent(taskId) + '/cancel', { reason: '用户在页面取消' });
+                if (!r.ok) throw new Error(r.data && r.data.error || '取消失败，请稍后重试');
+                setTimeout(refreshTask, 500); return true;
+            }
+        });
+    });
 	document.getElementById("btnConfirm").addEventListener("click", function () { postAction("confirm", {}, this)(); });
 	document.getElementById("btnReject").addEventListener("click", function () { postAction("reject", { reason: "用户拒绝了该高危动作" }, this)(); });
 	document.getElementById("btnSteer").addEventListener("click", async function () {

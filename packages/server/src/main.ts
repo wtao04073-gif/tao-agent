@@ -317,6 +317,7 @@ const { models, model, modelForTier } = createModelRuntime({
 		apiKey: config.modelApiKey,
 		modelName: config.modelName,
 		maxTokens: config.modelMaxTokens,
+		...(config.modelContextWindow === undefined ? {} : { contextWindow: config.modelContextWindow }),
 		...(config.modelInputPriceYuan === undefined ? {} : { inputCostPerMillion: config.modelInputPriceYuan }),
 		...(config.modelOutputPriceYuan === undefined ? {} : { outputCostPerMillion: config.modelOutputPriceYuan }),
 		...(config.modelCacheReadPriceYuan === undefined

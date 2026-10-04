@@ -2,6 +2,15 @@
 (function (global) {
   "use strict";
   var hooks, page, content, route = "chat", revision = 0, initialized = false;
+  var knowledgeJobs = [], knowledgeJobKey = '', knowledgeNotify = function () {}, routeCleanup = function () {};
+  function knowledgeChanged(refreshDocuments) {
+    if (knowledgeJobKey) {
+      try { sessionStorage.setItem(knowledgeJobKey, JSON.stringify(knowledgeJobs.filter(function (e) {
+        return e.job.jobId && e.job.status !== 'ready';
+      }).map(function (e) { return { name: e.name, jobId: e.job.jobId }; }))); } catch (e) { /* 存储不可用时继续使用内存。 */ }
+    }
+    knowledgeNotify(refreshDocuments);
+  }
   var titles = { tasks: "任务中心", scenarios: "场景", knowledge: "知识库" };
   var statusNames = { QUEUED: "排队中", RUNNING: "执行中", AWAIT_CONFIRM: "等待确认", SUCCEEDED: "已完成", FAILED: "失败", CANCELLED: "已取消", EXCEEDED: "等待继续", INTERRUPTED: "已中断", active: "进行中", done: "已完成", archived: "已归档" };
   function node(tag, cls, text) {
@@ -41,6 +50,7 @@
     if (hooks.showChat) hooks.showChat();
   }
   function openChat(action) {
+    routeCleanup(); routeCleanup = function () {};
     // Render synchronously so shell callbacks can reveal a session immediately.
     if (location.hash !== "#chat") location.hash = "chat";
     route = "chat"; revision++; restoreChat();
@@ -52,6 +62,7 @@
     head.append(text); if (action) head.append(action); content.append(head);
   }
   function renderRoute() {
+    routeCleanup(); routeCleanup = function () {};
     var next = location.hash.replace(/^#\/?/, "").split("?")[0];
     route = titles[next] ? next : "chat";
     revision++;
@@ -229,75 +240,204 @@
     var first = form.querySelector("input, textarea, select"); if (first) first.focus();
   }
   async function knowledge(version) {
-    var picker = node("input"); picker.type = "file"; picker.multiple = true; picker.hidden = true;
-    heading("让你的知识，成为协作的底气", "上传常用资料，搜索内容片段，随时引用到对话。", button("＋ 上传资料", function () { picker.click(); }, "ws-button ws-primary"));
-    var search = input("搜索知识库", "搜索文件名或资料中的内容…"), toolbar = node("form", "ws-toolbar"), searchButton = node("button", "ws-button", "搜索"); searchButton.type = "submit";
-    toolbar.append(search, searchButton, button("刷新", function () { load(); }));
-    var progress = node("p", "ws-upload-progress"), error = node("p", "ws-inline-error"), resultTitle = node("h2", "ws-section-title", "我的资料"), list = node("div", "ws-list");
-    progress.setAttribute("role", "status"); error.setAttribute("role", "alert"); content.append(picker, toolbar, progress, error, resultTitle, list);
-    var documents = [], request = 0, loadRequest = 0, timer, uploading = false;
+    // 仅保存解析任务编号，按服务端确认的用户和工作区隔离；重载后重新查询真实状态。
+    if (!knowledgeJobKey) {
+      try {
+        var me = await api('GET', '/api/me');
+        if (!valid(version) || route !== 'knowledge') return;
+        if (me.tenantId && me.workspaceId && me.userId) {
+          knowledgeJobKey = 'tao.knowledge.jobs:' + JSON.stringify([me.tenantId, me.workspaceId, me.userId]);
+          var saved = JSON.parse(sessionStorage.getItem(knowledgeJobKey) || '[]');
+          if (Array.isArray(saved)) saved.forEach(function (e) {
+            if (e && typeof e.name === 'string' && typeof e.jobId === 'string' && !knowledgeJobs.some(function (x) { return x.job.jobId === e.jobId; }))
+              knowledgeJobs.push({ name: e.name, job: { jobId: e.jobId, status: 'queued' } });
+          });
+        }
+      } catch (e) { /* 不因浏览器存储不可用阻断知识库。 */ }
+    }
+    if (!valid(version) || route !== 'knowledge') return;
+    var picker = node('input'); picker.type = 'file'; picker.multiple = true; picker.hidden = true;
+    picker.accept = '.txt,.md,.csv,.docx,.xlsx';
+    var upload = button('＋ 上传资料', function () { picker.click(); }, 'ws-button ws-primary');
+    heading('让你的知识，成为协作的底气', '上传资料，自动解析切片，检索内容并引用到对话。', upload);
+    var retrievalHint = node('p', 'ws-knowledge-hint', '支持 TXT、Markdown、CSV、DOCX、XLSX。扫描件和图片暂不支持文字识别。');
+    content.append(retrievalHint);
+    api('GET', '/api/capabilities').then(function (data) {
+      if (!valid(version) || route !== 'knowledge') return;
+      var k = data.knowledge || {}, modes = { keyword: '关键词检索', semantic: '语义检索', hybrid: '语义与关键词混合检索' };
+      if (modes[k.retrieval]) retrievalHint.textContent += ' 当前使用' + modes[k.retrieval] + '。';
+      if (k.rag && k.rag.pendingDocuments > 0) retrievalHint.textContent += ' 部分资料的向量索引待更新。';
+    }).catch(function () { /* 能力提示不可用时仍允许检索。 */ });
+    var search = input('检索知识切片', '输入问题或关键词，查找相关片段…');
+    var toolbar = node('form', 'ws-toolbar'), searchButton = node('button', 'ws-button', '检索切片'); searchButton.type = 'submit';
+    toolbar.append(search, searchButton, button('全部资料', function () { search.value = ''; load(); }));
+    var progress = node('p', 'ws-upload-progress'), error = node('p', 'ws-inline-error');
+    var jobsList = node('section', 'ws-jobs'), resultTitle = node('h2', 'ws-section-title', '我的资料'), list = node('div', 'ws-list');
+    var detail = node('section', 'ws-chunk-detail'); detail.hidden = true; detail.setAttribute('aria-label', '文档切片');
+    progress.setAttribute('role', 'status'); error.setAttribute('role', 'alert'); jobsList.setAttribute('aria-label', '解析任务');
+    content.append(picker, toolbar, progress, error, jobsList, resultTitle, list, detail);
+    var documents = [], request = 0, loadRequest = 0, detailRequest = 0, timer, pollTimer, polling = false, uploading = false;
+    var jobs = knowledgeJobs;
+    routeCleanup = function () { clearTimeout(timer); clearTimeout(pollTimer); knowledgeNotify = function () {}; };
+    function current() { return valid(version) && route === 'knowledge'; }
     function actionsFor(doc) {
-      var actions = node("div", "ws-actions");
-      actions.append(button("预览", function () { if (hooks.openPreview) hooks.openPreview({ kind: "file", name: doc.name }); }));
-      var cite = button("引用到对话", function () {
-        if (!hooks.attachFile) return;
-        // The shell may reject attaching while its task is running.
-        api("POST","/api/workspace/files/reference",{name:doc.fileName||doc.name}).then(function(file){var attached=hooks.attachFile(file);if(attached!==false)openChat();}).catch(function(e){notice(error,e.message);});
+      var actions = node('div', 'ws-actions');
+      if (doc.documentId) actions.append(button('查看切片', function () { showChunks(doc); }));
+      if (doc.fileName) actions.append(button('预览原文', function () { if (hooks.openPreview) hooks.openPreview({ kind: 'file', name: doc.fileName }); }));
+      var cite = button('引用到对话', async function () {
+        cite.disabled = true;
+        try {
+          var file = await api('POST', '/api/workspace/files/reference', { name: doc.fileName });
+          if (!current()) return;
+          var attached = hooks.attachFile(file); if (attached !== false) openChat();
+        } catch (e) { if (current()) notice(error, e.message); }
+        finally { cite.disabled = !doc.fileName || !hooks.attachFile; }
       });
-      cite.disabled = !doc.fileName; actions.append(cite); return actions;
+      cite.disabled = !doc.fileName || !hooks.attachFile; actions.append(cite); return actions;
+    }
+    function chunkCard(chunk, index) {
+      var card = node('article', 'ws-search-hit');
+      card.append(node('h3', '', '切片 ' + (index + 1)), node('p', 'ws-meta', '起始段落 ' + chunk.position + ' · ' + (chunk.text || '').length + ' 字符' + (chunk.documentVersion ? ' · 版本 ' + chunk.documentVersion : '')));
+      card.append(node('p', 'ws-hit-text', chunk.text || '')); return card;
+    }
+    async function showChunks(doc) {
+      var seq = ++detailRequest, selectedVersion = doc.version || 1;
+      detail.hidden = false; detail.replaceChildren();
+      var title = node('h2', 'ws-section-title', doc.name + ' · 文档切片'); title.tabIndex = -1;
+      var controls = node('div', 'ws-toolbar'), select = node('select', 'ws-select'); select.setAttribute('aria-label', '文档版本');
+      for (var v = selectedVersion; v >= 1; v--) { var o = node('option', '', '版本 ' + v); o.value = String(v); select.append(o); }
+      var query = input('筛选当前文档切片', '在当前版本切片中查找…');
+      controls.append(select, query, button('关闭切片', function () { detailRequest++; detail.hidden = true; }));
+      var meta = node('p', 'ws-description'), body = node('div', 'ws-list'), pagination = node('div', 'ws-pagination');
+      detail.append(title, controls, meta, body, pagination); title.focus(); detail.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      var chunks = [], pageIndex = 0, versionRequest = 0;
+      function draw() {
+        var q = query.value.trim().toLowerCase();
+        var filtered = chunks.map(function (c, i) { return { chunk: c, index: i }; }).filter(function (item) { return !q || item.chunk.text.toLowerCase().includes(q); });
+        var pages = Math.max(1, Math.ceil(filtered.length / 12)); pageIndex = Math.min(pageIndex, pages - 1);
+        body.replaceChildren(); pagination.replaceChildren();
+        meta.textContent = '共 ' + chunks.length + ' 个切片' + (q ? ' · 匹配 ' + filtered.length + ' 个' : '') + ' · 可供智能体检索引用';
+        filtered.slice(pageIndex * 12, (pageIndex + 1) * 12).forEach(function (item) { body.append(chunkCard(item.chunk, item.index)); });
+        if (!filtered.length) message(body, '当前条件下没有切片。');
+        if (pages > 1) {
+          var prev = button('上一页', function () { pageIndex--; draw(); }), next = button('下一页', function () { pageIndex++; draw(); });
+          prev.disabled = pageIndex === 0; next.disabled = pageIndex + 1 === pages;
+          pagination.append(prev, node('span', 'ws-meta', (pageIndex + 1) + ' / ' + pages), next);
+        }
+      }
+      async function readVersion() {
+        var req = ++versionRequest; message(body, '正在读取真实切片…'); pagination.replaceChildren(); meta.textContent = ''; query.disabled = true;
+        try {
+          var result = await api('GET', '/api/knowledge/' + encodeURIComponent(doc.documentId) + '/versions/' + encodeURIComponent(select.value));
+          if (!current() || seq !== detailRequest || req !== versionRequest) return;
+          chunks = result.chunks || []; pageIndex = 0; query.disabled = false; draw();
+        } catch (e) { if (current() && seq === detailRequest && req === versionRequest) { message(body, e.message, true); body.append(button('重新读取', readVersion)); } }
+      }
+      query.addEventListener('input', function () { pageIndex = 0; draw(); }); select.addEventListener('change', readVersion); await readVersion();
     }
     function drawDocs() {
-      list.replaceChildren(); resultTitle.textContent = "我的资料 · " + documents.length;
-      if (!documents.length) { message(list, "知识库还空着。上传一份资料，让后续对话有据可依。" ); return; }
+      if (!current()) return;
+      list.replaceChildren(); resultTitle.textContent = '我的资料 · ' + documents.length;
+      if (!documents.length) { message(list, '还没有已解析的资料。上传文件后，可在这里查看切片与检索结果。'); return; }
       documents.forEach(function (doc) {
-        var row = node("article", "ws-document-row"), info = node("div", "ws-row-main");
-        info.append(node("h3", "", doc.name), node("p", "ws-meta", (doc.indexed ? "已索引 · " + (doc.chunks || 0) + " 个片段" : "未索引") + " · " + date(doc.updatedAt)));
-        if (doc.error) info.append(node("p", "ws-inline-error", doc.error));
-        var actions = actionsFor(doc), remove = button("移除", async function () {
-          if (!global.confirm("从知识库移除「" + doc.name + "」？原始文件会保留。")) return;
-          remove.disabled = true;
-          try { await api("DELETE", "/api/knowledge/" + encodeURIComponent(doc.id)); if (valid(version)) load(); }
-          catch (e) { if (valid(version)) { notice(error, e.message); remove.disabled = false; } }
-        }, "ws-button ws-danger"); actions.append(remove); row.append(node("span", "ws-row-icon", "▤"), info, actions); list.append(row);
+        var row = node('article', 'ws-document-row'), info = node('div', 'ws-row-main');
+        info.append(node('h3', '', doc.name), node('p', 'ws-meta', '解析完成 · ' + doc.chunks + ' 个切片 · 版本 ' + (doc.version || 1) + ' · ' + date(doc.updatedAt)));
+        var actions = actionsFor(doc), remove = button('移除', async function () {
+          var removed = await App.Dialog.confirm({ title: '移除知识资料？', danger: true,
+            description: '将从知识库移除「' + doc.name + '」及其检索索引，原始文件会保留。',
+            confirmText: '移除资料', cancelText: '保留资料', busyText: '正在移除…',
+            onSubmit: async function () { await api('DELETE', '/api/knowledge/' + encodeURIComponent(doc.documentId)); return true; }
+          });
+          if (removed && current()) { detailRequest++; detail.hidden = true; load(); }
+        }, 'ws-button ws-danger');
+        actions.append(remove); row.append(node('span', 'ws-row-icon', '▤'), info, actions); list.append(row);
       });
     }
     async function load() {
-      var current = ++loadRequest; request++; message(list, "正在加载资料…"); notice(error, "");
-      try { var data = await api("GET", "/api/knowledge"); if (!valid(version) || current !== loadRequest) return; documents = (data.documents || []).map(function(d){return Object.assign({},d,{id:d.documentId,indexed:d.status==="ready",path:d.path});}); if (search.value.trim()) find(); else drawDocs(); }
-      catch (e) { if (valid(version) && current === loadRequest) { message(list, e.message, true); list.append(button("重新加载", load)); } }
+      if (!current()) return;
+      var seq = ++loadRequest; request++; message(list, '正在加载资料…');
+      try {
+        var data = await api('GET', '/api/knowledge'); if (!current() || seq !== loadRequest) return;
+        documents = data.documents || []; if (search.value.trim()) find(); else drawDocs();
+      } catch (e) { if (current() && seq === loadRequest) { message(list, e.message, true); list.append(button('重新加载', load)); } }
     }
     async function find() {
-      clearTimeout(timer); var q = search.value.trim(), current = ++request;
+      clearTimeout(timer); var q = search.value.trim(), seq = ++request;
       if (!q) { drawDocs(); return; }
-      message(list, "正在搜索相关内容…"); notice(error, "");
+      message(list, '正在检索相关切片…');
       try {
-        var data = await api("GET", "/api/knowledge?q=" + encodeURIComponent(q)); if (!valid(version) || current !== request) return;
-        list.replaceChildren(); var hits = data.hits || []; resultTitle.textContent = "搜索结果 · " + hits.length;
-        if (!hits.length) { message(list, "没有找到相关内容。试试其他关键词，或上传更多资料。" ); return; }
+        var data = await api('GET', '/api/knowledge?q=' + encodeURIComponent(q)); if (!current() || seq !== request) return;
+        list.replaceChildren(); var hits = data.hits || []; resultTitle.textContent = '切片命中 · ' + hits.length;
+        if (!hits.length) { message(list, '没有找到匹配切片，请尝试资料中的关键词。'); return; }
         hits.forEach(function (hit) {
-          var row = node("article", "ws-search-hit"), doc = documents.find(function (d) { return d.id === hit.chunk.documentId; }) || { name: hit.chunk.documentName };
-          row.append(node("h3", "", hit.chunk.documentName), node("p", "ws-hit-text", hit.chunk.text || ""), actionsFor(doc)); list.append(row);
+          var c = hit.chunk, doc = (data.documents || documents).find(function (d) { return d.documentId === c.documentId; }) || { name: c.documentName };
+          var row = node('article', 'ws-search-hit');
+          row.append(node('h3', '', c.documentName), node('p', 'ws-meta', '起始段落 ' + c.position + (c.documentVersion ? ' · 版本 ' + c.documentVersion : '') + (Number.isFinite(hit.score) ? ' · 匹配得分 ' + hit.score.toFixed(2) : '')), node('p', 'ws-hit-text', c.text || ''), actionsFor(doc)); list.append(row);
         });
-      } catch (e) { if (valid(version) && current === request) message(list, e.message, true); }
+      } catch (e) { if (current() && seq === request) message(list, e.message, true); }
     }
-    toolbar.addEventListener("submit", function (e) { e.preventDefault(); find(); });
-    search.addEventListener("input", function () { clearTimeout(timer); request++; timer = setTimeout(function () { if (valid(version)) find(); }, 300); });
-    picker.addEventListener("change", async function () {
-      var files = Array.from(picker.files || []); if (!files.length || uploading) return;
-      uploading = true; picker.disabled = true; notice(error, ""); var failed = [];
-      for (var i = 0; i < files.length; i++) {
-        var file = files[i]; if (valid(version)) notice(progress, "正在上传并入库 " + (i + 1) + "/" + files.length + "：" + file.name);
+    function drawJobs() {
+      if (!current()) return;
+      jobsList.replaceChildren();
+      if (!jobs.length) return;
+      jobsList.append(node('h2', 'ws-section-title', '上传与解析'));
+      jobs.forEach(function (entry) {
+        var j = entry.job, row = node('article', 'ws-ingest-row'), info = node('div', 'ws-row-main');
+        var names = { uploading: '上传中', queued: '等待解析', processing: '正在解析并生成切片', ready: '解析完成，可检索', failed: '解析失败', upload_failed: '上传或入库提交失败' };
+        info.append(node('h3', '', entry.name), node('p', 'ws-meta', names[j.status] || '等待更新'));
+        if (j.document) info.append(node('p', 'ws-meta', j.document.chunks + ' 个切片 · 版本 ' + (j.document.version || 1)));
+        if (j.error || entry.pollError) info.append(node('p', 'ws-inline-error', j.error || entry.pollError));
+        row.append(info);
+        if (j.status === 'failed') row.append(button('重试解析', async function (event) {
+          event.currentTarget.disabled = true;
+          try { var result = await api('POST', '/api/knowledge/jobs/' + encodeURIComponent(j.jobId) + '/retry', {}); entry.job = result.job; entry.pollError = ''; }
+          catch (e) { entry.pollError = e.message; }
+          knowledgeChanged();
+        }));
+        if (j.status === 'ready' && j.document) row.append(button('查看切片', function () { showChunks(j.document); }));
+        if (entry.pollError && ['queued','processing'].includes(j.status)) row.append(button('刷新状态', function () { entry.pollError = ''; schedulePoll(); }));
+        jobsList.append(row);
+      });
+    }
+    function schedulePoll() {
+      clearTimeout(pollTimer);
+      if (current() && !polling && jobs.some(function (e) { return ['queued','processing'].includes(e.job.status) && !e.pollError; })) pollTimer = setTimeout(pollJobs, 1200);
+    }
+    async function pollJobs() {
+      if (!current() || polling) return;
+      polling = true; var changed = false;
+      for (var entry of jobs.filter(function (e) { return ['queued','processing'].includes(e.job.status) && !e.pollError; })) {
+        if (!current()) break;
         try {
-          var uploaded = await App.upload("/api/files", file, "file");
-          if (!uploaded.ok) throw new Error(uploaded.data && uploaded.data.error || "上传失败");
-          var name = uploaded.data.name || (uploaded.data.path && uploaded.data.path.replace(/\\/g, "/").split("/").pop()) || file.name;
-          await api("POST", "/api/knowledge", { name: name, fileName:name });
-        } catch (e) { failed.push(file.name + "：" + e.message); }
+          var data = await api('GET', '/api/knowledge/jobs/' + encodeURIComponent(entry.job.jobId));
+          entry.job = data.job; if (data.job.status === 'ready') changed = true;
+        } catch (e) { entry.pollError = '状态暂不可用：' + e.message; }
       }
-      uploading = false; picker.disabled = false; picker.value = "";
-      if (valid(version)) { notice(progress, "已完成 " + (files.length - failed.length) + " 份资料入库。"); await load(); if (valid(version)) notice(error, failed.join("；")); }
+      polling = false;
+      knowledgeChanged(changed);
+    }
+    toolbar.addEventListener('submit', function (e) { e.preventDefault(); find(); });
+    search.addEventListener('input', function () { clearTimeout(timer); request++; timer = setTimeout(function () { if (current()) find(); }, 300); });
+    picker.addEventListener('change', async function () {
+      var files = Array.from(picker.files || []); if (!files.length || uploading) return;
+      uploading = true; picker.disabled = upload.disabled = true; notice(error, '');
+      for (var file of files) {
+        var entry = { name: file.name, job: { status: 'uploading' } }; jobs.push(entry); drawJobs();
+        try {
+          var uploaded = await App.upload('/api/files', file, 'file');
+          if (!uploaded.ok) throw new Error(uploaded.data && uploaded.data.error || '上传失败');
+          var name = uploaded.data.name || (uploaded.data.path && uploaded.data.path.replace(/\\/g, '/').split('/').pop()) || file.name;
+          var result = await api('POST', '/api/knowledge?async=true', { name: name, fileName: name });
+          if (!result.job || !result.job.jobId) throw new Error('未收到解析任务，请刷新资料列表确认状态后再上传。');
+          entry.job = result.job;
+        } catch (e) { entry.job = { status: 'upload_failed', error: e.message }; }
+        knowledgeChanged();
+      }
+      uploading = false; picker.disabled = upload.disabled = false; picker.value = '';
+      if (current()) notice(progress, '上传提交结束，解析状态将在下方持续更新。');
     });
-    await load();
+    knowledgeNotify = function (refreshDocuments) { drawJobs(); schedulePoll(); if (refreshDocuments && current()) load(); };
+    knowledgeNotify(); await load();
   }
   global.TaoWorkspace = {
     init: function (options) {
