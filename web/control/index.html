@@ -4,16 +4,18 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>管控平台 · Tao Agent</title>
-  <link rel="stylesheet" href="/control/control.css">
+  <link rel="stylesheet" href="/control/control.css"><link rel="stylesheet" href="/assets/dialog.css">
   <script src="/assets/core.js" defer></script>
   <script src="/control/control.js" defer></script>
+  <script src="/control/settings.js" defer></script>
 </head>
 <body>
   <a class="skip" href="#main">跳到主内容</a>
   <aside class="sidebar">
-    <a class="brand" href="/control/"><span class="brand-icon">T</span><span>Tao Agent<small>管控平台</small></span></a>
+    <a class="brand" href="/control/"><span class="brand-icon">T</span><span><b data-brand-name>Tao Agent</b><small>管控平台</small></span></a>
     <p class="nav-label">运行管理</p>
     <nav aria-label="管控导航">
+      <a href="#settings" class="nav-link">系统配置</a><a href="#knowledgeAdmin" class="nav-link">知识库索引</a><a href="#accounts" class="nav-link">用户管理</a><a href="#observability" class="nav-link">运行观测</a><a href="#evaluations" class="nav-link">评测中心</a>
       <a href="#usage" class="nav-link" aria-current="page"><span aria-hidden="true">◫</span> 用量总览</a>
       <a href="#audit" class="nav-link"><span aria-hidden="true">≡</span> 审计日志</a>
     </nav>
@@ -24,7 +26,12 @@
     <main id="main">
       <div class="page-heading"><div><p class="eyebrow">运行管理</p><h1>让每一次执行，清晰可见。</h1><p class="muted">从实际用量到操作审计，掌握当前租户的运行情况。</p></div><span class="admin-badge">管理员专属</span></div>
       <p id="accessError" class="notice error" role="alert" hidden></p>
-      <div id="panel" hidden>
+      <section id="settings" class="card"><h2>系统配置</h2><p>保存草稿后可测试连接，再应用到新任务。有运行中任务时请等待完成。空白密钥保持原值，清除需勾选。</p><p id="configStatus" role="status">正在加载配置…</p><div id="configuration"></div><div class="config-actions"><button id="saveConfig">保存草稿</button><button id="applyConfig" class="primary">应用配置</button><button data-test-connection="model">测试模型（消耗少量额度）</button><button data-test-connection="embedding">测试嵌入</button><button data-test-connection="search">测试搜索</button><button data-test-connection="mcp">测试 MCP 工具目录</button><button id="suspendModel">暂停模型调用</button><button id="exportConfig">导出脱敏配置</button><button id="historyConfig">配置历史</button></div><div id="configHistory"></div></section>
+<section id="knowledgeAdmin" class="card"><h2>知识库索引</h2><p>更换嵌入模型、维度或切片配置后，请对已有文档重建索引；重建失败会保留原索引。</p><button id="refreshKnowledge">刷新索引状态</button><div id="knowledgeAdminData"></div></section>
+<section id="accounts" class="card"><h2>用户账号</h2><form id="newAccount"><label>登录名<input name="username" required></label><label>显示名<input name="name" required></label><label>初始密码<input name="password" type="password" minlength="12" required></label><label>工作区<input name="workspaceId" value="default" required></label><label>角色<select name="role"><option value="MEMBER">成员</option><option value="WORKSPACE_ADMIN">工作区管理员</option><option value="TENANT_ADMIN">租户管理员</option></select></label><button type="submit">创建账号</button></form><div id="accountsList"></div></section>
+<section id="observability" class="card"><h2>运行观测</h2><button id="refreshObserve">刷新观测</button><p>展示任务状态、模型请求耗时、首字延迟和用量，不采集提示词正文。未接通能力在状态中明确显示。</p><div id="observabilityData"></div></section>
+<section id="evaluations" class="card"><h2>评测中心</h2><p>在独立评测工作区执行，按预期关键词评分。评测会消耗当前模型额度，按配置的评测并发运行；Token 与费用在每次模型请求前保守预留，失败请求保留预算。费用使用最高单价估算。</p><form id="newDataset"><label>评测集名称<input name="name" required></label><div id="datasetCases"></div><button type="button" id="addEvalCase">添加用例</button><button type="submit">保存评测集</button></form><button id="refreshEvaluations">刷新评测</button><div id="evaluationList"></div></section>
+<div id="panel" hidden>
         <form id="filters" class="filters">
           <label>时间范围<select id="range"><option value="month">本月</option><option value="week">最近 7 天</option><option value="custom">自定义</option></select></label>
           <label>开始日期<input id="from" type="date" required></label>
@@ -49,5 +56,5 @@
       <footer>管控数据仅对管理员开放 · 数据范围由当前登录身份决定</footer>
     </main>
   </div>
-</body>
+<script src="/assets/branding.js" defer></script></body>
 </html>

@@ -80,3 +80,17 @@ td { font-variant-numeric: tabular-nums; }
 footer { color: #96a298; font-size: 11px; text-align: center; padding: 32px 0 25px; }
 @media (max-width: 1100px) { .sidebar { width: 192px; } .shell { margin-left: 192px; } main { padding: 28px 24px 0; } .topbar { padding-inline: 24px; } .breakdowns { grid-template-columns: 1fr; } #updated { width: 100%; margin-left: 0; padding-bottom: 0; } }
 @media (max-width: 720px) { .sidebar { position: static; width: 100%; padding: 18px 20px; border-bottom: 1px solid var(--line); border-right: 0; } .sidebar nav { display: flex; gap: 8px; margin-top: 14px; } .nav-link { padding: 7px 12px; } .nav-label, .sidebar-bottom { display: none; } .brand small { display: inline; margin-left: 10px; letter-spacing: 0; } .shell { margin-left: 0; } .topbar { padding: 13px 20px; min-height: 60px; flex-wrap: wrap; gap: 7px; } .account { margin-left: auto; } main { padding: 23px 18px 0; } .admin-badge { display: none; } .stats { grid-template-columns: 1fr; } .stat { padding: 18px; } .stat strong { font-size: 28px; margin: 8px 0; } .filters { padding: 16px; } .filters label { min-width: 120px; flex: 1; } .filters input, .filters select { width: 100%; min-width: 0; } .date-separator { display: none; } .section-heading { align-items: flex-start; flex-wrap: wrap; gap: 8px; } .page-heading { margin-bottom: 20px; } }
+
+.settings-group{margin:16px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}.settings-group h3{grid-column:1/-1}label{display:flex;flex-direction:column;gap:6px}input,select,textarea{max-width:100%;padding:9px;border:1px solid #c8cdbf;border-radius:6px}input[type=checkbox]{align-self:flex-start}.config-actions,.account-row{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.card{margin-bottom:20px}pre{max-height:400px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}#newAccount{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}#configStatus{position:sticky;top:0;background:#eef4e8;padding:12px;z-index:2}button{cursor:pointer}
+.settings-group summary { grid-column:1/-1; cursor:pointer; font-weight:650; padding:6px 0; }
+.settings-group label { min-width:0; }
+.account-row > span { flex-basis:100%; overflow-wrap:anywhere; }
+.account-row input,.account-row select { min-width:0; }
+#observabilityData,#knowledgeAdminData { overflow-x:auto; }
+@media (max-width:720px) {
+ .sidebar nav { flex-wrap:wrap; }
+ .settings-group { grid-template-columns:minmax(0,1fr); }
+ .config-actions button { flex:1 1 140px; }
+ .account-row input,.account-row select { width:100%; }
+ .card { min-width:0; }
+}

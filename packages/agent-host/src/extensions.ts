@@ -9,6 +9,7 @@ export interface McpServerConfig {
     url: string;
     tools: string[];
     headers?: Record<string, string>;
+    fetch?: typeof fetch;
 }
 interface RegisteredMcpTool {
     name: string;
@@ -46,7 +47,7 @@ function transport(server: McpServerConfig) {
         throw new Error("MCP URL 不得包含凭据");
     return new StreamableHTTPClientTransport(url, {
         requestInit: { headers: server.headers ?? {}, redirect: "error" },
-        fetch: (input, init) => fetch(input, { ...init, redirect: "error" }),
+        fetch: (input, init) => (server.fetch ?? fetch)(input, { ...init, redirect: "error" }),
     });
 }
 export function createMcpToolset(servers: readonly McpServerConfig[]): PlatformTool[] {

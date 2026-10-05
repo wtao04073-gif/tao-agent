@@ -59,9 +59,5 @@ ENV WORKSPACE_DIR=/data/workspace
 
 EXPOSE 8080
 
-# 启动前先自检。
-#
-# 配置错误在启动时就报出来，而不是等第一个任务失败 ——
-# 后者让客户以为是产品不好用。自检失败则不启动（exit 1），
-# Compose 的 restart: unless-stopped 会重试，日志里能看到明确原因。
-CMD ["sh", "-c", "node scripts/doctor.mjs && node packages/server/dist/main.js"]
+# 无模型时仍启动管理员配置向导；收费连接测试由管理员在后台主动触发。
+CMD ["node", "packages/server/dist/main.js"]

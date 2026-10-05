@@ -31,6 +31,7 @@ interface StoredDocument {
     readonly document: KnowledgeDocument;
     readonly tenant: TenantContext;
     readonly chunks: readonly Chunk[];
+    readonly sourceChunks?: readonly Chunk[];
     readonly index?: VectorIndex;
 }
 export type FilePreview = {
@@ -145,6 +146,7 @@ export function createWorkspaceServices(options: {
     chunkChars?: number;
     overlapChars?: number;
 }) {
+    if(options.embeddings){const provider=options.embeddings;options={...options,embeddings:{space:createHash('sha256').update(JSON.stringify([provider.space,options.chunkChars??800,options.overlapChars??100])).digest('hex'),embed:(...args)=>provider.embed(...args)}};}
     const epochs = new Map<string, number>();
     const keyOf = (tenant: TenantContext, id: string) => JSON.stringify([tenant.tenantId, tenant.workspaceId, id]);
     function storage(tenant: TenantContext): string {
@@ -222,20 +224,21 @@ export function createWorkspaceServices(options: {
         const key = keyOf(tenant, document.document.documentId);
         epochs.set(key, (epochs.get(key) ?? 0) + 1);
     }
-    async function reindexKnowledge(tenant: TenantContext, documentId: string) {
+    async function reindexKnowledge(tenant: TenantContext, documentId: string, role: Role = Role.Member) {
         if (!options.embeddings)
             throw new WorkspaceError(503, "请先配置嵌入服务");
         const previous = load(tenant).find(d => d.document.documentId === documentId);
         if (!previous)
             throw new WorkspaceError(404, "知识文档不存在");
-        if (previous.tenant.userId !== tenant.userId)
-            throw new WorkspaceError(403, "只有创建者可重建索引");
+        if (previous.tenant.userId !== tenant.userId && ![Role.PlatformAdmin,Role.TenantAdmin,Role.WorkspaceAdmin].includes(role as any))
+            throw new WorkspaceError(403, "只有创建者或管理员可重建索引");
         const key = keyOf(tenant, documentId), epoch = epochs.get(key) ?? 0;
-        const index = await buildIndex(previous.chunks);
+        const chunks=boundRagChunks(previous.sourceChunks??previous.chunks,options.chunkChars??800,options.overlapChars??100);
+        const index = await buildIndex(chunks);
         if ((epochs.get(key) ?? 0) !== epoch)
             throw new WorkspaceError(409, "文档已变化，请重新重建索引");
-        persist(tenant, { ...previous, index });
-        return { ...previous.document, vectorStatus: "ready" as const };
+        persist(tenant, { ...previous, chunks, document:{...previous.document,chunks:chunks.length}, index });
+        return { ...previous.document, chunks:chunks.length, vectorStatus: "ready" as const };
     }
     async function ingestKnowledge(tenant: TenantContext, input: {
         name?: string;
@@ -259,6 +262,7 @@ export function createWorkspaceServices(options: {
         const version = (previous?.document.version ?? 0) + 1;
         const key = keyOf(tenant, documentId), epoch = epochs.get(key) ?? 0;
         let chunks: Chunk[] = ingestDocument(paragraphs(text), { tenantId: tenant.tenantId, workspaceId: tenant.workspaceId, ownerId: tenant.userId, scope: Scope.Workspace, knowledgeBaseId: "workspace", documentId, documentName: name }).map(chunk => ({ ...chunk, id: `${chunk.id}:v${version}`, documentVersion: version }));
+        const sourceChunks=chunks;
         if (options.embeddings)
             chunks = boundRagChunks(chunks, options.chunkChars ?? 800, options.overlapChars ?? 100);
         if (chunks.length === 0)
@@ -277,7 +281,7 @@ export function createWorkspaceServices(options: {
             if (!existsSync(saved))
                 writeFileSync(saved, JSON.stringify(previous), { mode: 0o600, flag: "wx" });
         }
-        persist(tenant, { document, tenant, chunks, ...(index ? { index } : {}) });
+        persist(tenant, { document, tenant, chunks, sourceChunks, ...(index ? { index } : {}) });
         return document;
     }
     function deleteKnowledge(tenant: TenantContext, documentId: string, role: Role = Role.Member): boolean {

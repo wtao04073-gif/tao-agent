@@ -18,8 +18,9 @@ it("主入口在调用Pi前检索知识并注入来源，不依赖模型自行�
   const {createWorkspaceServices}=await import("../src/workspace-services.ts");
   const tenant={tenantId:"t",workspaceId:"w",userId:"u"};
   await createWorkspaceServices({workspaceRoot:host.root,embeddings:{space:"test-space",embed:async texts=>texts.map(()=>[1,0])}}).ingestKnowledge(tenant,{name:"车辆制度",text:"automobile policy evidence"});
+  vi.stubEnv('WORKSPACE_DIR', host.root);vi.stubEnv('MODEL_BASE_URL','http://localhost:1');vi.stubEnv('MODEL_NAME','test');vi.stubEnv('MODEL_API_KEY','test-only-key');
   await import("../src/main.ts");await host.deps!.submitTask(tenant,{scenarioId:"general.free-task",fields:{query:"vehicle"}});
   expect(host.spec?.systemPrompt).toContain("automobile policy evidence");expect(host.spec?.systemPrompt).toContain("车辆制度");expect(host.spec?.systemPrompt).toContain("版本 1");
   await new Promise<void>(r=>setImmediate(r));
- }finally{host.deps?.hub.closeAll();spy.mockRestore();rmSync(host.root,{recursive:true,force:true});}
+ }finally{host.deps?.hub.closeAll();spy.mockRestore();vi.unstubAllEnvs();rmSync(host.root,{recursive:true,force:true});}
 });

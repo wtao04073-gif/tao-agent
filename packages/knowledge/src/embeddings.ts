@@ -27,6 +27,7 @@ export class HttpEmbeddings implements EmbeddingProvider {
         queryPrefix?: string;
         documentPrefix?: string;
         timeoutMs?: number;
+        fetch?: typeof fetch;
     };
     constructor(options: HttpEmbeddings["options"]) {
         const url = new URL(options.endpoint);
@@ -73,7 +74,7 @@ export class HttpEmbeddings implements EmbeddingProvider {
             const timeout = AbortSignal.timeout(this.options.timeoutMs ?? 30000);
             const abort = signal ? AbortSignal.any([signal, timeout]) : timeout;
             try {
-                const res = await fetch(this.options.endpoint, { method: "POST", redirect: "error", signal: abort, headers: { "Content-Type": "application/json", ...(this.options.apiKey ? { Authorization: `Bearer ${this.options.apiKey}` } : {}) }, body: JSON.stringify({ model: this.options.model, input: batch.map(t => prefix + t), encoding_format: "float", ...(this.options.dimensions === undefined ? {} : { dimensions: this.options.dimensions }) }) });
+                const res = await (this.options.fetch ?? fetch)(this.options.endpoint, { method: "POST", redirect: "error", signal: abort, headers: { "Content-Type": "application/json", ...(this.options.apiKey ? { Authorization: `Bearer ${this.options.apiKey}` } : {}) }, body: JSON.stringify({ model: this.options.model, input: batch.map(t => prefix + t), encoding_format: "float", ...(this.options.dimensions === undefined ? {} : { dimensions: this.options.dimensions }) }) });
                 if (!res.ok) {
                     await res.body?.cancel();
                     throw new EmbeddingError(`嵌入服务返回 HTTP ${res.status}，请检查服务配置或限额`);

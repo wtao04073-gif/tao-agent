@@ -131,6 +131,10 @@ export class TicketService {
 		return claims.principal;
 	}
 
+    revokeAccount(tenantId:string,userId:string):void {
+        for(const [id,claims] of this.tickets)if(claims.principal.tenant.tenantId===tenantId&&claims.principal.tenant.userId===userId){this.tickets.delete(id);this.releasePrincipalSlot(claims.principal);}
+    }
+
 	/** 惰性清理过期票据，同时回收对应的单身份计数名额。 */
 	private pruneExpired(): void {
 		const now = this.now();

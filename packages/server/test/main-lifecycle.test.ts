@@ -87,11 +87,12 @@ beforeAll(async () => {
 	const originalOn = process.on.bind(process);
 	signalSpy = vi.spyOn(process, "on").mockImplementation(((event: string, listener: (...args: unknown[]) => void) =>
 		event === "SIGTERM" || event === "SIGINT" ? process : originalOn(event, listener)) as typeof process.on);
-	await import("../src/main.ts");
+	vi.stubEnv('WORKSPACE_DIR', host.dir);vi.stubEnv('MODEL_BASE_URL','http://localhost:1');vi.stubEnv('MODEL_NAME','test');vi.stubEnv('MODEL_API_KEY','test-only-key');
+  await import("../src/main.ts");
 });
 afterAll(() => {
 	host.deps?.hub.closeAll();
-	signalSpy?.mockRestore();
+	signalSpy?.mockRestore();vi.unstubAllEnvs();
 	rmSync(host.dir, { recursive: true, force: true });
 });
 

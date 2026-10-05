@@ -49,9 +49,8 @@ services:
           memory: 2G
 
     healthcheck:
-      # 用自检脚本而非简单的 ping：端口通不代表能干活。
-      # 模型 API 不可达时服务仍在监听，但所有任务都会失败。
-      test: ["CMD", "node", "scripts/doctor.mjs"]
+      # 存活探测不调用收费模型；业务就绪使用 /readyz，连接测试在后台主动执行。
+      test: ["CMD", "node", "scripts/healthcheck.mjs"]
       interval: 60s
       timeout: 20s
       # start_period 给足：首次启动要建目录、初始化数据库

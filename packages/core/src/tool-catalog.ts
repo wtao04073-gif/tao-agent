@@ -35,6 +35,7 @@ export const TOOL_CATALOG: readonly ToolDescriptor[] = [
 	{ name: "mcp_call", label: "调用外部工具", status: ToolStatus.Available, access: "write" },
 	// ── 表格（M1 已交付）──
 	{ name: "list_sheets", label: "查看表格结构", status: ToolStatus.Available, access: "read" },
+	{ name: "web_search", label: "联网搜索", status: ToolStatus.Available, access: "read" },
 	{ name: "read_table", label: "读取表格", status: ToolStatus.Available, access: "read" },
 	{ name: "reconcile_tables", label: "核对两张表并产出报告", status: ToolStatus.Available, access: "write" },
 

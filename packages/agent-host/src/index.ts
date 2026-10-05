@@ -23,3 +23,5 @@ export {
 } from "./event-translator.ts";
 
 export { createMcpToolset, createSubagentTool, type McpServerConfig } from "./extensions.ts";
+
+export type { ModelControls, RequestMetric } from "./model-controls.ts";

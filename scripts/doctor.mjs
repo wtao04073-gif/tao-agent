@@ -11,9 +11,11 @@
  * 这里只做真实环境的探测与串联。
  */
 
+import { AdminSettings } from "../packages/server/dist/admin-settings.js";
 import { createServer } from "node:http";
 import {
 	accessSync,
+	existsSync,
 	constants,
 	mkdirSync,
 	readFileSync,
@@ -124,7 +126,7 @@ async function probeModelApi(baseUrl, apiKey) {
 	try {
 		host = new URL(baseUrl).host;
 	} catch {
-		return { reachable: false, error: `MODEL_BASE_URL 不是合法的 URL：${baseUrl}` };
+		return { reachable: false, error: "MODEL_BASE_URL 不是合法的 URL" };
 	}
 
 	try {
@@ -133,6 +135,7 @@ async function probeModelApi(baseUrl, apiKey) {
 		const res = await fetch(new URL("/v1/models", baseUrl), {
 			headers: apiKey === undefined || apiKey === "" ? {} : { Authorization: `Bearer ${apiKey}` },
 			signal: controller.signal,
+            redirect: "error",
 		});
 		clearTimeout(timer);
 		return { reachable: true, status: res.status, endpointHost: host };
@@ -146,12 +149,20 @@ async function probeModelApi(baseUrl, apiKey) {
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const WORKSPACE = process.env.WORKSPACE_DIR ?? "/data/workspace";
 
+let modelEnvironment=process.env;
+if(existsSync(join(WORKSPACE,'.admin-config','settings.json'))){
+ try{modelEnvironment=new AdminSettings({directory:join(WORKSPACE,'.admin-config'),...(process.env.TAO_MASTER_KEY?{masterKey:process.env.TAO_MASTER_KEY}:{})}).effective('global');}
+ catch{process.stderr.write('后台配置或主密钥不可读取，请恢复备份。\n');process.exit(1);}
+}
+const modelCheck=modelEnvironment.MODEL_BASE_URL&&modelEnvironment.MODEL_API_KEY
+ ?checkModelApi(await probeModelApi(modelEnvironment.MODEL_BASE_URL,modelEnvironment.MODEL_API_KEY))
+ :{name:'模型配置',level:'warn',detail:'尚未配置模型，配置后台可以启动',advice:'打开账号登录页认领管理员，并在后台配置与测试模型。'};
 const results = [
 	checkNodeVersion(process.version),
 	checkMemory(probeMemory()),
 	checkPort(PORT, await probePort(PORT)),
 	checkWorkspaceWritable(probeWorkspace(WORKSPACE)),
-	checkModelApi(await probeModelApi(process.env.MODEL_BASE_URL, process.env.MODEL_API_KEY)),
+	modelCheck,
 ];
 
 // 磁盘探测可能失败（某些文件系统不支持 statfs），失败时跳过而非报错

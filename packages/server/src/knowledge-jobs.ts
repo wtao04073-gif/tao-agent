@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { FileJsonStore } from "@tao/knowledge";
-import type { TenantContext } from "@tao/core";
+import { Role, type TenantContext } from "@tao/core";
 import { readJsonBody, sendError, sendJson, type Principal } from "./app.ts";
 import { digest } from "./execution-registry.ts";
 import { WorkspaceError, type WorkspaceServices, type KnowledgeDocument } from "./workspace-services.ts";
@@ -12,6 +12,7 @@ type Input = {
     text?: string;
 };
 interface Job {
+    role?: Role;
     jobId: string;
     tenant: TenantContext;
     input: Input;
@@ -29,12 +30,13 @@ export class KnowledgeJobs {
     private readonly queue: Job[] = [];
     private running = false;
     constructor(dir: string, services: WorkspaceServices) { this.store = new FileJsonStore({ dir, collection: "knowledge-jobs", idOf: j => j.jobId }); this.services = services; }
+    get busy(){return this.running||this.queue.length>0;}
     recover(tenant: TenantContext) { for (const job of this.store.listByTenant(tenant.tenantId, tenant.workspaceId))
         if (job.status === "queued" || job.status === "processing")
             this.store.put({ ...job, status: "failed", error: "服务重启，入库未完成，请重试", updatedAt: Date.now() }); }
-    public(job: Job) { const { input: _input, tenant: _tenant, fingerprint: _fingerprint, ...data } = job; return {...data,operation:job.input.documentId?"reindex":"ingest"}; }
+    public(job: Job) { const { input: _input, tenant: _tenant, fingerprint: _fingerprint, role: _role, ...data } = job; return {...data,operation:job.input.documentId?"reindex":"ingest"}; }
     owned(tenant: TenantContext, id: string) { const job = this.store.get(id); return job?.tenant.tenantId === tenant.tenantId && job.tenant.workspaceId === tenant.workspaceId ? job : undefined; }
-    create(tenant: TenantContext, input: Input, key?: string) {
+    create(tenant: TenantContext, input: Input, key?: string, role: Role = Role.Member) {
         if (this.queue.length >= 100)
             throw new WorkspaceError(503, "知识处理队列已满");
         if (key !== undefined && !/^[A-Za-z0-9_.:-]{1,128}$/.test(key))
@@ -46,7 +48,7 @@ export class KnowledgeJobs {
                 throw new WorkspaceError(409, "相同幂等键对应不同入库内容");
             return old;
         }
-        const now = Date.now(), job: Job = { jobId, tenant, input, fingerprint, status: "queued", createdAt: now, updatedAt: now, attempt: 1 };
+        const now = Date.now(), job: Job = { jobId, tenant, input, role, fingerprint, status: "queued", createdAt: now, updatedAt: now, attempt: 1 };
         this.store.put(job);
         this.queue.push(job);
         this.start();
@@ -80,7 +82,7 @@ export class KnowledgeJobs {
                 const job = this.queue.shift()!;
                 try {
                     this.store.put({ ...job, status: "processing", updatedAt: Date.now() });
-                    const document = job.input.documentId ? await this.services.reindexKnowledge(job.tenant,job.input.documentId) : await this.services.ingestKnowledge(job.tenant, job.input);
+                    const document = job.input.documentId ? await this.services.reindexKnowledge(job.tenant,job.input.documentId,job.role) : await this.services.ingestKnowledge(job.tenant, job.input);
                     this.store.put({ ...job, status: "ready", document, updatedAt: Date.now() });
                 }
                 catch (error) {
@@ -106,7 +108,7 @@ export function createKnowledgeJobHandler(jobs: KnowledgeJobs, authenticate: (re
             if(reindex && req.method==="POST") {
                 if(!/^[a-f0-9]{64}$/.test(parts[2]!))throw new WorkspaceError(400,"文档标识无效");
                 const key=req.headers["idempotency-key"];
-                sendJson(res,202,{job:jobs.public(jobs.create(tenant,{documentId:parts[2]!},typeof key==="string"?key:undefined))});
+                sendJson(res,202,{job:jobs.public(jobs.create(tenant,{documentId:parts[2]!},typeof key==="string"?key:undefined,principal.role as Role))});
             }else if (creation && req.method === "POST") {
                 const body = await readJsonBody(req);
                 if (!body.ok)

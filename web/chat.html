@@ -539,7 +539,7 @@
 	var $ = function (s, r) { return (r || document).querySelector(s); };
 	var esc = App.esc;
 
-	if (!App.Auth.signedIn) { location.href = "/login.html"; return; }
+	if (!App.Auth.signedIn && localStorage.getItem('tao.password-session')!=='true') { location.href = "/login.html"; return; }
 
 	// pending：已上传完成待发附件；inFlight：在途上传 Promise 集合（未清空禁发）。
 	// generation：页面/任务代次，每次重置 +1；旧代次发起的上传即使晚完成也作废，
@@ -1770,5 +1770,6 @@
 	});
 })();
 </script>
-</body>
+<script src="/assets/admin-entry.js"></script>
+<script src="/assets/branding.js" defer></script></body>
 </html>

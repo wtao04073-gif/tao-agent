@@ -32,3 +32,7 @@ body{font-family:Inter,"PingFang SC","Noto Sans SC",sans-serif}.rail{width:248px
 @keyframes activity-pulse{50%{opacity:.3}}
 @media(max-width:720px){.activity-line{flex-wrap:wrap}.activity-time{flex-basis:100%;margin-left:15px}.inputcard .tier-select{max-width:140px}.composer{padding:10px 12px}.inputcard textarea{min-height:64px}}
 @media(prefers-reduced-motion:reduce){.is-active .activity-dot{animation:none}}
+.account-menu { padding:8px; border:1px solid var(--border,#ddd); background:var(--bg-soft,#fff); border-radius:12px; margin-bottom:8px; }
+.account-menu[hidden] { display:none; }
+.account-menu button { display:block; width:100%; text-align:left; padding:10px; background:transparent; border:0; border-radius:6px; color:inherit; cursor:pointer; }
+.account-menu button:hover,.account-menu button:focus-visible { background:var(--bg,#eee); }

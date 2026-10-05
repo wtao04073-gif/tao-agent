@@ -84,5 +84,5 @@ export async function handleControlGate(
 function respond(req: IncomingMessage, res: ServerResponse, status: number, message: string): void {
 	// 消息均为服务端固定文案，不包含请求输入。
 	res.writeHead(status, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-	res.end(req.method === "HEAD" ? undefined : `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>管控平台</title><h1>${status}</h1><p>${message}</p><p><a href="/control-login.html">前往登录</a> · <a href="/chat.html">返回工作区</a></p></html>`);
+	res.end(req.method === "HEAD" ? undefined : `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>管控平台</title><h1>${status}</h1><p>${message}</p><p><a href="/admin-login.html">前往登录</a> · <a href="/chat.html">返回工作区</a></p></html>`);
 }

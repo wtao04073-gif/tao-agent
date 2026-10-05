@@ -38,6 +38,16 @@
 		general:      { key: "gen", label: "通用办公",     cls: "ind--gen" },
 	};
 
+    // Cookie密码会话的写请求统一携带CSRF。令牌调用仍由Authorization验证。
+    var originalFetch=global.fetch.bind(global),csrfPromise=null;
+    global.fetch=async function(input,init){init=init||{};var url=new URL(typeof input==='string'?input:input.url,location.href),method=(init.method||'GET').toUpperCase();
+      if(url.origin===location.origin&&!['GET','HEAD','OPTIONS'].includes(method)&&!['/api/auth/login','/api/control/bootstrap'].includes(url.pathname)){
+        csrfPromise=csrfPromise||originalFetch('/api/auth/me').then(function(r){return r.ok?r.json():{};}).catch(function(){return {};});
+        var identity=await csrfPromise;if(identity.csrf){var headers=new Headers(init.headers||{});headers.set('X-CSRF-Token',identity.csrf);init=Object.assign({},init,{headers:headers});}
+      }
+      var response=await originalFetch(input,init);if(response.status===401&&url.origin===location.origin&&url.pathname.startsWith('/api/')&&!url.pathname.startsWith('/api/auth/')){localStorage.removeItem('tao.password-session');localStorage.removeItem('tao.token');sessionStorage.removeItem('tao.control.token');location.href='/admin-login.html';}return response;
+    };
+
 	/* ------------------------------------------------------------- 登录态 */
 
 	var Auth = {
@@ -46,9 +56,9 @@
 			if (v) localStorage.setItem(TOKEN_KEY, v);
 			else localStorage.removeItem(TOKEN_KEY);
 		},
-		get signedIn() { return this.token !== ""; },
-		signOut: function () {
-			this.token = "";
+		get signedIn() { return this.token !== '' || localStorage.getItem('tao.password-session')==='true'; },
+		signOut: async function () {
+			this.token = '';localStorage.removeItem('tao.password-session');await fetch('/api/auth/logout',{method:'POST'}).catch(function(){});
 			global.location.href = App._r("login.html");
 		},
 	};

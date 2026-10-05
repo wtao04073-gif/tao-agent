@@ -166,7 +166,7 @@
 		}
 	}
 
-	$("signOut").addEventListener("click", async function () { await fetch('/control/logout',{method:'POST'});sessionStorage.removeItem('tao.control.token');location.href='/control-login.html'; });
+	$("signOut").addEventListener("click", async function () { sessionStorage.removeItem('tao.control.token');await App.Auth.signOut(); });
 	$("filters").addEventListener("submit", refresh);
 	$("range").addEventListener("change", preset);
 	["from", "to"].forEach(function (id) { $(id).addEventListener("change", function () { $("range").value = "custom"; }); });

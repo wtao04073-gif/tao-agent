@@ -1,3 +1,4 @@
+import { controlledProvider, type ModelControls } from "./model-controls.ts";
 /**
  * 模型 provider 装配
  *
@@ -66,6 +67,7 @@ export type ModelTier = "flagship" | "lite";
 
 /** 多端点装配入参：旗舰档必填，轻量档可选（缺省回退到旗舰）。 */
 export interface ModelRuntimeOptions {
+ readonly controls?: ModelControls;
 	readonly flagship: ModelEndpoint;
 	readonly lite?: ModelEndpoint;
 }
@@ -147,7 +149,7 @@ export function createModelRuntime(options: ModelEndpoint | ModelRuntimeOptions)
 		const model = buildModelObject(endpoint, tier);
 		byTier.set(tier, model);
 		models.setProvider(
-			createProvider({
+			controlledProvider(createProvider({
 				id: providerId(tier),
 				name:
 					tier === "lite"
@@ -169,7 +171,7 @@ export function createModelRuntime(options: ModelEndpoint | ModelRuntimeOptions)
 				},
 				models: [model],
 				api: openAICompletionsApi(),
-			}) as never,
+			}), opts.controls ?? {}) as never,
 		);
 	}
 
