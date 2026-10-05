@@ -198,6 +198,9 @@ describe("任务编排 · 状态机守卫", () => {
 		// 不能因为 prompt 返回了就判成功 —— 任务还在等用户决定
 		expect(record.status).toBe(TaskStatus.AwaitConfirm);
 		expect(record.reason).toContain("请确认");
+        expect(orch.pendingTaskIds).toContain("task-1");
+        await orch.cancel("task-1", "部署管理员暂停");
+        expect(orch.pendingTaskIds).not.toContain("task-1");
 	});
 
 	it("没有可恢复动作不能伪确认，拒绝则取消", async () => {

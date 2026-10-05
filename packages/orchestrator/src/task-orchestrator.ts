@@ -281,6 +281,11 @@ export class TaskOrchestrator {
 		return (this.eventLog.get(taskId) ?? []).filter((e) => e.seq > afterSeq);
 	}
 
+    /** 等待确认/预算的任务仍持有执行快照，部署配置切换前也必须计入。 */
+    get pendingTaskIds(): readonly string[] {
+        return [...this.tasks.values()].filter(t=>['QUEUED','RUNNING','AWAIT_CONFIRM','EXCEEDED'].includes(t.status)).map(t=>t.taskId);
+    }
+
 	list(tenant: TenantContext): readonly TaskRecord[] {
 		// 租户隔离：绝不跨租户返回。一期虽是单租户，但边界从现在就守住
 		return [...this.tasks.values()].filter(
