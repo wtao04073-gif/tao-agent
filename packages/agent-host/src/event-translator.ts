@@ -121,6 +121,7 @@ export function translate(
 					type: "step",
 					step: steps.start(event.toolCallId),
 					action: label(event.toolName),
+                    ...(event.toolName?{toolName:event.toolName}:{}),
 					phase: "started",
 				},
 			];
@@ -133,6 +134,7 @@ export function translate(
 					type: "step",
 					step: steps.resolve(event.toolCallId),
 					action: label(event.toolName),
+                    ...(event.toolName?{toolName:event.toolName}:{}),
 					phase: "progress",
 				},
 			];
@@ -145,6 +147,7 @@ export function translate(
 					type: "step",
 					step: steps.resolve(event.toolCallId),
 					action: label(event.toolName),
+                    ...(event.toolName?{toolName:event.toolName}:{}),
 					// 失败的步骤要明确标出来，否则用户看到「已完成」却没有产物会困惑
 					phase: event.isError === true ? "failed" : "finished",
 				},

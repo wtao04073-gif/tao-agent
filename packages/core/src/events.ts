@@ -36,6 +36,7 @@ export interface TaskStatusEvent extends TaskEventBase {
 /** 步骤级进度 —— 验收要求「步骤级粒度实时展示，含当前动作」。 */
 export interface TaskStepEvent extends TaskEventBase {
 	readonly type: "step";
+    readonly toolName?: string;
 	/** 步骤序号，从 1 开始。 */
 	readonly step: number;
 	/** 面向用户的动作描述，须是业务语言而非工具名。 */

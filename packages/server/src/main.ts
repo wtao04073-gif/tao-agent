@@ -1286,7 +1286,7 @@ const adminHandler=createAdminHandler({settings:adminSettings,connections:new Co
   const cancel=()=>{void orchestrator.cancel(r.taskId,'评测已取消').catch(()=>{});};signal.addEventListener('abort',cancel,{once:true});
   try{for(let i=0;i<600;i++){
    if(signal.aborted){await orchestrator.cancel(r.taskId,'评测已取消');throw new Error('评测已取消');}
-   const t=orchestrator.get(r.taskId);if(t&&isTerminal(t.status))return {taskId:r.taskId,status:t.status,tokens:orchestrator.events(r.taskId).filter(e=>e.type==='usage').reduce((n,e)=>n+((e as any).inputTokens+(e as any).outputTokens+(e as any).cacheReadTokens+(e as any).cacheWriteTokens),0),answer:orchestrator.events(r.taskId).filter(e=>e.type==='assistant_message').map(e=>(e as any).text).join('\n')};
+   const t=orchestrator.get(r.taskId);if(t&&isTerminal(t.status))return {taskId:r.taskId,status:t.status,tools:orchestrator.events(r.taskId).filter(e=>e.type==='step'&&e.phase==='finished'&&e.toolName).map(e=>(e as any).toolName),tokens:orchestrator.events(r.taskId).filter(e=>e.type==='usage').reduce((n,e)=>n+((e as any).inputTokens+(e as any).outputTokens+(e as any).cacheReadTokens+(e as any).cacheWriteTokens),0),answer:orchestrator.events(r.taskId).filter(e=>e.type==='assistant_message').map(e=>(e as any).text).join('\n')};
    await new Promise(resolve=>setTimeout(resolve,100));
   }await orchestrator.cancel(r.taskId,'评测任务超时');throw new Error('评测任务超时');}
   finally{signal.removeEventListener('abort',cancel);evaluationFactories.delete(tenant.workspaceId);}

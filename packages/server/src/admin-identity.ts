@@ -136,6 +136,25 @@ export class AdminIdentity {
 		this.attempts.delete(`login:${normalized.toLowerCase()}`);
 		return this.issue(structuredClone(this.state), current);
 	}
+    profile(p:Principal){const account=this.state.accounts.find(a=>a.enabled&&a.tenantId===p.tenant.tenantId&&a.userId===p.tenant.userId);if(!account) return fail(401,'登录已失效');return view(account);}
+    async updateProfile(p:Principal,input:{name?:string;currentPassword?:string;newPassword?:string}){
+        const account=this.state.accounts.find(a=>a.enabled&&a.tenantId===p.tenant.tenantId&&a.userId===p.tenant.userId);
+        if(!account)return fail(401,'登录已失效');
+        if(!input||typeof input!=='object'||Object.keys(input).some(k=>!['name','currentPassword','newPassword'].includes(k)))return fail(400,'只允许修改显示名和密码');
+        const name=input.name===undefined?account.name:text(input.name,'显示名');let passwordHash=account.passwordHash;
+        if(input.newPassword!==undefined){
+            this.rateLimit('password:'+account.id,8);
+            if(!account.passwordHash)return fail(400,'令牌账号请先由管理员设置初始密码');
+            if(typeof input.currentPassword!=='string'||Buffer.byteLength(input.currentPassword)>1024)return fail(400,'请填写原密码');
+            const parts=account.passwordHash.split('$'),actual=await this.crypto(()=>derive(input.currentPassword!,parts[1]!));
+            if(!timingSafeEqual(actual,Buffer.from(parts[2]!,'hex')))return fail(400,'原密码不正确');
+            passwordHash=await this.crypto(()=>encodePassword(input.newPassword!));
+        }
+        const current=this.state.accounts.find(a=>a.id===account.id);if(!current?.enabled||current.revision!==account.revision)return fail(409,'账号已变化，请重新登录');
+        const next=structuredClone(this.state),updated=next.accounts.find(a=>a.id===account.id)!;updated.name=name;
+        if(input.newPassword!==undefined){updated.passwordHash=passwordHash!;updated.revision++;updated.tokenHashes=[];this.invalidate(next,updated.id);}
+        this.persist(next);return {account:view(updated),reauthenticate:input.newPassword!==undefined};
+    }
 	list(principal: Principal): AdminAccountView[] {
 		const actor = this.actor(principal);
 		return this.state.accounts.filter((item) => actor.role === Role.PlatformAdmin || item.tenantId === actor.tenantId).map(view);

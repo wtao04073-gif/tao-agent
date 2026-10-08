@@ -175,3 +175,10 @@ describe("管理身份目录", () => {
 		expect(() => service.update(principal, "default/owner", { tenantId: "other" } as never)).toThrow(/不允许/);
 	});
 });
+it('成员可修改本人显示名，不能越权修改角色，改密码撤销所有会话',async()=>{
+ const {service,principal}=await setup();await service.create(principal,{username:'member',password:secret,role:Role.Member});const member=await service.login('member',secret);
+ await expect(service.updateProfile(member.principal,{role:Role.PlatformAdmin} as any)).rejects.toThrow('只允许');
+ expect((await service.updateProfile(member.principal,{name:'新名字'})).account.name).toBe('新名字');expect(service.authenticateToken(member.token)).toBeTruthy();
+ await expect(service.updateProfile(member.principal,{currentPassword:'wrong',newPassword:'new-long-password'})).rejects.toThrow('原密码');
+ await service.updateProfile(member.principal,{currentPassword:secret,newPassword:'new-long-password'});expect(service.authenticateToken(member.token)).toBeUndefined();expect((await service.login('member','new-long-password')).principal.name).toBe('新名字');
+});
