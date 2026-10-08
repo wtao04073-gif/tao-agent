@@ -260,8 +260,8 @@
           knowledgeJobKey = 'tao.knowledge.jobs:' + JSON.stringify([me.tenantId, me.workspaceId, me.userId]);
           var saved = JSON.parse(sessionStorage.getItem(knowledgeJobKey) || '[]');
           if (Array.isArray(saved)) saved.forEach(function (e) {
-            if (e && typeof e.name === 'string' && (typeof e.jobId === 'string'||e.status==='failed') && !knowledgeJobs.some(function (x) { return x.job.jobId === e.jobId; }))
-              knowledgeJobs.push({ name: e.name, job: { jobId: e.jobId, status: e.status==='failed'?'failed':'queued',error:e.error } });
+            if (e && typeof e.name === 'string' && !knowledgeJobs.some(function (x) { return e.jobId ? x.job.jobId === e.jobId : !x.job.jobId && x.name === e.name; }))
+              knowledgeJobs.push({ name: e.name, job: { jobId: e.jobId, status: !e.jobId ? 'upload_failed' : e.status==='failed'?'failed':'queued',error:e.error||(!e.jobId?'上传未完成，请重新选择文件':undefined) } });
           });
         }
       } catch (e) { /* 不因浏览器存储不可用阻断知识库。 */ }
@@ -413,7 +413,8 @@
         if (j.document) info.append(node('p', 'ws-meta', j.document.chunks + ' 个切片 · 版本 ' + (j.document.version || 1)));
         if (j.error || entry.pollError) info.append(node('p', 'ws-inline-error', j.error || entry.pollError));
         row.append(info);
-        if (j.status === 'failed') row.append(button('重试解析', async function (event) {
+        if(j.status==='upload_failed')row.append(button('重新选择文件',function(){picker.click();}));
+        if (j.status === 'failed' && j.jobId) row.append(button('重试解析', async function (event) {
           event.currentTarget.disabled = true;
           try { var result = await api('POST', '/api/knowledge/jobs/' + encodeURIComponent(j.jobId) + '/retry', {}); entry.job = result.job; entry.pollError = ''; }
           catch (e) { entry.pollError = e.message; }
