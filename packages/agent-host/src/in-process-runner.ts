@@ -214,14 +214,15 @@ function toKernelTool(
 			});
 			// 成功产出文件时发 artifact 事件（失败结果不发，避免把坏文件当可交付物）。
 			// 这是「取产物」全链路的数据源：编排器据此累积任务产物、前端据此给下载入口。
+			const delivered: string[] = [];
 			if (outcome.isError !== true) {
 				const outputPath = extractOutputPath(outcome.details);
-				if (outputPath !== undefined) await ctx.emitArtifact(outputPath, outcome.details);
+				if (outputPath !== undefined) { await ctx.emitArtifact(outputPath, outcome.details); delivered.push(basename(outputPath)); }
 				const paths = (outcome.details as { outputPaths?: unknown } | undefined)?.outputPaths;
-				if (Array.isArray(paths)) for (const path of paths) if (typeof path === "string") await ctx.emitArtifact(path);
+				if (Array.isArray(paths)) for (const path of paths) if (typeof path === "string") { await ctx.emitArtifact(path); delivered.push(basename(path)); }
 			}
 			return {
-				content: [{ type: "text", text: outcome.text }],
+				content: [{ type: "text", text: outcome.text + (delivered.length ? "\n已直接交付到本任务结果面板，可由用户预览/下载：" + JSON.stringify(delivered) + "。无需再调用 sandbox_export。原生办公工具生成的文件不在沙箱 /workspace 中，请勿进入沙箱查找或重复生成。" : "") }],
 				details: outcome.details,
 				...(outcome.isError === true ? { isError: true } : {}),
 			} as Awaited<ReturnType<AgentHarnessTool<undefined>["execute"]>>;

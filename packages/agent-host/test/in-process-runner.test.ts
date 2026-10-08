@@ -712,7 +712,12 @@ describe("RunnerAdapter 适配层", () => {
 
 			faux.setResponses([
 				fauxAssistantMessage([fauxToolCall("make_report", {})]),
-				fauxAssistantMessage("done"),
+				(context) => {
+                    const result=context.messages.find(m=>m.role==="toolResult");
+                    expect(JSON.stringify(result)).toContain("已直接交付到本任务结果面板");
+                    expect(JSON.stringify(result)).toContain("无需再调用 sandbox_export");
+                    return fauxAssistantMessage("done");
+                },
 			]);
 			await runner.prompt("生成报告");
 
