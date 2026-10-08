@@ -48,6 +48,7 @@ export interface ModelEndpoint {
 	readonly contextWindow?: number;
 	/** 单次输出上限。 */
 	readonly maxTokens?: number;
+ readonly vision?: boolean;
 	/**
 	 * 单价（元 / 百万 token）。
 	 *
@@ -70,6 +71,7 @@ export interface ModelRuntimeOptions {
  readonly controls?: ModelControls;
 	readonly flagship: ModelEndpoint;
 	readonly lite?: ModelEndpoint;
+ readonly profiles?: Readonly<Record<string, ModelEndpoint>>;
 }
 
 export interface ModelRuntime {
@@ -78,16 +80,17 @@ export interface ModelRuntime {
 	readonly model: Model<Api>;
 	/** 按档位取模型；未配置轻量档时 lite 回落到旗舰。 */
 	readonly modelForTier: (tier: ModelTier) => Model<Api>;
+ readonly modelForId: (id: string) => Model<Api>;
 }
 
 /** 平台内部的 provider id。两档若 baseUrl/key 不同，必须各用一个 provider。 */
 export const SELF_HOSTED_PROVIDER_ID = "tao-openai-compat";
-function providerId(tier: ModelTier): string {
-	return tier === "lite" ? `${SELF_HOSTED_PROVIDER_ID}-lite` : `${SELF_HOSTED_PROVIDER_ID}-flagship`;
+function providerId(tier: string): string {
+	return `${SELF_HOSTED_PROVIDER_ID}-${tier}`;
 }
 
 /** 由一个端点构造内核模型对象。 */
-function buildModelObject(endpoint: ModelEndpoint, tier: ModelTier): Model<Api> {
+function buildModelObject(endpoint: ModelEndpoint, tier: string): Model<Api> {
 	return {
 		id: endpoint.modelName,
 		name: endpoint.modelName,
@@ -95,7 +98,7 @@ function buildModelObject(endpoint: ModelEndpoint, tier: ModelTier): Model<Api> 
 		api: "openai-completions",
 		provider: providerId(tier),
 		baseUrl: endpoint.baseUrl,
-		input: ["text"],
+		input: endpoint.vision ? ["text","image"] : ["text"],
 		contextWindow: endpoint.contextWindow ?? 32_768,
 		maxTokens: endpoint.maxTokens ?? 4096,
 		/**
@@ -135,11 +138,12 @@ export function createModelRuntime(options: ModelEndpoint | ModelRuntimeOptions)
 		"flagship" in options ? options : { flagship: options as ModelEndpoint };
 
 	const models = createModels();
-	const tiers: ReadonlyArray<{ tier: ModelTier; endpoint: ModelEndpoint }> = [
+	const tiers: ReadonlyArray<{ tier: string; endpoint: ModelEndpoint }> = [
 		{ tier: "flagship", endpoint: opts.flagship },
 		{ tier: "lite", endpoint: opts.lite ?? opts.flagship },
+        ...Object.entries(opts.profiles??{}).map(([tier,endpoint])=>({tier,endpoint})),
 	];
-	const byTier = new Map<ModelTier, Model<Api>>();
+	const byTier = new Map<string, Model<Api>>();
 
 	// 出网前配额闸不在这里包 provider：内核把 AssistantMessageEventStream
 	// 仅以类型导出，宿主无法自行构造终止流。闸落在 Runner.prompt() 第一次模型
@@ -180,5 +184,6 @@ export function createModelRuntime(options: ModelEndpoint | ModelRuntimeOptions)
 		models,
 		model: flagship,
 		modelForTier: (tier) => byTier.get(tier) ?? flagship,
+        modelForId: id => {const model=byTier.get(id);if(!model)throw new Error("所选模型不可用");return model;},
 	};
 }

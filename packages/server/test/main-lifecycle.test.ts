@@ -69,7 +69,7 @@ vi.mock("../src/app.ts", async (original) => ({
 }));
 vi.mock("@tao/agent-host", async (original) => ({
  ...await original<typeof import("@tao/agent-host")>(),
-	createModelRuntime: () => ({ models: {}, model: {} }),
+	createModelRuntime: () => ({ models: {}, model: {}, modelForId:()=>({id:"test-model",input:["text"]}) }),
 	MemorySessionFactory: class { close = vi.fn(); },
 	InProcessRunnerFactory: class {
 		async createRunner(spec: RunnerSpec) {

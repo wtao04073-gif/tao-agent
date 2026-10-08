@@ -110,10 +110,10 @@ export class SseHub {
 		res.writeHead(200, {
 			"Content-Type": "text/event-stream; charset=utf-8",
 			"Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
 			Connection: "keep-alive",
 			// 私有化部署常在 nginx 后面。不加这行反代会把 SSE 攒到连接
 			// 结束才一次性吐出，表现为「任务跑完了才看到进度」
-			"X-Accel-Buffering": "no",
 		});
 
 		/**

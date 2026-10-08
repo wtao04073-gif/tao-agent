@@ -7,12 +7,15 @@
  * 要么抛底层异常，要么产出 Word 打不开的文件，两种都难排查。
  */
 
-import { writeFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { publishFile, boundedJson } from "./file-safety.ts";
+import { isAbsolute } from "node:path";
 import {
 	AlignmentType,
 	Document,
 	HeadingLevel,
+	Header,
+	Footer,
+	PageOrientation,
 	Packer,
 	Paragraph,
 	Table,
@@ -53,6 +56,10 @@ const ALIGNMENTS = {
 function renderRun(run: InlineRun): TextRun {
 	return new TextRun({
 		text: run.text,
+        ...(run.color ? { color: run.color } : {}),
+        ...(run.font ? { font: run.font } : {}),
+        ...(run.sizePt ? { size: halfPoints(run.sizePt) } : {}),
+        ...(run.underline ? { underline: {} } : {}),
 		...(run.bold === true ? { bold: true } : {}),
 		...(run.italic === true ? { italics: true } : {}),
 		/**
@@ -139,6 +146,7 @@ export async function writeDocx(
 	doc: DocModel,
 	options: { readonly workspace: string; readonly outputName: string },
 ): Promise<WriteDocxResult> {
+	boundedJson(doc);
 	const validation = validateDocModel(doc);
 	if (!validation.ok) {
 		const detail = validation.issues
@@ -178,12 +186,19 @@ export async function writeDocx(
 				},
 			],
 		},
-		sections: [{ children }],
+		sections: [{
+            properties: { page: {
+                size: { orientation: doc.orientation === "landscape" ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
+                ...(doc.marginMm === undefined ? {} : { margin: { top: Math.round(doc.marginMm * 56.693), bottom: Math.round(doc.marginMm * 56.693), left: Math.round(doc.marginMm * 56.693), right: Math.round(doc.marginMm * 56.693) } }),
+            } },
+            ...(doc.header ? { headers: { default: new Header({ children: [new Paragraph(doc.header)] }) } } : {}),
+            ...(doc.footer ? { footers: { default: new Footer({ children: [new Paragraph({ text: doc.footer, alignment: AlignmentType.CENTER })] }) } } : {}),
+            children,
+        }],
 	});
 
 	const buffer = await Packer.toBuffer(document);
-	const path = join(options.workspace, options.outputName);
-	await writeFile(path, buffer);
+	const path = await publishFile(options.workspace, options.outputName, ".docx", buffer);
 
 	return { path, bytes: buffer.length };
 }

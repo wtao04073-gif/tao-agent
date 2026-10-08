@@ -128,6 +128,8 @@ export interface AppDeps {
 			 * POST /api/tasks 被 400 拦截，故到达这里时只剩这两个值（缺省旗舰）。
 			 */
 			readonly tier?: "flagship" | "lite";
+            readonly modelId?: string;
+            readonly skillPackageId?: string;
 			/** 续聊所属对话 id；省略表示开启新对话。 */
 			readonly conversationId?: string;
 			/** 所属长程任务 id；省略表示临时对话。 */
@@ -137,7 +139,7 @@ export interface AppDeps {
 			/** 本次使用的智能体 id。 */
 			readonly agentId?: string;
 		},
-	) => Promise<{ readonly taskId: string; readonly conversationId: string }>;
+	) => Promise<{ readonly taskId: string; readonly conversationId: string; readonly warnings?: readonly string[] }>;
 	/** 创建长程任务。 */
 	readonly createJob?: (
 		tenant: TenantContext,
@@ -790,12 +792,15 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 					query?: unknown;
 					files?: unknown;
 					tier?: unknown;
+                    modelId?: unknown;
+                    skillPackageId?: unknown;
 					conversationId?: unknown;
 					jobId?: unknown;
 					skillId?: unknown;
 					agentId?: unknown;
 				};
-				// 自由文本入口：未给 scenarioId 时允许直接给一句话 query，
+				if((input.modelId!==undefined&&(typeof input.modelId!=="string"||input.modelId.length>64))||(input.skillPackageId!==undefined&&(typeof input.skillPackageId!=="string"||input.skillPackageId.length>80))){sendError(res,400,"模型或技能包标识无效");return;}
+                // 自由文本入口：未给 scenarioId 时允许直接给一句话 query，
 				// 路由归一到内置「通用任务」卡（fields.query），让前台能一句话发起。
 				let scenarioId: string;
 				let fields: Record<string, unknown>;
@@ -859,6 +864,8 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 						...(jobId === undefined ? {} : { jobId }),
 						...(skillId === undefined ? {} : { skillId }),
 						...(agentId === undefined ? {} : { agentId }),
+                        ...(typeof input.modelId==="string"?{modelId:input.modelId}:{}),
+                        ...(typeof input.skillPackageId==="string"?{skillPackageId:input.skillPackageId}:{}),
 					});
 					sendJson(res, 202, result);
 				} catch (error) {

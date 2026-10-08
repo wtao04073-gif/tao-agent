@@ -43,7 +43,8 @@
   }).then(function(r){
    if(generation!==previewId)return;host.textContent='';host.append(text('h3',name));if(!r.ok){host.append(text('p',r.data.error||'预览加载失败'));return;}
    var data=r.data;
-   if(data.kind==='text'){if(/\.(html?|svg|xml)$/i.test(name))host.append(text('pre',data.text));else host.append(markdown(data.text));}
+   if(data.kind==='slides'){host.append(text('p','幻灯片文本预览；图表、图片和版式请下载查看。'));(data.slides||data.units||[]).forEach(function(slide,i){var card=document.createElement('article');card.className='wb-card';card.append(text('h4','第 '+(i+1)+' 页'),text('pre',typeof slide==='string'?slide:slide.text||slide.title||''));host.append(card);});}
+   else if(data.kind==='text'){if(/\.(html?|svg|xml)$/i.test(name))host.append(text('pre',data.text));else host.append(markdown(data.text));}
    else if(data.kind==='sheet'){var wrap=document.createElement('div');wrap.className='preview-table';var table=document.createElement('table'),header=document.createElement('tr');(data.columns||[]).forEach(function(c){header.append(text('th',c));});table.append(header);(data.rows||[]).forEach(function(row){var tr=document.createElement('tr');(data.columns||[]).forEach(function(c,index){tr.append(text('td',Array.isArray(row)?row[index]:row[c]));});table.append(tr);});wrap.append(table);host.append(wrap);}
    else if(data.kind==='blob'&&['application/pdf','image/png','image/jpeg','image/webp'].includes(data.mime)){
     objectURL=URL.createObjectURL(data.blob);

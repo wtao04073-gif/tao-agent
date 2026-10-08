@@ -11,7 +11,7 @@
     }
     knowledgeNotify(refreshDocuments);
   }
-  var titles = { tasks: "任务中心", scenarios: "场景", knowledge: "知识库" };
+  var titles = { tasks: "任务中心", scenarios: "场景", knowledge: "知识库", files:"文件管理", conversations:"会话分组", preferences:"个人偏好", sharing:"分享与转交", share:"分享摘要", collaboration:"产物协作", teams:"团队空间", packages:"技能包", automation:"自动化",capabilities:"能力状态" };
   var statusNames = { QUEUED: "排队中", RUNNING: "执行中", AWAIT_CONFIRM: "等待确认", SUCCEEDED: "已完成", FAILED: "失败", CANCELLED: "已取消", EXCEEDED: "已达执行限额", INTERRUPTED: "已中断", active: "进行中", done: "已完成", archived: "已归档" };
   function node(tag, cls, text) {
     var n = document.createElement(tag);
@@ -66,7 +66,7 @@
     var next = location.hash.replace(/^#\/?/, "").split("?")[0];
     route = titles[next] ? next : "chat";
     revision++;
-    document.querySelectorAll("#navTasks, #navWorkbench, #navKnowledge").forEach(function (n) {
+    document.querySelectorAll("[data-workspace-route]").forEach(function (n) {
       var selected = n.dataset.workspaceRoute === route;
       n.classList.toggle("active", selected);
       if (selected) n.setAttribute("aria-current", "page"); else n.removeAttribute("aria-current");
@@ -80,6 +80,12 @@
     if (route === "tasks") tasks(current);
     if (route === "scenarios") scenarios(current);
     if (route === "knowledge") knowledge(current);
+    if(route === 'automation' && global.TaoAutomation){var automationHost=node('section');content.append(automationHost);global.TaoAutomation.mount(automationHost,{api:function(path,options){options=options||{};return api(options.method||'GET',path,typeof options.body==='string'?JSON.parse(options.body):options.body);},openTask:function(id){openChat(function(){hooks.openTask(id);});}}).then(function(cleanup){if(typeof cleanup!=='function')return;if(valid(current)&&route==='automation')routeCleanup=cleanup;else cleanup();});}
+    if(['files','conversations','preferences','sharing','share','collaboration','teams','packages','capabilities'].includes(route)) {
+      heading(titles[route], '');
+      var workbenchHost=node('section');content.append(workbenchHost);
+      global.TaoWorkbench.mount(workbenchHost,route,Object.assign({},hooks,{api:api,openTask:function(id){openChat(function(){hooks.openTask(id);});}}));
+    }
   }
   function filters(host, options, onChange) {
     var group = node("div", "ws-filters"); group.setAttribute("aria-label", "筛选");
@@ -133,6 +139,7 @@
           }, "ws-button ws-danger"); actions.append(cancel);
         }
         actions.append(button('重命名',async function(){var name=await App.Dialog.prompt({title:'重命名',label:'名称',value:title});if(name===null)return;try{await api('PATCH','/api/'+(entry.job?'jobs/':'tasks/')+encodeURIComponent(entry.job?t.jobId:t.taskId),{title:name});t.title=name;draw();}catch(e){notice(error,e.message);}}));
+        if(entry.job)actions.append(button(t.status==='archived'?'恢复长期任务':'归档长期任务',async function(){try{await api('PATCH','/api/jobs/'+encodeURIComponent(t.jobId),{status:t.status==='archived'?'active':'archived'});t.status=t.status==='archived'?'active':'archived';draw();}catch(e){notice(error,e.message);}}));
         if(entry.job&&t.status==='active')actions.append(button('停止长期任务',async function(){try{await api('PATCH','/api/jobs/'+encodeURIComponent(t.jobId),{status:'cancelled'});t.status='archived';draw();}catch(e){notice(error,e.message);}}));
         if(!entry.job&&['SUCCEEDED','FAILED','CANCELLED','INTERRUPTED','EXCEEDED'].includes(t.status))actions.append(button('删除',async function(){
           var yes=await App.Dialog.confirm({title:'删除对话？',description:'该对话将从列表移除，审计记录和已有产物保留。',danger:true});if(!yes)return;
@@ -472,7 +479,7 @@
       initialized = true;
       page = node("main", "workspace-page"); page.id = "workspacePage"; page.hidden = true; page.setAttribute("aria-label", "工作空间");
       content = node("div", "ws-content"); page.append(content); document.body.append(page);
-      [["navTasks", "tasks"], ["navWorkbench", "scenarios"], ["navKnowledge", "knowledge"]].forEach(function (pair) {
+      [["navTasks", "tasks"], ["navWorkbench", "scenarios"], ["navKnowledge", "knowledge"],["navFiles","files"],["navConversations","conversations"],["navPreferences","preferences"],["navSharing","sharing"],["navCollaboration","collaboration"],["navTeams","teams"],["navPackages","packages"],["navAutomation","automation"],["navCapabilities","capabilities"]].forEach(function (pair) {
         var nav = document.getElementById(pair[0]); if (!nav) return;
         nav.dataset.workspaceRoute = pair[1]; nav.addEventListener("click", function (e) { e.preventDefault(); go(pair[1]); });
       });

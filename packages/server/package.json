@@ -20,6 +20,10 @@
 	"dependencies": {
 		"@tao/core": "*",
 		"@tao/orchestrator": "*",
-		"@cubesandbox/sdk": "*"
+		"@cubesandbox/sdk": "*",
+		"cron-parser": "^5.4.0",
+		"jose": "^6.1.0",
+		"fflate": "^0.8.2",
+		"linkedom": "0.18.12"
 	}
 }

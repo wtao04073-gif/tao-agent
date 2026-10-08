@@ -1,3 +1,4 @@
+import {EXPERT_TEMPLATES} from "./connector-catalog.ts";
 /**
  * 技能 / 智能体扩展的内置种子与解析
  *
@@ -80,6 +81,7 @@ const BUILTIN_SKILLS: readonly BuiltinSkill[] = [
 
 /** 预置智能体：具名角色 + 系统提示词，可挂内置技能。 */
 const BUILTIN_AGENTS: readonly BuiltinAgent[] = [
+ ...EXPERT_TEMPLATES.map(t=>({agentId:"agent-builtin-"+t.id,name:t.name,description:t.description,systemPrompt:t.systemPrompt,skillIds:t.skillIds,builtin:true,createdAt:0,updatedAt:0})),
 	{
 		agentId: "agent-builtin-office-assistant",
 		name: "行政办公助手",

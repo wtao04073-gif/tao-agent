@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readAuthorizedFile, readWorkspaceFile, publishFile, readBoundedZip } from "./file-safety.ts";
 import { basename, extname, join, resolve } from "node:path";
 import { unzipSync, zipSync, strFromU8, strToU8 } from "fflate";
 import { DOMParser, XMLSerializer } from "@xmldom/xmldom";
@@ -14,6 +14,12 @@ export async function reviseDocument(input: {
     }[];
     signal: AbortSignal;
 }): Promise<string> {
+    return reviseDocumentWithReader(input, path => readWorkspaceFile(input.workspace, path));
+}
+async function reviseDocumentWithReader(
+    input: Parameters<typeof reviseDocument>[0],
+    readInput: (path: string) => Promise<Buffer>,
+): Promise<string> {
     const { outputName, signal } = input;
     if (basename(outputName) !== outputName || /[\\/\x00-\x1f]/.test(outputName) || outputName.startsWith("."))
         throw new Error("输出必须是普通文件名");
@@ -26,18 +32,14 @@ export async function reviseDocument(input: {
     if (resolve(output) === resolve(input.path))
         throw new Error("修订不得覆盖原文件");
     signal.throwIfAborted();
-    const source = await readFile(input.path);
+    // edit_document的path由PermissionGate校验；允许用户通过allowedFiles授权的父任务输入。
+    // workspace约束输出位置，不能把它当成输入白名单而拒绝已经授权的文件。
+    const source = await readInput(resolve(input.workspace, input.path));
     if (source.length > 20 * 1024 * 1024)
         throw new Error("文件超过20 MiB");
     let result: Uint8Array;
     if (ext === ".docx") {
-        let total = 0;
-        const files = unzipSync(source, { filter: entry => {
-                total += entry.originalSize;
-                if (total > 50 * 1024 * 1024 || entry.originalSize > 20 * 1024 * 1024)
-                    throw new Error("文档解压大小超限");
-                return true;
-            } });
+        const files = readBoundedZip(source);
         const original = files["word/document.xml"];
         if (!original)
             throw new Error("缺少 DOCX 正文");
@@ -90,8 +92,7 @@ export async function reviseDocument(input: {
     signal.throwIfAborted();
     if (result.length > 20 * 1024 * 1024)
         throw new Error("修订版超过20 MiB");
-    await writeFile(output, result, { flag: "wx", mode: 0o600 });
-    return output;
+    return publishFile(input.workspace, outputName, ext, result);
 }
 export function createDocumentEditTool(workspace: string): PlatformTool {
     return {
@@ -110,7 +111,7 @@ export function createDocumentEditTool(workspace: string): PlatformTool {
                 }[];
             };
             report("正在校验原文并生成修订版");
-            const outputPath = await reviseDocument({ ...input, workspace, signal });
+            const outputPath = await reviseDocumentWithReader({ ...input, workspace, signal }, readAuthorizedFile);
             return { text: "修订版已生成，原件保持不变", details: { outputPath, sourcePath: input.path, revisionSummary: `${input.edits.length}处精确替换` } };
         },
     };

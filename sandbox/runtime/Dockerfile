@@ -9,6 +9,7 @@ RUN python3 -m venv /opt/tao-venv \
     && /opt/tao-venv/bin/pip install --no-cache-dir -r /opt/tao/requirements.txt \
     && /opt/tao-venv/bin/python -m playwright install --with-deps chromium
 ENV PATH=/opt/tao-venv/bin:/usr/local/bin:/usr/bin:/bin
-COPY sandbox/runtime/worker.py /opt/tao/worker.py
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-chi-sim && rm -rf /var/lib/apt/lists/*
+COPY sandbox/runtime/worker.py sandbox/runtime/ocr.py /opt/tao/
 RUN mkdir -p /workspace/inputs /workspace/output /workspace/downloads
 # 保留官方镜像的 envd 启动入口；Tao 按需通过官方 SDK 启动 worker。

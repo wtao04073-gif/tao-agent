@@ -1,3 +1,4 @@
+import { EXTENDED_READ_FORMATS, readExtendedFile } from "./extended-readers.ts";
 import { extname } from "node:path";
 /**
  * 文档工具集
@@ -63,6 +64,10 @@ const BLOCK_SCHEMA = {
 					text: { type: "string" },
 					bold: { type: "boolean" },
 					italic: { type: "boolean" },
+                    color: { type: "string", description: "6位十六进制颜色" },
+                    font: { type: "string" },
+                    sizePt: { type: "number", minimum: 5, maximum: 72 },
+                    underline: { type: "boolean" },
 					placeholder: {
 						type: "boolean",
 						description:
@@ -101,7 +106,7 @@ export function createDocToolset(options: DocToolsetOptions): PlatformTool[] {
 		name: "read_document",
 		label: "读取文档",
 		description:
-			"读取 Word 文档的内容，按段落返回并带段落序号（可用于标注来源）。长文档请配合 fromParagraph 分批读取，或先用 outlineOnly 拿到标题骨架。",
+			"读取Word、PDF、PPTX、RTF与纯文本，按段落/页/行返回并带来源序号（可用于标注来源）。长文档请配合 fromParagraph 分批读取，或先用 outlineOnly 拿到标题骨架。",
 		parameters: {
 			type: "object",
 			properties: {
@@ -126,6 +131,10 @@ export function createDocToolset(options: DocToolsetOptions): PlatformTool[] {
 				fromParagraph?: number;
 			};
 
+            if (EXTENDED_READ_FORMATS.includes(extname(path).toLowerCase() as never)) {
+                const result = await readExtendedFile(options.workspace, { path, offset: (fromParagraph ?? 1) - 1, limit: READ_PAGE_SIZE });
+                return { text: [result.text, ...result.warnings, result.nextOffset === null ? "已到文件末尾" : `请用fromParagraph=${result.nextOffset + 1}继续读取`].join("\n"), details: { ...result, tableCount: 0, returned: result.units?.length ?? Math.max(0, (result.nextOffset ?? result.total) - result.offset), from: result.offset + 1, to: result.nextOffset ?? result.total } };
+            }
             if ([".xls", ".xlsx", ".csv", ".tsv"].includes(extname(path).toLowerCase())) return { isError: true, text: "这是表格文件，请使用 list_sheets 和 read_table（支持分页），不要使用 Word 文档读取器" };
 
 			if (outlineOnly === true) {
@@ -199,6 +208,7 @@ export function createDocToolset(options: DocToolsetOptions): PlatformTool[] {
 					description: "正文字体，默认宋体。体系文件与公文常有明确字体规定",
 				},
 				bodySizePt: { type: "number", description: "正文字号（磅），默认 12" },
+                header: { type: "string" }, footer: { type: "string" }, orientation: { type: "string", enum: ["portrait", "landscape"] }, marginMm: { type: "number", minimum: 5, maximum: 50 },
 			},
 			required: ["title", "outputName", "blocks"],
 		},
@@ -210,6 +220,7 @@ export function createDocToolset(options: DocToolsetOptions): PlatformTool[] {
 				blocks: DocBlock[];
 				bodyFont?: string;
 				bodySizePt?: number;
+                header?: string; footer?: string; orientation?: "portrait" | "landscape"; marginMm?: number;
 			};
 
 			if (!input.outputName.toLowerCase().endsWith(".docx")) {
@@ -224,6 +235,10 @@ export function createDocToolset(options: DocToolsetOptions): PlatformTool[] {
 				blocks: input.blocks,
 				...(input.bodyFont === undefined ? {} : { bodyFont: input.bodyFont }),
 				...(input.bodySizePt === undefined ? {} : { bodySizePt: input.bodySizePt }),
+                ...(input.header === undefined ? {} : { header: input.header }),
+                ...(input.footer === undefined ? {} : { footer: input.footer }),
+                ...(input.orientation === undefined ? {} : { orientation: input.orientation }),
+                ...(input.marginMm === undefined ? {} : { marginMm: input.marginMm }),
 			};
 
 			// 渲染前校验，报错能指到「第几块」

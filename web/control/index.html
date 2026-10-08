@@ -8,7 +8,7 @@
   <script src="/assets/core.js" defer></script>
   <script src="/control/control.js" defer></script>
   <script src="/control/settings.js" defer></script>
-</head>
+<link rel="stylesheet" href="/control/enterprise.css"></head>
 <body>
   <a class="skip" href="#main">跳到主内容</a>
   <aside class="sidebar">
@@ -26,7 +26,7 @@
     <main id="main">
       <div class="page-heading"><div><p class="eyebrow">运行管理</p><h1>让每一次执行，清晰可见。</h1><p class="muted">从实际用量到操作审计，掌握当前租户的运行情况。</p></div><span class="admin-badge">管理员专属</span></div>
       <p id="accessError" class="notice error" role="alert" hidden></p>
-      <section id="settings" class="card"><h2>系统配置</h2><p>保存草稿后可测试连接，再应用到新任务。有运行中任务时请等待完成。空白密钥保持原值，清除需勾选。</p><p id="configStatus" role="status">正在加载配置…</p><div id="configuration"></div><div class="config-actions"><button id="saveConfig">保存草稿</button><button id="applyConfig" class="primary">应用配置</button><button data-test-connection="model">测试模型（消耗少量额度）</button><button data-test-connection="lite">测试轻量模型</button><button data-test-connection="evaluation">测试评测模型</button><button data-test-connection="embedding">测试嵌入</button><button data-test-connection="search">测试搜索</button><button data-test-connection="mcp">测试 MCP 工具目录</button><button data-test-connection="sandbox">测试沙箱（创建后自动释放）</button><button id="suspendModel">暂停模型调用</button><button id="exportConfig">导出脱敏配置</button><button id="historyConfig">配置历史</button></div><div id="configHistory"></div></section>
+      <section id="settings" class="card"><h2>系统配置</h2><p>保存草稿后可测试连接，再应用到新任务。有运行中任务时请等待完成。空白密钥保持原值，清除需勾选。</p><p id="configStatus" role="status">正在加载配置…</p><div id="configuration"></div><div class="config-actions"><button id="saveConfig">保存草稿</button><button id="applyConfig" class="primary">应用配置</button><button data-test-connection="model">测试模型（消耗少量额度）</button><button data-test-connection="lite">测试轻量模型</button><button data-test-connection="evaluation">测试评测模型</button><button data-test-connection="embedding">测试嵌入</button><button data-test-connection="search">测试搜索</button><button data-test-connection="mcp">测试 MCP 工具目录</button><button data-test-connection="sandbox">测试沙箱（创建后自动释放）</button><button data-test-connection="model-a">测试模型 A</button><button data-test-connection="model-b">测试模型 B</button><button data-test-connection="model-c">测试模型 C</button><button data-test-connection="vision">测试视觉模型连接</button><button id="suspendModel">暂停模型调用</button><button id="exportConfig">导出脱敏配置</button><button id="historyConfig">配置历史</button></div><div id="configHistory"></div></section>
 <section id="knowledgeAdmin" class="card"><h2>知识库索引</h2><p>更换嵌入模型、维度或切片配置后，请对已有文档重建索引；重建失败会保留原索引。</p><button id="refreshKnowledge">刷新索引状态</button><div id="knowledgeAdminData"></div></section>
 <section id="accounts" class="card"><h2>用户账号</h2><form id="newAccount"><label>登录名<input name="username" required></label><label>显示名<input name="name" required></label><label>初始密码<input name="password" type="password" minlength="12" required></label><label>工作区<input name="workspaceId" value="default" required></label><label>角色<select name="role"><option value="MEMBER">成员</option><option value="WORKSPACE_ADMIN">工作区管理员</option><option value="TENANT_ADMIN">租户管理员</option></select></label><button type="submit">创建账号</button></form><div id="accountsList"></div></section>
 <section id="observability" class="card"><h2>运行观测</h2><button id="refreshObserve">刷新观测</button><p>展示任务状态、模型请求耗时、首字延迟和用量，不采集提示词正文。未接通能力在状态中明确显示。</p><div id="observabilityData"></div></section>
@@ -54,7 +54,7 @@
         <section id="audit" aria-labelledby="auditTitle"><div class="section-heading"><div><h2 id="auditTitle">审计日志</h2><p class="muted">工具调用决策与执行记录</p></div><span id="auditCount" class="muted"></span></div><p id="auditError" class="notice error" role="alert" hidden></p><div id="auditData" class="card table-scroll" hidden><table><thead><tr><th>时间</th><th>用户</th><th>工具</th><th>决策</th><th>原因</th></tr></thead><tbody id="auditRows"></tbody></table></div></section>
       </div>
       <footer>管控数据仅对管理员开放 · 数据范围由当前登录身份决定</footer>
-    </main>
+    <section id="enterpriseSettings" class="card"></section></main>
   </div>
-<script src="/assets/branding.js" defer></script></body>
+<script src="/assets/branding.js" defer></script><script src="/control/enterprise.js" defer></script></body>
 </html>

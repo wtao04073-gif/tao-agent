@@ -3,6 +3,7 @@
 set -euo pipefail
 TAO_RUNTIME_ROOT="${1:-/opt/tao-sandbox}"
 TAO_PYTHON="${2:-python3}"
+command -v tesseract >/dev/null || { echo '请先安装 tesseract-ocr 与 chi_sim/eng 语言数据'; exit 1; }
 command -v bwrap >/dev/null || { echo '请先安装 bubblewrap'; exit 1; }
 "$TAO_PYTHON" -c 'import sys; assert sys.version_info >= (3,11), "需要 Python 3.11 或更新版本"'
 mkdir -p "$TAO_RUNTIME_ROOT"

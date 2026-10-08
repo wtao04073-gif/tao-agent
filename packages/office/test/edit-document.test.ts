@@ -38,3 +38,9 @@ it("拒绝包含外部实体的 DOCX", async () => {
  const input = setup(); writeFileSync(input.path, zipSync({ "word/document.xml": strToU8('<!DOCTYPE doc [<!ENTITY x SYSTEM "file:///test">]><doc>&x;</doc>') }));
  await expect(reviseDocument({ ...input, edits: [{ find:"x", replace:"y" }] })).rejects.toThrow("外部实体");
 });
+it("直接修订函数仍拒绝工作区外输入，工具层由权限门独立授权", async () => {
+ const input = setup(".txt"), external = setup(".txt");
+ writeFileSync(external.path, "金额100元");
+ await expect(reviseDocument({ ...input, path: external.path, edits: [{ find: "100元", replace: "120元" }] })).rejects.toThrow("工作区");
+ expect(readFileSync(external.path, "utf8")).toBe("金额100元");
+});

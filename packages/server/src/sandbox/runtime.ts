@@ -106,6 +106,7 @@ export class BubblewrapRuntime implements Runtime {
         if (process.getuid?.() === 0) chownSync(path, uid, uid);
       }
       const script = join(r.dir, "worker.py");
+      const ocrSource=join(dirname(workerPath),"ocr.py"),ocrScript=join(r.dir,"ocr.py");if(existsSync(ocrSource))writeFileSync(ocrScript,readFileSync(ocrSource),{mode:0o644});
       writeFileSync(script, readFileSync(workerPath), { mode: 0o644 });
       const args = [
         "--unshare-all",
@@ -159,6 +160,7 @@ export class BubblewrapRuntime implements Runtime {
         "/workspace",
         "--clearenv",
       ];
+      if(existsSync(ocrScript))args.push("--ro-bind",ocrScript,"/opt/tao/ocr.py");
       const pythonRoot = dirname(
         dirname(realpathSync(join(c.runtimeDir, "bin/python"))),
       );
@@ -184,6 +186,7 @@ export class BubblewrapRuntime implements Runtime {
         PLAYWRIGHT_BROWSERS_PATH: "/opt/browsers",
         OPENBLAS_NUM_THREADS: "1",
         OMP_NUM_THREADS: "1",
+        OMP_THREAD_LIMIT:"1",
         MPLBACKEND: "Agg",
         PYTHONUNBUFFERED: "1",
         PYTHONDONTWRITEBYTECODE: "1",
@@ -403,6 +406,7 @@ export class CubeRuntime implements Runtime {
         HOME: "/workspace",
         OPENBLAS_NUM_THREADS: "1",
         OMP_NUM_THREADS: "1",
+        OMP_THREAD_LIMIT:"1",
         MPLBACKEND: "Agg",
       },
     });
@@ -411,6 +415,7 @@ export class CubeRuntime implements Runtime {
       await sb.files.makeDir("/workspace");
       await sb.files.makeDir("/opt/tao");
       await sb.files.write("/opt/tao/worker.py", readFileSync(workerPath));
+      const ocrSource=join(dirname(workerPath),"ocr.py");if(existsSync(ocrSource))await sb.files.write("/opt/tao/ocr.py",readFileSync(ocrSource));
       // 模板提供Python/Playwright。脱离本次RPC保留沙箱内浏览器状态；生命周期由VM管理。
       const command =
         "nohup python3 /opt/tao/worker.py --serve >/tmp/tao-runtime.log 2>&1 </dev/null &";

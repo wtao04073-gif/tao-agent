@@ -20,6 +20,10 @@ MAX_TEXT = 64000
 browser = None
 page = None
 playwright = None
+context = None
+pages = []
+recording = False
+recorded = []
 
 
 def path_for(raw, *, output=False):
@@ -58,7 +62,7 @@ async def bridge(reader, writer):
 
 
 async def ensure_browser():
-    global browser, page, playwright
+    global browser, page, playwright, context, pages
     if browser is not None:
         return
     from playwright.async_api import async_playwright
@@ -73,6 +77,7 @@ async def ensure_browser():
         browser = await playwright.chromium.launch(headless=True, args=args, **({'proxy': proxy} if proxy else {}))
     context = await browser.new_context(viewport={'width': 1440, 'height': 1000}, accept_downloads=True, service_workers='block')
     page = await context.new_page()
+    pages = [page]
     page.set_default_timeout(15000)
     async def save_download(download):
         name = Path(download.suggested_filename).name.replace('/', '_').replace('\\', '_')[:120]
@@ -81,6 +86,7 @@ async def ensure_browser():
 
 
 async def dispatch(a, sink):
+    global page, context, pages, recording, recorded
     operation = a.get('op')
     if operation == 'health':
         import importlib.util
@@ -150,9 +156,68 @@ async def dispatch(a, sink):
         if operation == 'export':
             return {'name': p.name, 'data': base64.b64encode(data).decode(), 'bytes': len(data)}
         return {'path': str(p), 'text': data[:MAX_TEXT].decode('utf8', errors='replace'), 'truncated': len(data) > MAX_TEXT}
+    if operation == 'browser_state':
+        await ensure_browser()
+        if a.get('action') == 'export':
+            return {'state': await context.storage_state()}
+        if a.get('action') == 'import':
+            state = a['state']
+            await context.clear_cookies()
+            await context.add_cookies(state.get('cookies', []))
+            # 不销毁单进程 Chromium 的 context；按匹配 origin 恢复 localStorage。
+            origins = json.dumps(state.get('origins', []), ensure_ascii=True)
+            await context.add_init_script('(() => { const saved = '+origins+'; for (const row of saved) { if (row.origin === location.origin) { localStorage.clear(); for (const item of row.localStorage || []) localStorage.setItem(item.name,item.value); } } })();')
+            return {'restored': True}
+        raise ValueError('不支持的会话操作')
+    if operation == 'ocr':
+        from ocr import ocr_file
+        return await asyncio.to_thread(ocr_file, str(path_for(a.get('path',''))), a.get('language','chi_sim+eng'))
     if operation == 'browser':
         await ensure_browser()
         action = a.get('action', 'observe')
+        if action == 'new_tab':
+            if len(pages) >= 5:
+                raise ValueError('最多同时打开5个标签页')
+            page = await context.new_page()
+            pages.append(page)
+            action = 'navigate' if a.get('url') else 'observe'
+        elif action == 'switch_tab':
+            index = int(a.get('tab', 0))
+            if index < 0 or index >= len(pages):
+                raise ValueError('标签页不存在')
+            page = pages[index]
+            action = 'observe'
+        elif action == 'close_tab':
+            if len(pages) <= 1:
+                raise ValueError('至少保留一个标签页')
+            await page.close()
+            pages = [p for p in pages if not p.is_closed()]
+            page = pages[-1]
+            action = 'observe'
+        elif action == 'record_start':
+            recorded = []
+            recording = True
+            action = 'observe'
+        elif action == 'record_stop':
+            recording = False
+            (ROOT/'output'/'browser-workflow.json').write_text(json.dumps(recorded,ensure_ascii=False))
+            action = 'observe'
+        elif action == 'replay':
+            steps = a.get('steps', [])
+            if not isinstance(steps,list) or len(steps)>20:
+                raise ValueError('回放最多20步')
+            recording = False
+            for step in steps:
+                if step.get('action') not in ('navigate','scroll','back','click'):
+                    raise ValueError('回放只允许导航、滚动、返回和点击；敏感填写不录制')
+                await dispatch({**step,'op':'browser'},sink)
+            action = 'observe'
+        if recording and action in ('navigate','scroll','back','click') and len(recorded)<20:
+            entry={k:v for k,v in a.items() if k in ('action','url','selector','distance')}
+            if 'url' not in entry or not any(k in entry['url'].lower() for k in ('token=','password=','key=','code=')):
+                recorded.append(entry)
+        if action == 'tabs':
+            action = 'observe'
         if action == 'navigate':
             from urllib.parse import urlparse
             url = a.get('url', '')
@@ -180,7 +245,7 @@ async def dispatch(a, sink):
         # 网页内容是不可信外部数据，客户端工具描述会向模型明确这一点。
         text = (await page.locator('body').inner_text(timeout=5000))[:12000] if await page.locator('body').count() else ''
         controls = await page.locator('a,button,input,select,textarea').evaluate_all("els => els.slice(0,60).map(e=>({tag:e.tagName,text:(e.innerText||e.getAttribute('aria-label')||e.getAttribute('placeholder')||'').slice(0,100),id:e.id,name:e.name||'',type:e.type||''}))")
-        return {'url': page.url, 'title': await page.title(), 'text': text, 'controls': controls, 'screenshot': str(shot), 'notice': '网页可能要求登录或验证；不会绕过验证码。截图代表当前真实页面。'}
+        return {'url': page.url, 'title': await page.title(), 'text': text, 'controls': controls, 'screenshot': str(shot), 'tabs':[{'tab':i,'url':p.url,'active':p==page} for i,p in enumerate(pages)], 'recording':recording, 'recordedSteps':len(recorded), 'notice': '网页可能要求登录或验证；不会绕过验证码。截图代表当前真实页面。'}
     raise ValueError('未知沙箱操作')
 
 

@@ -85,6 +85,8 @@ export interface SubmitOptions {
 	 * 这是最小的显式入口；按场景卡自动分档留待后续，不在此做隐式推断。
 	 */
 	readonly tier?: RunnerSpec["tier"];
+ readonly modelId?: string;
+ readonly images?: RunnerSpec["images"];
 	readonly prompt: string;
 	readonly systemPrompt: string;
 	readonly tools: RunnerSpec["tools"];
@@ -338,6 +340,8 @@ export class TaskOrchestrator {
 				...(options.activeTools === undefined ? {} : { activeTools: options.activeTools }),
 				// 档位显式透传；缺省由 Runner 侧回落旗舰（RunnerSpec.tier 默认）
 				...(options.tier === undefined ? {} : { tier: options.tier }),
+                ...(options.modelId===undefined?{}:{modelId:options.modelId}),
+                ...(options.images===undefined?{}:{images:options.images}),
 				...(options.history === undefined ? {} : { history: options.history }),
                 ...(options.inputReferences === undefined ? {} : { inputReferences: options.inputReferences }),
 				...(options.skills === undefined ? {} : { skills: options.skills }),

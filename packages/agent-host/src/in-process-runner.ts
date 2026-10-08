@@ -50,6 +50,7 @@ import { TenantTaskGate, type ReleaseReservation } from "./tenant-gate.ts";
 
 /** 宿主运行所需的外部依赖。全部注入 —— 便于测试与私有化部署替换。 */
 export interface HostRuntime {
+ readonly modelForId?: (id:string)=>Model<Api>;
 	saveAction?: (action: import("@tao/core").StoredAction) => void | Promise<void>;
 	approvalTimeoutMs?: number;
 	/** 创建一个独占的会话存储。一人一 Session 由调用方保证。 */
@@ -406,7 +407,7 @@ class InProcessRunner implements Runner {
 			}
 
 			// 多轮续聊：每轮是独立 Session，把历史问答显式拼进本轮输入，模型才记得上文。
-			await this.lane.prompt(withHistory(text, this.spec.history), [], BACKGROUND_CONTEXT);
+			await this.lane.prompt(withHistory(text, this.spec.history), [...(this.spec.images??[])], BACKGROUND_CONTEXT);
 			// 内核不会因生成失败而让 prompt reject，所以这里必须显式检查。
 			// 抛出去让编排层把任务转入 FAILED —— 静默成功比报错难查得多。
 			if (this.runFailure !== undefined) throw new Error(this.runFailure);
@@ -582,7 +583,7 @@ export class InProcessRunnerFactory implements RunnerFactory {
 		// 这样计量落账的模型名与实际调用永远一致，不会按错档位单价收费。
 		const tier = spec.tier ?? "flagship";
 		const selectedModel =
-			this.runtime.modelForTier?.(tier) ??
+			(spec.modelId ? this.runtime.modelForId?.(spec.modelId) : undefined) ?? this.runtime.modelForTier?.(tier) ??
 			this.runtime.model ??
 			(() => {
 				throw new Error("模型运行时未提供任何模型（model / modelForTier 均缺省）");

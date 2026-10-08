@@ -11,6 +11,7 @@ WORKDIR /build
 # 先只拷依赖清单，让 npm ci 这一层能被缓存。
 # 全量拷贝会让任何源码改动都触发重装依赖，构建从 1 分钟变 5 分钟。
 COPY package.json package-lock.json ./
+COPY vendor/cubesandbox-sdk/package.json ./vendor/cubesandbox-sdk/
 COPY packages/core/package.json ./packages/core/
 COPY packages/office/package.json ./packages/office/
 COPY packages/knowledge/package.json ./packages/knowledge/
@@ -27,7 +28,7 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 
 # 构建 vendor 与自有包
-RUN npm run build:vendor && npm run build
+RUN GOMAXPROCS=1 GOMEMLIMIT=1GiB NODE_OPTIONS=--max-old-space-size=1024 npm run build:vendor && GOMAXPROCS=1 GOMEMLIMIT=1GiB NODE_OPTIONS=--max-old-space-size=1024 npm run build
 
 # ── 运行阶段 ──────────────────────────────────────────
 FROM node:22-slim AS runtime
@@ -45,6 +46,8 @@ COPY --from=builder --chown=node:node /build/node_modules ./node_modules
 COPY --from=builder --chown=node:node /build/packages ./packages
 COPY --from=builder --chown=node:node /build/vendor ./vendor
 COPY --from=builder --chown=node:node /build/scripts ./scripts
+COPY --from=builder --chown=node:node /build/sandbox ./sandbox
+COPY --from=builder --chown=node:node /build/deploy/openapi.json ./deploy/openapi.json
 # 同源托管的 Web 前端（M5-3/4，纯静态零构建）
 COPY --from=builder --chown=node:node /build/web ./web
 

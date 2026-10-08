@@ -119,6 +119,8 @@ export interface RunnerSpec {
 	 * 在一次 run 内不按「规划轮/执行轮」动态换模型，避免计量模型名错标。
 	 */
 	readonly tier?: "flagship" | "lite";
+ readonly modelId?: string;
+ readonly images?: readonly {type:"image"; data:string; mimeType:string}[];
 	readonly gate: PermissionGate;
 	/** 步数上限，超出转 EXCEEDED。 */
 	readonly maxSteps?: number;

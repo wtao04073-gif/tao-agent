@@ -40,6 +40,10 @@ export interface InlineRun {
 	readonly text: string;
 	readonly bold?: boolean;
 	readonly italic?: boolean;
+	readonly color?: string;
+	readonly font?: string;
+	readonly sizePt?: number;
+	readonly underline?: boolean;
 	/**
 	 * 标为「待补充」类占位内容。
 	 *
@@ -100,6 +104,10 @@ export interface DocModel {
 	 */
 	readonly bodyFont?: string;
 	readonly bodySizePt?: number;
+	readonly header?: string;
+	readonly footer?: string;
+	readonly orientation?: "portrait" | "landscape";
+	readonly marginMm?: number;
 }
 
 export interface DocValidationIssue {
@@ -120,6 +128,10 @@ export function validateDocModel(doc: DocModel): {
 	readonly issues: readonly DocValidationIssue[];
 } {
 	const issues: DocValidationIssue[] = [];
+    if (!doc || typeof doc.title !== "string" || !Array.isArray(doc.blocks) || doc.blocks.length > 2000) return { ok: false, issues: [{ blockIndex: -1, message: "文档须提供标题和不超过2000个内容块" }] };
+    if (doc.marginMm !== undefined && (!Number.isFinite(doc.marginMm) || doc.marginMm < 5 || doc.marginMm > 50)) issues.push({ blockIndex: -1, message: "页边距须为5至50毫米" });
+    if (doc.orientation !== undefined && !["portrait", "landscape"].includes(doc.orientation)) issues.push({ blockIndex: -1, message: "页面方向无效" });
+    if ([doc.header, doc.footer, doc.bodyFont].some(v => v !== undefined && (typeof v !== "string" || v.length > 1000))) issues.push({ blockIndex: -1, message: "字体、页眉或页脚格式无效" });
 
 	if (doc.title.trim() === "") {
 		issues.push({ blockIndex: -1, message: "文档标题不能为空" });
@@ -131,7 +143,7 @@ export function validateDocModel(doc: DocModel): {
 		issues.push({ blockIndex: -1, message: `正文字号 ${doc.bodySizePt}pt 不在合理范围（5-72）` });
 	}
 
-	doc.blocks.forEach((block, index) => {
+	doc.blocks.forEach((block: DocBlock, index: number) => {
 		switch (block.type) {
 			case BlockType.Heading: {
 				if (block.text.trim() === "") {
@@ -149,7 +161,10 @@ export function validateDocModel(doc: DocModel): {
 				if (!hasText && !hasRuns) {
 					issues.push({ blockIndex: index, message: "段落既没有 text 也没有 runs" });
 				}
-				if (hasText && hasRuns) {
+				for (const run of block.runs ?? []) {
+                    if (typeof run.text !== "string" || (run.color !== undefined && !/^[0-9a-f]{6}$/i.test(run.color)) || (run.sizePt !== undefined && (!Number.isFinite(run.sizePt) || run.sizePt < 5 || run.sizePt > 72)) || (run.font !== undefined && (typeof run.font !== "string" || run.font.length > 100))) issues.push({ blockIndex: index, message: "行内文本或字体样式无效" });
+                }
+                if (hasText && hasRuns) {
 					// 两者都给会产生「哪个生效」的歧义，宁可报错
 					issues.push({ blockIndex: index, message: "段落不能同时给 text 与 runs" });
 				}
@@ -183,6 +198,7 @@ export function validateDocModel(doc: DocModel): {
 
 			case BlockType.PageBreak:
 				break;
+            default: issues.push({ blockIndex: index, message: "不支持的内容块类型" });
 		}
 	});
 

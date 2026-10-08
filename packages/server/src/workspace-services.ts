@@ -1,15 +1,15 @@
 /** 工作区知识持久化与安全预览。归属只接受服务端鉴权上下文。 */
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, extname, join, resolve, sep } from "node:path";
+import { dirname, basename, extname, join, resolve, sep } from "node:path";
 import { checkAccess, ingestDocument, KeywordRetriever, Role, Scope, type Chunk, type PlatformTool, type SourceParagraph, type TenantContext } from "@tao/core";
 import { createKnowledgeToolset, MemoryKnowledgeStore, boundRagChunks, indexChunks, retrieveVectors, EmbeddingError, RagIndexError, type EmbeddingProvider, type VectorIndex } from "@tao/knowledge";
-import { readDocx, readSheet, listSheets } from "@tao/office";
+import {readExtendedFile, readDocx, readSheet, listSheets } from "@tao/office";
 import { isSafeSegment, resolveWorkspaceDir } from "./accounts.ts";
 export const MAX_PREVIEW_BYTES = 20 * 1024 * 1024;
 export const MAX_KNOWLEDGE_CHARS = 500000;
 const MAX_PREVIEW_CHARS = 100000;
-const TEXT_EXTENSIONS = new Set([".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".html", ".htm", ".xml", ".svg", ".log", ".yaml", ".yml"]);
+const TEXT_EXTENSIONS = new Set([".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".html", ".htm", ".xml", ".svg", ".log", ".yaml", ".yml", ".py", ".js", ".ts", ".sql", ".sh", ".css"]);
 const BINARY_TYPES: Record<string, string> = { ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
 export class WorkspaceError extends Error {
     readonly status: number;
@@ -34,7 +34,7 @@ interface StoredDocument {
     readonly sourceChunks?: readonly Chunk[];
     readonly index?: VectorIndex;
 }
-export type FilePreview = {
+export type FilePreview = {kind:"slides";name:string;units:string[];truncated:boolean}| {
     kind: "text";
     name: string;
     text: string;
@@ -103,7 +103,7 @@ function paragraphs(text: string): SourceParagraph[] {
         return pieces.map((text) => ({ text: heading?.[2] ?? text, isHeading: heading !== null, headingLevel: heading?.[1]?.length ?? null }));
     }).map((line, index) => ({ ...line, index: index + 1 }));
 }
-async function extractText(path: string, name: string): Promise<string> {
+async function extractText(path: string, name: string, scan?:()=>Promise<string>): Promise<string> {
     const ext = extname(name).toLowerCase();
     if (ext === ".docx") {
         const doc = await readDocx(path);
@@ -117,6 +117,7 @@ async function extractText(path: string, name: string): Promise<string> {
         }
         return sections.join("\n\n");
     }
+    if(['.pdf','.pptx','.rtf'].includes(ext)){let offset=0,text='';for(let i=0;i<100;i++){const result=await readExtendedFile(dirname(path),{path,offset,limit:200});if(result.requiresOcr){if(scan)return scan();throw new WorkspaceError(415,'扫描PDF需要先用OCR生成文本后入库');}text+=result.text+'\n';if(text.length>2_000_000)throw new WorkspaceError(413,'解析文本过大');if(result.nextOffset==null)return text;offset=result.nextOffset;}throw new WorkspaceError(413,'文档分页过多');}
     if (!TEXT_EXTENSIONS.has(ext))
         throw new WorkspaceError(415, "知识入库支持文本、Markdown、CSV/TSV、DOCX、XLS 和 XLSX 文件");
     const text = readFileSync(path, "utf8");
@@ -127,6 +128,7 @@ async function extractText(path: string, name: string): Promise<string> {
 export async function previewFile(root: string, filePath: string, name: string): Promise<FilePreview> {
     const path = checkedFile(root, filePath);
     const ext = extname(name).toLowerCase();
+    if(ext==='.pptx'){const result=await readExtendedFile(dirname(path),{path,limit:100});return {kind:'slides',name,units:result.units??[],truncated:result.nextOffset!=null};}
     const mime = BINARY_TYPES[ext];
     if (mime !== undefined)
         return { kind: "binary", name, mime, bytes: readFileSync(path) };
@@ -140,6 +142,7 @@ export async function previewFile(root: string, filePath: string, name: string):
 }
 export function createWorkspaceServices(options: {
     workspaceRoot: string;
+    ocr?:(tenant:TenantContext,path:string)=>Promise<string>;
     embeddings?: EmbeddingProvider;
     retrievalMode?: "semantic" | "hybrid";
     minSimilarity?: number;
@@ -250,7 +253,7 @@ export function createWorkspaceServices(options: {
             throw new WorkspaceError(400, "请填写有效的文档名称");
         let text = input.text;
         if (input.fileName !== undefined)
-            text = await extractText(workspaceFile(options.workspaceRoot, tenant, input.fileName), input.fileName);
+            text = await extractText(workspaceFile(options.workspaceRoot, tenant, input.fileName), input.fileName,options.ocr?()=>options.ocr!(tenant,workspaceFile(options.workspaceRoot,tenant,input.fileName!)):undefined);
         if (typeof text !== "string" || text.trim() === "")
             throw new WorkspaceError(400, "文档内容不能为空");
         if (text.length > MAX_KNOWLEDGE_CHARS)

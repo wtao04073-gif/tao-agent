@@ -25,7 +25,7 @@ const fields: SettingsField[] = [];
 function field(key: string, label: string, group: string, type: SettingsField["type"] = "string", extra: Partial<SettingsField> = {}): void {
 	fields.push({ key, label, group, type, effect: "new-task", ...extra });
 }
-for (const [prefix, title] of [["MODEL", "旗舰模型"], ["MODEL_LITE", "轻量模型"], ["EVAL_MODEL", "评测模型"]]) {
+for (const [prefix, title] of [["MODEL", "旗舰模型"], ["MODEL_LITE", "轻量模型"], ["EVAL_MODEL", "评测模型"], ["MODEL_A", "扩展模型A"], ["MODEL_B", "扩展模型B"], ["MODEL_C", "扩展模型C"], ["VISION_MODEL", "视觉模型"]]) {
 	field(`${prefix}_PROVIDER`, `${title}服务商`, "model", "string", { options: ["openai-compatible", "deepseek", "qwen", "custom"] });
 	field(`${prefix}_BASE_URL`, `${title}服务地址`, "model");
 	field(`${prefix}_NAME`, `${title}名称`, "model");
@@ -34,6 +34,9 @@ for (const [prefix, title] of [["MODEL", "旗舰模型"], ["MODEL_LITE", "轻量
 		field(`${prefix}_${suffix}`, `${title}${label}（元/百万 Token）`, "model", "number", { min: 0 });
 	}
 }
+for(const prefix of ["MODEL","MODEL_LITE","MODEL_A","MODEL_B","MODEL_C","VISION_MODEL"]){field(prefix+"_LABEL","模型显示名称","model");field(prefix+"_VISION","支持图片输入（需服务商支持）","model","boolean",{default:prefix==="VISION_MODEL"});}
+field("MODEL_RETRY_COUNT","上游限流重试次数","limits","number",{default:3,min:0,max:5,integer:true});
+field("MODEL_RETRY_BASE_MS","限流退避起始毫秒","limits","number",{default:1000,min:100,max:30000,integer:true});
 field("MODEL_MAX_TOKENS", "最大输出 Token", "model", "number", { default: 4096, min: 1, max: 1_000_000, integer: true });
 field("MODEL_CONTEXT_WINDOW", "上下文窗口", "model", "number", { min: 1, max: 10_000_000, integer: true });
 field("MODEL_TIMEOUT_MS", "模型请求超时（毫秒）", "model", "number", { default: 120_000, min: 1000, max: 3_600_000, integer: true });
@@ -93,6 +96,15 @@ for (const [key,label,initial,min,max] of [
 ] as const) field(key,label,"sandbox","number",{default:initial,min,max,integer:true});
 for(const key of ["SANDBOX_LOCAL_RUNTIME","SANDBOX_LOCAL_BROWSERS","SANDBOX_LOCAL_UID","SANDBOX_CUBE_EGRESS_GUARD"]) field(key,"本地运行时部署参数","deployment","string",{readOnly:true,effect:"restart"});
 
+field("MODERATION_ENABLED","启用文本审核（审核通过后显示回答）","security","boolean",{default:false});
+field("MODERATION_API_URL","文本审核兼容API基础地址","security");
+field("MODERATION_API_KEY","文本审核密钥","security","string",{secret:true});
+field("MODERATION_MODEL","审核模型（可选）","security");
+field("SECURITY_DISABLED_TOOLS","禁用的工具（逗号分隔）","security");
+field("SECURITY_TOOL_RULES_JSON","工具限制规则（JSON，仅deny/confirm）","security");
+field("SECURITY_CONFIRM_WRITES","写操作统一确认","security","boolean",{default:false});
+field("SECURITY_SENSITIVE_INPUT_MODE","敏感凭据输入策略","security","string",{default:"warn",options:["warn","block","off"]});
+for(const [prefix,label] of [["IMAGE","图像生成"],["AUDIO","语音转录"]]){field(prefix+"_ENABLED","启用"+label,"media","boolean",{default:false});field(prefix+"_API_URL",label+"兼容API基础地址","media");field(prefix+"_MODEL",label+"模型名称","media");field(prefix+"_API_KEY",label+"密钥","media","string",{secret:true});}
 field("OBSERVABILITY_RETENTION_DAYS", "观测数据保留天数", "observability", "number", { default: 30, min: 1, max: 3650, integer: true });
 field("OBSERVABILITY_SAMPLE_RATE", "观测采样比例", "observability", "number", { default: 1, min: 0, max: 1 });
 
@@ -113,7 +125,7 @@ field("WORKSPACE_DIR", "存储位置（部署管理）", "deployment", "string",
 const byKey = new Map(fields.map((entry) => [entry.key, entry]));
 const groups = [
 	["model", "模型"], ["limits", "限流与配额"], ["knowledge", "知识库"], ["search", "联网搜索"],
-	["extensions", "扩展与子智能体"], ["sandbox", "沙箱执行环境"], ["observability", "观测"], ["evaluation", "评测"], ["branding", "品牌"], ["deployment", "部署"],
+	["extensions", "扩展与子智能体"], ["media","多模态"], ["security","工具与安全策略"], ["sandbox", "沙箱执行环境"], ["observability", "观测"], ["evaluation", "评测"], ["branding", "品牌"], ["deployment", "部署"],
 ].map(([id, label]) => ({ id: id!, label: label! }));
 
 export class AdminError extends Error {

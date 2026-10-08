@@ -83,6 +83,8 @@ export class AdminIdentity {
 		this.state = { version: 1, claimed: false, accounts, sessions: {} };
 		this.persist(this.state);
 	}
+    getAccountPrincipal(accountId:string){const a=this.state.accounts.find(a=>a.id===accountId&&a.enabled);return a?principalOf(a):undefined;}
+    loginBoundAccount(accountId:string){const a=this.state.accounts.find(a=>a.id===accountId&&a.enabled);if(!a)throw new AdminIdentityError(403,'绑定账号不可用');const result=this.issue(structuredClone(this.state),a);return {...result,csrf:hash('csrf:'+result.token)};}
     contexts(){return this.state.accounts.filter(a=>a.enabled).map(a=>principalOf(a));}
     validPrincipal(p:Principal){return this.state.accounts.some(a=>a.enabled&&a.tenantId===p.tenant.tenantId&&a.userId===p.tenant.userId&&a.workspaceId===p.tenant.workspaceId&&a.role===p.role);}
 

@@ -28,7 +28,7 @@ export function networkPolicy(cidrs = '') {
 }
 
 /** DNS 只解析一次，连接固定已检查的 IP；Host 与 TLS servername 保持原主机。 */
-export function outboundFetch(cidrs = '', maxBytes = 8 * 1024 * 1024): typeof fetch {
+export function outboundFetch(cidrs = '', maxBytes = 8 * 1024 * 1024, allowRedirectResponses=false): typeof fetch {
  const check = networkPolicy(cidrs);
  return async (input, init) => {
   const request = new Request(input, init);const url = new URL(request.url);
@@ -47,7 +47,7 @@ export function outboundFetch(cidrs = '', maxBytes = 8 * 1024 * 1024): typeof fe
    const req = transport(url, {method: request.method, headers, agent: false, family:target.family, signal: request.signal,
     lookup: (_host, _options, callback) => callback(null, target.address, target.family)}, res => {
     const status = res.statusCode || 502;
-    if (status >= 300 && status < 400) {res.destroy();reject(new AdminError(502, '服务不允许重定向'));return;}
+    if (!allowRedirectResponses && status >= 300 && status < 400) {res.destroy();reject(new AdminError(502, '服务不允许重定向'));return;}
     const responseHeaders = new Headers();for (const [key,value] of Object.entries(res.headers)) if(value!==undefined) responseHeaders.set(key,Array.isArray(value)?value.join(', '):value);
     if (res.headers['content-encoding'] && res.headers['content-encoding'] !== 'identity') {res.destroy();reject(new AdminError(502, '服务未遵守响应编码要求'));return;}
     if (request.method === 'HEAD' || [204,205,304].includes(status)) {res.resume();resolve(new Response(null,{status,headers:responseHeaders}));return;}

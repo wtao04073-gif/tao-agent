@@ -37,3 +37,11 @@ export { validateDocx, type DocxValidationResult } from "./validate-docx.ts";
 export { createDocToolset, DOC_TOOL_POLICIES, type DocToolsetOptions } from "./doc-toolset.ts";
 
 export { reviseDocument, createDocumentEditTool } from "./edit-document.ts";
+
+export { createExtendedOfficeToolset, EXTENDED_OFFICE_TOOL_POLICIES } from "./extended-toolset.ts";
+export { writeWorkbook, editSpreadsheet, type SheetSpec, type TableValue, type CellStyle, type SpreadsheetEdit } from "./spreadsheet.ts";
+export { writePresentation, type PresentationSpec } from "./presentation.ts";
+export { readExtendedFile, readRtfText, mergePdf, EXTENDED_READ_FORMATS, type ExtendedReadResult } from "./extended-readers.ts";
+export { fillDocumentTemplate } from "./document-template.ts";
+
+export type { SpreadsheetChart } from "./spreadsheet-charts.ts";

@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#2563eb">
 <title>Tao Agent · 办公智能体</title>
 <style>
 	/* ===== 设计令牌（对齐 Inspire 原型：浅色企业 SaaS · blue 主色 · 大圆角 · 轻阴影） ===== */
@@ -378,7 +379,17 @@
 				<button class="new-job-btn" id="newJobBtn" type="button">＋ 新建任务</button>
 				<div id="jobList"></div>
 			</div>
-			<div class="recent">
+			<button class="nav-item" id="navFiles">文件管理</button>
+<button class="nav-item" id="navConversations">会话分组</button>
+<button class="nav-item" id="navPreferences">个人偏好</button>
+<button class="nav-item" id="navSharing">分享与转交</button>
+<button class="nav-item" id="navCollaboration">产物协作</button>
+<button class="nav-item" id="navTeams">团队空间</button>
+<button class="nav-item" id="navPackages">技能包</button>
+<button class="nav-item" id="navAutomation">自动化</button>
+<button class="nav-item" id="navCapabilities">能力状态</button>
+<button class="nav-item" id="navNewWindow">在新窗口打开工作区</button>
+<div class="recent">
 				<button class="recent-head" id="recentHead" type="button"><span>最近对话</span><span class="recent-caret">▾</span></button>
 				<div id="recentList"></div>
 			</div>
@@ -483,7 +494,8 @@
 				</div>
 				<button class="deliver-close" id="deliverClose" title="收起交付物">✕</button>
 			</div>
-			<div class="deliver-body" id="deliverBody">
+			<details class="wb-web-link"><summary>网页链接</summary><label>网页地址<input id="resultWebUrl" type="url" placeholder="https://example.com" aria-label="网页地址"></label><button id="resultWebOpen" type="button" class="hbtn">在新标签页打开</button><p>网页在浏览器新标签页打开；任务生成的截图可在下方产物中预览。</p></details>
+            <div class="deliver-body" id="deliverBody">
 				<div class="deliver-empty">交付物将在这里预览</div>
 			</div>
 		</aside>
@@ -530,6 +542,8 @@
 	<div class="toast" id="toast"></div>
 <script src="/assets/core.js?v=app-dialog-1"></script>
 <script src="/assets/forms.js"></script>
+<script src="/assets/workbench.js"></script>
+<script src="/assets/automation.js"></script>
 <script src="/assets/workspace.js?v=app-dialog-1"></script>
 <script src="/assets/chat-interactions.js"></script>
 <script src="/assets/run-display.js"></script>
@@ -644,6 +658,15 @@
 				: (state.booting ? "任务正在启动，请稍候" : "");
 		});
 	}
+
+    ['lInput','sInput'].forEach(function(id){
+      var ta=document.getElementById(id);
+      ta.addEventListener('paste',function(event){var files=Array.from(event.clipboardData&&event.clipboardData.files||[]).filter(function(f){return /^image\/(png|jpeg|webp)$/.test(f.type);});if(!files.length)return;event.preventDefault();if(state.running||state.booting){toast('请等待任务结束后粘贴图片');return;}trackUploads({files:files,value:''},document.getElementById(id==='lInput'?'lAttachRow':'attachRow'));});
+      ta.addEventListener('input',function(){if(/(?:^|\s)\/$/.test(ta.value)){ta.value=ta.value.slice(0,-1);openAddonPicker('skill');}if(/(?:^|\s)@$/.test(ta.value)){ta.value=ta.value.slice(0,-1);TaoWorkspace.navigate('files');}});
+    });
+    App.api('GET','/api/model-profiles').then(function(r){if(!r.ok)return;document.querySelectorAll('.bar-right').forEach(function(bar){var select=document.createElement('select');select.className='model-pick';select.setAttribute('aria-label','选择模型配置');var automatic=document.createElement('option');automatic.value='';automatic.textContent='自动模型';select.append(automatic);(r.data.models||[]).forEach(function(m){var o=document.createElement('option');o.value=m.id;o.textContent=m.name+(m.vision?' · 识图':'');o.disabled=!m.available;select.append(o);});select.onchange=function(){state.modelId=select.value;document.querySelectorAll('select[aria-label="选择模型配置"]').forEach(function(s){s.value=select.value;});};bar.prepend(select);});}).catch(function(){});
+    if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(function(){});
+    $('#resultWebOpen').addEventListener('click',function(){try{var url=new URL($('#resultWebUrl').value);if(!['https:','http:'].includes(url.protocol)||url.username||url.password)throw new Error();var link=document.createElement('a');link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';link.referrerPolicy='no-referrer';link.click();}catch(e){toast('请输入不含账号密码的 HTTP 或 HTTPS 网页地址');}});
 
 	/* ---------- 左栏：折叠 + 最近任务 ---------- */
 	function setRail(collapsed) {
@@ -1012,7 +1035,7 @@
 		if(role === "bot" && text) ChatUI.renderAnswer(m.querySelector("p"), text); else m.querySelector("p").textContent = text || "";
 		if(role==='user'){
           var edit=document.createElement('button');edit.type='button';edit.className='retry-btn';edit.textContent='编辑后重发';
-          edit.onclick=async function(){if(state.running||state.booting){toast('请先等待任务结束');return;}var value=await App.Dialog.prompt({title:'编辑后重发',label:'新的请求内容',value:text||'',multiline:true,description:'编辑内容会作为当前会话的新一轮发送，历史内容保留。引用文件请重新选择。'});if(value!==null&&value.trim()){$('#sInput').value=$('#lInput').value=value;drafts[currentDraft]=value;$('#sInput').focus();}};
+          edit.onclick=async function(){if(state.running||state.booting){toast('请先等待任务结束');return;}var value=await App.Dialog.prompt({title:'编辑后重发',label:'新的请求内容',value:text||'',multiline:true,description:'编辑内容将用于一个新对话，原会话完整保留。引用文件请重新选择。'});if(value!==null&&value.trim()){resetAll();$('#lInput').value=value;drafts[currentDraft]=value;$('#lInput').focus();}};
           m.querySelector('.bubble').append(edit);
         }
         $("#inner").appendChild(m);
@@ -1051,6 +1074,8 @@
 		updateTopStatus(); updateSendEnabled();
 
 		var payload = { query: text, tier: tier };
+        if(state.modelId)payload.modelId=state.modelId;
+        if(state.skillPackageId)payload.skillPackageId=state.skillPackageId;
 		if (files.length) payload.files = files.map(function (f) { return f.path; });
 		// 本次草稿选用的技能 / 智能体。
 		if (state.skill) payload.skillId = state.skill.skillId;
@@ -1064,7 +1089,8 @@
 			.then(function (r) {
 				if (gen !== generation) return;
 				if (!r.ok) { fail((r.data && r.data.error) || "任务提交失败");submissionRetry(); return; }
-				state.taskId = r.data.taskId;rememberView(state.taskId,state.mode==="job"?state.jobId:null);
+				if(Array.isArray(r.data.warnings)&&r.data.warnings.length)toast(r.data.warnings.join('；'));
+            state.taskId = r.data.taskId;rememberView(state.taskId,state.mode==="job"?state.jobId:null);
 				if (r.data.conversationId) {state.conversationId = r.data.conversationId;currentDraft=state.mode==="job"?"job:"+state.jobId:state.conversationId;drafts[currentDraft]="";$("#sInput").value=$("#lInput").value="";}
 				state.booting = false; updateSendEnabled();
 				subscribe(gen, r.data.taskId); loadRecent(); loadJobs();
@@ -1647,6 +1673,7 @@
 			};
 			if (state.agent) add("🤖", state.agent, function () { state.agent = null; renderAddonChips(); });
 			if (state.skill) add("🧩", state.skill, function () { state.skill = null; renderAddonChips(); });
+            if(state.skillPackage)add("📦",state.skillPackage,function(){state.skillPackage=null;state.skillPackageId=null;renderAddonChips();});
 			row.style.display = row.children.length ? "flex" : "none";
 		});
 	}
@@ -1708,7 +1735,7 @@
 		state.running = false;
 		state.booting = false; state.steps = null; state.answerP = null;
 		state.pending = []; state.inFlight = [];
-		state.skill = null; state.agent = null;
+		state.skill = null; state.agent = null; state.skillPackageId=null;state.skillPackage=null;
 		state.seenSeq = null; state.seenArtifact = null; state.seenConfirm = null;
 		state.deliverCleared = false;
 		$("#session").classList.add("hidden");
@@ -1739,6 +1766,7 @@
     }
     TaoWorkspace.init({openTask:openExisting,openJob:openJob,newJob:newJob,
       attachFile:attachReference,showChat:restoreChatView,
+      currentTask:function(){return state.taskId;},selectPackage:function(p){if(!p.enabled){toast('请先启用技能包');return;}state.skillPackageId=p.id;state.skillPackage=p;renderAddonChips();toast('已选择技能包：'+p.name);},
       openPreview:function(file){
         if(!state.taskId&&!state.jobId&&!state.booting&&!state.previewOnly){
           state.previewOnly=true;$('#chatTitle').textContent='资料预览';
@@ -1751,10 +1779,11 @@
         showDeliver();ChatUI.preview(null,file.name);
       }});
     $('#navChat').addEventListener('click',function(){TaoWorkspace.showChat();});
+    $('#navNewWindow').addEventListener('click',function(){var a=document.createElement('a');a.href='/chat.html';a.target='_blank';a.rel='noopener noreferrer';a.click();});
     $('#frontNewChat').addEventListener('click',resetAll);
     $('#railScrim').addEventListener('click',function(){setRail(true);});
     ['#lInput','#sInput'].forEach(function(sel){$(sel).addEventListener('input',function(){var value=this.value;$('#lInput').value=$('#sInput').value=value;drafts[currentDraft]=value;});});
-    ['#lFile','#sFile'].forEach(function(sel){$(sel).accept='.txt,.md,.csv,.tsv,.docx,.xls,.xlsx,.pdf,.html,.xml,.json,.png,.jpg,.jpeg,.webp';});
+    ['#lFile','#sFile'].forEach(function(sel){$(sel).accept='.txt,.md,.csv,.tsv,.docx,.xls,.xlsx,.pdf,.pptx,.rtf,.zip,.html,.xml,.json,.jsonl,.yaml,.yml,.js,.ts,.py,.go,.java,.rs,.css,.sql,.png,.jpg,.jpeg,.webp';});
     var searchTimer;$('#historySearch').addEventListener('input',function(){clearTimeout(searchTimer);searchTimer=setTimeout(function(){loadRecent();loadJobs();},200);});
     document.addEventListener('keydown',function(e){
       if(e.key==='Escape'&&!e.defaultPrevented&&!e.target.closest('dialog')){closePlusMenus();closeAddonPicker();hideDeliver();if(isMobile())setRail(true);}
@@ -1770,6 +1799,7 @@
 	App.api("GET", "/api/me").then(function (r) {
 		if (!r.ok || !r.data) return;
 		if (r.data.name) $("#userName").textContent = r.data.name;
+        App.api("GET","/api/workbench/preferences").then(function(p){if(p.ok&&p.data.nickname)$("#userName").textContent=p.data.nickname;}).catch(function(){});
 		state.role = r.data.role || "member";
 
 		// 模型选择器：旗舰常驻；后端配置了轻量档才出现该选项
