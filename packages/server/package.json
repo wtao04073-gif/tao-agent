@@ -3,7 +3,7 @@
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
-	"description": "HTTP 服务与 SSE 事件下发。零第三方运行时依赖（仅 Node 内置 http），便于私有化部署。",
+	"description": "HTTP 服务、SSE 事件下发与隔离执行适配，支持私有化部署",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"exports": {
@@ -19,6 +19,7 @@
 	},
 	"dependencies": {
 		"@tao/core": "*",
-		"@tao/orchestrator": "*"
+		"@tao/orchestrator": "*",
+		"@cubesandbox/sdk": "*"
 	}
 }

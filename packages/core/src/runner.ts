@@ -64,7 +64,7 @@ export interface ToolOutcome {
 /**
  * 平台自定义工具。
  *
- * 一期不开放自由 shell（[安全策略决策 4](../../../docs/security-policy.md)），
+ * 不开放宿主 shell；代码执行必须经独立沙箱工具（[安全策略决策 4](../../../docs/security-policy.md)），
  * 所有能力以结构化工具提供、参数经 schema 校验。
  */
 export interface PlatformTool {

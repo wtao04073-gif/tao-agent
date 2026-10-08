@@ -8,6 +8,7 @@
     "node": ">=22.19.0"
   },
   "workspaces": [
+    "vendor/cubesandbox-sdk",
     "vendor/pi/agent",
     "vendor/pi/ai",
     "vendor/pi/chord",

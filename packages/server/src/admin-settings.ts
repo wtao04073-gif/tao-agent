@@ -72,6 +72,27 @@ field("MCP_TOOLS", "允许的工具（逗号分隔）", "extensions");
 field("MCP_AUTH_HEADER", "MCP 认证头名称", "extensions", "string", { default: "Authorization" });
 field("MCP_AUTH_TOKEN", "MCP 认证凭据", "extensions", "string", { secret: true });
 
+field("SANDBOX_ENABLED", "启用隔离执行环境", "sandbox", "boolean", { default: false });
+field("SANDBOX_PROVIDER", "运行方式（生产推荐 cube）", "sandbox", "string", { default: "cube", options: ["cube", "bubblewrap"] });
+field("SANDBOX_API_URL", "CubeSandbox API 地址", "sandbox");
+field("SANDBOX_API_KEY", "CubeSandbox 密钥", "sandbox", "string", { secret: true });
+field("SANDBOX_TEMPLATE", "CubeSandbox 模板 ID", "sandbox");
+field("SANDBOX_PROXY_IP", "CubeProxy IP（可选）", "sandbox");
+field("SANDBOX_PROXY_PORT", "CubeProxy 端口", "sandbox", "number", { default: 443, min: 1, max: 65535, integer: true });
+field("SANDBOX_PROXY_SCHEME", "CubeProxy 协议", "sandbox", "string", { default: "https", options: ["https", "http"] });
+field("SANDBOX_DOMAIN", "CubeSandbox 域名", "sandbox", "string", { default: "cube.app" });
+field("SANDBOX_NETWORK_ENABLED", "允许沙箱访问公网（私网始终禁止）", "sandbox", "boolean", { default: false });
+field("SANDBOX_ALLOWED_DOMAINS", "出网域名白名单（逗号分隔；空白允许公网）", "sandbox");
+field("SANDBOX_REQUIRE_CONFIRM", "代码执行前要求用户确认", "sandbox", "boolean", { default: true });
+for (const [key,label,initial,min,max] of [
+ ["SANDBOX_TTL_SECONDS","单任务沙箱最长存活（秒）",600,60,3600],
+ ["SANDBOX_EXEC_TIMEOUT_SECONDS","单次代码执行超时（秒）",60,1,120],
+ ["SANDBOX_MAX_CONCURRENT","沙箱最大并发",2,1,5],
+ ["SANDBOX_MEMORY_MB","本地沙箱内存监督阈值（MB，Cube 由模板控制）",1536,256,4096],
+ ["SANDBOX_DISK_MB","本地沙箱文件监督阈值（MB，Cube 由模板控制）",128,32,1024],
+] as const) field(key,label,"sandbox","number",{default:initial,min,max,integer:true});
+for(const key of ["SANDBOX_LOCAL_RUNTIME","SANDBOX_LOCAL_BROWSERS","SANDBOX_LOCAL_UID","SANDBOX_CUBE_EGRESS_GUARD"]) field(key,"本地运行时部署参数","deployment","string",{readOnly:true,effect:"restart"});
+
 field("OBSERVABILITY_RETENTION_DAYS", "观测数据保留天数", "observability", "number", { default: 30, min: 1, max: 3650, integer: true });
 field("OBSERVABILITY_SAMPLE_RATE", "观测采样比例", "observability", "number", { default: 1, min: 0, max: 1 });
 
@@ -92,7 +113,7 @@ field("WORKSPACE_DIR", "存储位置（部署管理）", "deployment", "string",
 const byKey = new Map(fields.map((entry) => [entry.key, entry]));
 const groups = [
 	["model", "模型"], ["limits", "限流与配额"], ["knowledge", "知识库"], ["search", "联网搜索"],
-	["extensions", "扩展与子智能体"], ["observability", "观测"], ["evaluation", "评测"], ["branding", "品牌"], ["deployment", "部署"],
+	["extensions", "扩展与子智能体"], ["sandbox", "沙箱执行环境"], ["observability", "观测"], ["evaluation", "评测"], ["branding", "品牌"], ["deployment", "部署"],
 ].map(([id, label]) => ({ id: id!, label: label! }));
 
 export class AdminError extends Error {

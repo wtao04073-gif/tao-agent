@@ -120,6 +120,10 @@ function mimeFor(fileName: string): string {
 		pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 		txt: "text/plain",
 		json: "application/json",
+        png: "image/png",
+        jpg: "image/jpeg",
+        jpeg: "image/jpeg",
+        webp: "image/webp",
 	};
 	return table[ext] ?? "application/octet-stream";
 }

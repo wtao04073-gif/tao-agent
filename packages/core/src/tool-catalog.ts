@@ -29,6 +29,11 @@ export interface ToolDescriptor {
 }
 
 export const TOOL_CATALOG: readonly ToolDescriptor[] = [
+ {name:"sandbox_execute",label:"沙箱代码执行",status:ToolStatus.Available,access:"write"},
+ {name:"sandbox_files",label:"沙箱文件操作",status:ToolStatus.Available,access:"write"},
+ {name:"sandbox_export",label:"交付沙箱文件",status:ToolStatus.Available,access:"write"},
+ {name:"sandbox_browser",label:"浏览网页与截图",status:ToolStatus.Available,access:"read"},
+ {name:"sandbox_browser_action",label:"操作网页",status:ToolStatus.Available,access:"write"},
     { name: "write_table", label: "生成 Excel 表格", status: ToolStatus.Available, access: "write" },
 	{ name: "edit_document", label: "修订文档", status: ToolStatus.Available, access: "write" },
 	{ name: "delegate_tasks", label: "委派子任务", status: ToolStatus.Available, access: "write" },

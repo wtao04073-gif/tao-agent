@@ -34,6 +34,8 @@ const targets = (requested.length ? requested : available).sort((a, b) => {
 
 const tsgo = join(ROOT, "node_modules", ".bin", "tsgo");
 
+execFileSync(tsgo, ["-p", "vendor/cubesandbox-sdk/tsconfig.build.json"], { cwd: ROOT, stdio: "inherit" });
+
 console.log(`\n  构建自有包\n  ${"─".repeat(52)}`);
 
 for (const pkg of targets) {

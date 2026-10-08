@@ -66,3 +66,6 @@ vendor/**/*.tsbuildinfo
 deploy/.env
 flux/.local
 flux/changes
+
+vendor/cubesandbox-sdk/dist/
+vendor/cubesandbox-sdk/node_modules/

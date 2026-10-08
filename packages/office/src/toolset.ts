@@ -2,7 +2,7 @@ import { createWriteTableTool } from "./write-table.ts";
 /**
  * 对账场景的平台工具
  *
- * 一期不开放自由 shell（[安全策略决策 4](../../../docs/security-policy.md)），能力以结构化工具提供、
+ * 办公工具不开放宿主 shell（[安全策略决策 4](../../../docs/security-policy.md)），能力以结构化工具提供、
  * 参数经 schema 校验。这三个工具组成制造业对账场景的完整链路：
  *
  *   list_sheets（看有哪些表）→ read_table（读数据）→ reconcile_tables（核对并产出报告）
