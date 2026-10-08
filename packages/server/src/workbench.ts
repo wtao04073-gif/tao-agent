@@ -6,7 +6,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { zipSync, strToU8 } from 'fflate';
 import type { TenantContext, StoredTask, TaskEvent } from '@tao/core';
 import { FileJsonStore } from '@tao/knowledge';
-import { readJsonBody, sendJson, sendError, type Principal } from './app.ts';
+import { contentDisposition, readJsonBody, sendJson, sendError, type Principal } from './app.ts';
 import { workspaceDirectory, checkedFile, isSafeFileName, WorkspaceError } from './workspace-services.ts';
 import type { ResourceCatalog } from './resources.ts';
 import { paginate } from './pagination.ts';
@@ -28,7 +28,7 @@ const MAX_TRANSFER_BYTES=64*1024*1024;
 const hashBytes=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 const archiveName=(name:string)=>clean(name).replace(/[\\/<>:"|?*\x00-\x1f\x7f]/g,'_').slice(0,180)||'file';
 function downloadBytes(res:ServerResponse,bytes:Uint8Array,name:string,mime='application/octet-stream'){
- res.writeHead(200,{'Content-Type':mime,'Content-Length':bytes.byteLength,'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(archiveName(name))}`,'X-Content-Type-Options':'nosniff','Content-Security-Policy':"sandbox; default-src 'none'",'Referrer-Policy':'no-referrer'});res.end(bytes);
+ res.writeHead(200,{'Content-Type':mime,'Content-Length':bytes.byteLength,'Content-Disposition':contentDisposition(archiveName(name)),'X-Content-Type-Options':'nosniff','Content-Security-Policy':"sandbox; default-src 'none'",'Referrer-Policy':'no-referrer'});res.end(bytes);
 }
 function selectArtifactFiles(d:WorkbenchDeps,tenant:TenantContext,taskId:string,selection:unknown):SharedFile[]{
  if(!Array.isArray(selection)||selection.length>50)throw new WorkspaceError(400,'请选择至多 50 个产物版本');

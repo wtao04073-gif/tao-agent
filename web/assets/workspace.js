@@ -138,12 +138,12 @@
             catch (e) { if (valid(version)) { notice(error, e.message); cancel.disabled = false; } }
           }, "ws-button ws-danger"); actions.append(cancel);
         }
-        actions.append(button('重命名',async function(){var name=await App.Dialog.prompt({title:'重命名',label:'名称',value:title});if(name===null)return;try{await api('PATCH','/api/'+(entry.job?'jobs/':'tasks/')+encodeURIComponent(entry.job?t.jobId:t.taskId),{title:name});t.title=name;draw();}catch(e){notice(error,e.message);}}));
+        actions.append(button('重命名',async function(){var name=await App.Dialog.prompt({title:'重命名',label:'名称',value:title});if(name===null)return;try{await api('PATCH','/api/'+(entry.job?'jobs/':'tasks/')+encodeURIComponent(entry.job?t.jobId:t.taskId),{title:name});t.title=name.trim();search.value=name.trim();if(hooks.refreshHistory)hooks.refreshHistory({query:name.trim(),title:name.trim(),conversationId:t.conversationId||t.taskId,jobId:entry.job?t.jobId:undefined});await reload(false);}catch(e){notice(error,e.message);}}));
         if(entry.job)actions.append(button(t.status==='archived'?'恢复长期任务':'归档长期任务',async function(){try{await api('PATCH','/api/jobs/'+encodeURIComponent(t.jobId),{status:t.status==='archived'?'active':'archived'});t.status=t.status==='archived'?'active':'archived';draw();}catch(e){notice(error,e.message);}}));
         if(entry.job&&t.status==='active')actions.append(button('停止长期任务',async function(){try{await api('PATCH','/api/jobs/'+encodeURIComponent(t.jobId),{status:'cancelled'});t.status='archived';draw();}catch(e){notice(error,e.message);}}));
         if(!entry.job&&['SUCCEEDED','FAILED','CANCELLED','INTERRUPTED','EXCEEDED'].includes(t.status))actions.append(button('删除',async function(){
           var yes=await App.Dialog.confirm({title:'删除对话？',description:'该对话将从列表移除，审计记录和已有产物保留。',danger:true});if(!yes)return;
-          try{await api('DELETE','/api/conversations/'+encodeURIComponent(t.conversationId||t.taskId));all=all.filter(function(item){return (item.conversationId||item.taskId)!==(t.conversationId||t.taskId);});draw();}catch(e){notice(error,e.message);}
+          try{await api('DELETE','/api/conversations/'+encodeURIComponent(t.conversationId||t.taskId));all=all.filter(function(item){return (item.conversationId||item.taskId)!==(t.conversationId||t.taskId);});if(hooks.refreshHistory)hooks.refreshHistory();await reload(false);}catch(e){notice(error,e.message);}
         },'ws-button ws-danger'));
         row.append(node("span", "ws-row-icon", entry.job ? "◈" : "◷"), info, actions); list.append(row);
       });

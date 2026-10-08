@@ -296,7 +296,7 @@ function extractFilePart(body: Buffer, boundary: string):
 }
 
 /** 安全的下载文件名（RFC 5987，支持中文）。 */
-function contentDisposition(name: string): string {
+export function contentDisposition(name: string): string {
 	const ascii = name.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_");
 	return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }

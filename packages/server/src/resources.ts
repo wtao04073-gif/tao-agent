@@ -1,3 +1,4 @@
+import {contentDisposition} from "./app.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { copyFileSync, constants, existsSync, mkdirSync, readFileSync, statSync, lstatSync, chmodSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -156,7 +157,7 @@ export function createResourceHandler(deps: {
                 const bytes = deps.catalog.readVersion(tenant, version);
                 if (createHash("sha256").update(bytes).digest("hex") !== version.sha256)
                     throw new WorkspaceError(409, "版本完整性校验失败");
-                res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": bytes.length, "X-Content-Type-Options": "nosniff", "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(version.name)}` });
+                res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": bytes.length, "X-Content-Type-Options": "nosniff", "Content-Disposition": contentDisposition(version.name) });
                 res.end(bytes);
             }
             else if (req.method === "POST" && parts.length === 4 && parts[3] === "revisions") {

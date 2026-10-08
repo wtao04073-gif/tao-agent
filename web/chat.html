@@ -707,7 +707,7 @@
           var manage=document.createElement('button');manage.className='recent-manage';manage.textContent='管理';manage.setAttribute('aria-label','管理对话 '+t.title);
           manage.onclick=async function(){
             var title=await App.Dialog.prompt({title:'重命名对话',label:'对话名称',value:t.title,description:'修改显示名称；删除操作可在任务中心进行。'});
-            if(title===null)return;var r=await App.api('PATCH','/api/conversations/'+encodeURIComponent(t.conversationId),{title:title});if(!r.ok)toast(r.data.error);else loadRecent();
+            if(title===null)return;var r=await App.api('PATCH','/api/conversations/'+encodeURIComponent(t.conversationId),{title:title});if(!r.ok)toast(r.data.error);else refreshHistory({query:title.trim(),title:title.trim(),conversationId:t.conversationId});
           };box.append(manage);
         });
         recentCursor=r.data.nextCursor;if(recentCursor){var moreButton=document.createElement('button');moreButton.className='recent-item load-more';moreButton.textContent='加载更多';moreButton.onclick=function(){moreButton.disabled=true;loadRecent(true);};box.append(moreButton);}
@@ -735,6 +735,12 @@
 
 		});
 	}
+    function refreshHistory(change){
+      change=change||{};
+      if(typeof change.query==='string')$('#historySearch').value=change.query;
+      if(change.title&&((change.conversationId&&change.conversationId===state.conversationId)||(change.jobId&&change.jobId===state.jobId)))$('#chatTitle').textContent=change.title;
+      loadRecent(false);loadJobs(false);
+    }
 	// 新建长程任务：询问目标，建 Job 后进入任务视图。
 	async function newJob() {
         var jobId = await App.Dialog.prompt({
@@ -1765,7 +1771,7 @@
         if(isMobile())setRail(true);
     }
     TaoWorkspace.init({openTask:openExisting,openJob:openJob,newJob:newJob,
-      attachFile:attachReference,showChat:restoreChatView,
+      attachFile:attachReference,showChat:restoreChatView,refreshHistory:refreshHistory,
       currentTask:function(){return state.taskId;},selectPackage:function(p){if(!p.enabled){toast('请先启用技能包');return;}state.skillPackageId=p.id;state.skillPackage=p;renderAddonChips();toast('已选择技能包：'+p.name);},
       openPreview:function(file){
         if(!state.taskId&&!state.jobId&&!state.booting&&!state.previewOnly){
