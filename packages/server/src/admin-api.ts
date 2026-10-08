@@ -1,3 +1,4 @@
+import {createOriginPolicy} from './request-origin.ts';
 import {ConnectionChecks,type ConnectionType} from './admin-connections.ts';
 import {outboundFetch} from './admin-network.ts';
 import {HttpEmbeddings} from '@tao/knowledge';
@@ -11,8 +12,8 @@ import { AdminIdentity } from './admin-identity.ts';
 import { Evaluations, type EvaluationBudget } from './admin-evaluations.ts';
 import { checkEndpoint,searchTool,parseMcp } from './admin-integrations.ts';
 export function sessionToken(req:IncomingMessage){return (req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('tao_session='))?.slice(12)||'';}
-export function createAdminHandler(deps:{settings:AdminSettings;connections?:ConnectionChecks;identity:AdminIdentity;bootstrapToken?:string;authenticate:(req:IncomingMessage)=>Promise<Principal|undefined>;apply:(values:Values)=>()=>void;observability:(p:Principal)=>unknown;trace?:(p:Principal,id:string)=>unknown;evaluations:Evaluations;suspend?:()=>Promise<void>;accountChanged?:(p:Principal,id:string,workspaceId:string)=>Promise<void>;evaluate:(p:Principal,query:string,signal:AbortSignal,budget:EvaluationBudget)=>Promise<{answer:string;taskId:string;status:string;tokens?:number;tools?:string[]}>}){
- const {settings,identity}=deps;
+export function createAdminHandler(deps:{settings:AdminSettings;originAllowed?:(req:IncomingMessage)=>boolean;connections?:ConnectionChecks;identity:AdminIdentity;bootstrapToken?:string;authenticate:(req:IncomingMessage)=>Promise<Principal|undefined>;apply:(values:Values)=>()=>void;observability:(p:Principal)=>unknown;trace?:(p:Principal,id:string)=>unknown;evaluations:Evaluations;suspend?:()=>Promise<void>;accountChanged?:(p:Principal,id:string,workspaceId:string)=>Promise<void>;evaluate:(p:Principal,query:string,signal:AbortSignal,budget:EvaluationBudget)=>Promise<{answer:string;taskId:string;status:string;tokens?:number;tools?:string[]}>}){
+ const {settings,identity}=deps;const originAllowed=deps.originAllowed??createOriginPolicy();
  const cookie=(req:IncomingMessage,res:ServerResponse,token:string)=>res.setHeader('Set-Cookie',`tao_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${token?28800:0}`+(req.headers['x-forwarded-proto']==='https'?'; Secure':''));
  return async(req:IncomingMessage,res:ServerResponse):Promise<boolean>=>{
  const path=new URL(req.url||'/','http://local').pathname;let checkedType:ConnectionType|undefined,checkedValues:Values|undefined;
@@ -22,7 +23,7 @@ export function createAdminHandler(deps:{settings:AdminSettings;connections?:Con
  const session=identity.session(sessionToken(req));
  const body=async()=>{const b=await readJsonBody(req);if(!b.ok)throw new AdminError(400,b.reason);return b.value as any;};
  const write=!['GET','HEAD'].includes(req.method||'GET');
- const origin=req.headers.origin;if(write&&origin&&new URL(origin).host!==req.headers.host)throw new AdminError(403,'请求来源无效');
+ if(write&&!originAllowed(req))throw new AdminError(403,'请求来源无效');
  if(write&&session&&!req.headers.authorization&&path!=='/api/auth/login'&&req.headers['x-csrf-token']!==session.csrf)throw new AdminError(403,'安全校验已失效，请刷新页面');
  if(path==='/api/branding'&&req.method==='GET'){const v=settings.effective("global");sendJson(res,200,{name:v.BRAND_NAME||'Tao Agent',shortName:v.BRAND_SHORT_NAME||'Tao',welcome:v.BRAND_WELCOME,description:v.BRAND_DESCRIPTION,icon:v.BRAND_ICON||'🤖',logo:v.BRAND_LOGO_URL||''});return true;}
  if(path==='/api/control/bootstrap-status'&&req.method==='GET'){sendJson(res,200,{initialized:identity.initialized,claimRequired:!identity.initialized,claimConfigured:!!deps.bootstrapToken});return true;}

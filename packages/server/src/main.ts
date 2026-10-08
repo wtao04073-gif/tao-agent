@@ -1,3 +1,4 @@
+import {createOriginPolicy} from './request-origin.ts';
 import {ConnectionChecks} from './admin-connections.ts';
 import {outboundFetch,networkPolicy} from './admin-network.ts';
 import { exportMetric } from "./admin-observability.ts";
@@ -79,6 +80,7 @@ import {handleControlGate} from "./control-gate.ts";
 import {copyFileSync,constants as fsConstants} from "node:fs";
 import {randomUUID, createHash} from "node:crypto";
 const initialEnv={...process.env};
+const originAllowed=createOriginPolicy(initialEnv.TAO_PUBLIC_ORIGINS);
 const adminRoot=initialEnv.WORKSPACE_DIR || '/data/workspace';
 mkdirSync(adminRoot,{recursive:true});
 const adminSettings=new AdminSettings({directory:join(adminRoot,'.admin-config'),env:initialEnv,...(initialEnv.TAO_MASTER_KEY?{masterKey:initialEnv.TAO_MASTER_KEY}:{})});
@@ -1264,7 +1266,7 @@ const backendHandler = createBackendHandler({
 const resourceHandler = createResourceHandler({ catalog:resourceCatalog, authenticate,
  submit:(tenant,input)=>executionRegistry.submit(tenant,input,()=>guardedSubmit(tenant,input)), getTask:ownedTask });
 const evaluations=new Evaluations(config.workspaceDir);
-const adminHandler=createAdminHandler({settings:adminSettings,connections:new ConnectionChecks(adminRoot),identity,...(initialEnv.TAO_BOOTSTRAP_TOKEN?{bootstrapToken:initialEnv.TAO_BOOTSTRAP_TOKEN}:{}),authenticate,
+const adminHandler=createAdminHandler({originAllowed,settings:adminSettings,connections:new ConnectionChecks(adminRoot),identity,...(initialEnv.TAO_BOOTSTRAP_TOKEN?{bootstrapToken:initialEnv.TAO_BOOTSTRAP_TOKEN}:{}),authenticate,
  apply(values){
   if(submissionsInFlight||runningTasks.size||orchestrator.pendingTaskIds.length||taskQueue.pending||knowledgeJobs.busy||evaluations.busy)throw new AdminError(409,'有任务执行或排队，请等待完成后应用配置');
   const ready=!!(values.MODEL_BASE_URL&&values.MODEL_NAME&&values.MODEL_API_KEY);const result=loadConfig(ready?{...fixedEnv,...values}:{...fixedEnv,...values,MODEL_BASE_URL:'http://127.0.0.1:1',MODEL_NAME:'unconfigured',MODEL_API_KEY:'unconfigured-local-placeholder'});if(result.errors.length)throw new AdminError(400,result.errors.map(e=>e.key+'：'+e.reason).join('；'));
@@ -1292,14 +1294,14 @@ const adminHandler=createAdminHandler({settings:adminSettings,connections:new Co
   finally{signal.removeEventListener('abort',cancel);evaluationFactories.delete(tenant.workspaceId);}
  }
 });
-const handleLogo=logoHandler(config.workspaceDir,authenticate);
+const handleLogo=logoHandler(config.workspaceDir,authenticate,originAllowed);
 const server = createServer((req, res) => {
  void (async()=>{
   const loginSession=identity.session(sessionToken(req));
   const requestPath=new URL(req.url||'/', 'http://localhost').pathname;
   if(loginSession&&!req.headers.authorization&&!['GET','HEAD','OPTIONS'].includes(req.method||'GET')&&!['/api/auth/login','/api/control/bootstrap'].includes(requestPath)){
    if(req.headers['x-csrf-token']!==loginSession.csrf){sendError(res,403,'安全校验已失效，请刷新页面');return;}
-   if(req.headers.origin&&new URL(req.headers.origin).host!==req.headers.host){sendError(res,403,'请求来源无效');return;}
+   if(!originAllowed(req)){sendError(res,403,'请求来源无效');return;}
   }
   if(requestPath==='/readyz'&&req.method==='GET'){sendJson(res,modelReady?200:503,{ready:modelReady,initialized:identity.initialized});return;}
   if(await handleLogo(req,res))return;
