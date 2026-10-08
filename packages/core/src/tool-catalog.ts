@@ -29,6 +29,7 @@ export interface ToolDescriptor {
 }
 
 export const TOOL_CATALOG: readonly ToolDescriptor[] = [
+    { name: "write_table", label: "生成 Excel 表格", status: ToolStatus.Available, access: "write" },
 	{ name: "edit_document", label: "修订文档", status: ToolStatus.Available, access: "write" },
 	{ name: "delegate_tasks", label: "委派子任务", status: ToolStatus.Available, access: "write" },
 	{ name: "mcp_list_tools", label: "查看外部工具", status: ToolStatus.Available, access: "read" },

@@ -37,7 +37,10 @@
     var summary=doc.createElement("summary");summary.textContent="思考";textNode=doc.createElement("div");textNode.className="thinking-content";
     node.appendChild(summary);node.appendChild(textNode);bot.appendChild(node);
     hints.forEach(function(h){if(h.bot===bot){h.hasThinking=true;h.node.hidden=true;}});
-   }else node=bot?bot.querySelector("p"):options.answerNode();
+   }else {
+    node=bot?bot.querySelector("p"):options.answerNode();
+    if(bot&&Object.keys(messages).some(function(k){return messages[k].node===node;})){node=doc.createElement('p');node.className='bottext answer';bot.appendChild(node);}
+   }
    item={node:node,textNode:textNode,channel:channel,text:"",final:false};messages[key]=item;return item;
   }
   function consume(ev,bot) {
@@ -49,7 +52,7 @@
    else if(typeof ev.offset==="number") {
     // 从快照恢复后忽略重叠增量；缺口等待下一份累积快照，不拼出残缺答案。
     if(ev.offset<=item.text.length){var skip=item.text.length-ev.offset;if(skip<ev.delta.length)item.text+=ev.delta.slice(skip);}
-   }else item.text+=ev.delta;
+   }else if(typeof ev.seq==="number" && ev.seq>0){if(!item.seen)item.seen={};if(!item.seen[ev.seq]){item.text+=ev.delta;item.seen[ev.seq]=true;}}
    render(item);if(options.changed)options.changed();return true;
   }
   function history(bot,events) {events.forEach(function(ev){if(ev.type==="message_progress"||(ev.type==="assistant_message"&&ev.messageId))consume(ev,bot);});}

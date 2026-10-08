@@ -1,3 +1,4 @@
+import { createWriteTableTool } from "./write-table.ts";
 /**
  * 对账场景的平台工具
  *
@@ -311,11 +312,12 @@ export function createOfficeToolset(options: ToolsetOptions): PlatformTool[] {
 		},
 	};
 
-	return [listSheetsTool, readTableTool, reconcileTool];
+	return [listSheetsTool, readTableTool, reconcileTool, createWriteTableTool(options.workspace)];
 }
 
 /** 这组工具的权限策略。路径参数必须登记，否则权限门不会校验它们。 */
 export const OFFICE_TOOL_POLICIES = [
+    { tool: "write_table" },
 	{ tool: "list_sheets", pathParams: ["path"] },
 	{ tool: "read_table", pathParams: ["path"] },
 	// reconcile_tables 的 outputName 不登记为路径参数 —— 它由 resolveOutputPath

@@ -27,7 +27,7 @@
 		SUCCEEDED:     { label: "已完成",   cls: "tag--ok",   pulse: false },
 		FAILED:        { label: "失败",     cls: "tag--err",  pulse: false },
 		CANCELLED:     { label: "已取消",   cls: "",          pulse: false },
-		EXCEEDED:       { label: "待确认是否继续", cls: "tag--warn", pulse: true },
+		EXCEEDED:       { label: "已达执行限额", cls: "tag--warn", pulse: true },
 		INTERRUPTED:   { label: "已中断（重启）", cls: "tag--err",  pulse: false },
 	};
 
@@ -39,13 +39,25 @@
 	};
 
     // Cookie密码会话的写请求统一携带CSRF。令牌调用仍由Authorization验证。
-    var originalFetch=global.fetch.bind(global),csrfPromise=null;
-    global.fetch=async function(input,init){init=init||{};var url=new URL(typeof input==='string'?input:input.url,location.href),method=(init.method||'GET').toUpperCase();
-      if(url.origin===location.origin&&!['GET','HEAD','OPTIONS'].includes(method)&&!['/api/auth/login','/api/control/bootstrap'].includes(url.pathname)){
-        csrfPromise=csrfPromise||originalFetch('/api/auth/me').then(function(r){return r.ok?r.json():{};}).catch(function(){return {};});
-        var identity=await csrfPromise;if(identity.csrf){var headers=new Headers(init.headers||{});headers.set('X-CSRF-Token',identity.csrf);init=Object.assign({},init,{headers:headers});}
+    var originalFetch=global.fetch.bind(global),csrfPromise=null,redirecting=false;
+    function goLogin() {
+      if(redirecting || /login\.html$/.test(location.pathname))return;
+      redirecting=true;localStorage.removeItem('tao.password-session');localStorage.removeItem(TOKEN_KEY);sessionStorage.removeItem('tao.control.token');
+      location.href='/login.html?next='+encodeURIComponent(location.pathname+location.search+location.hash);
+    }
+    global.fetch=async function(input,init){
+      init=init||{};var request=typeof input==='string'?null:input;
+      var url=new URL(request?request.url:input,location.href),method=(init.method||(request&&request.method)||'GET').toUpperCase();
+      var headers=new Headers(init.headers||(request&&request.headers)||{});
+      var needsCsrf=url.origin===location.origin&&!['GET','HEAD','OPTIONS'].includes(method)&&!headers.has('Authorization')&&!['/api/auth/login','/api/control/bootstrap'].includes(url.pathname);
+      if(needsCsrf){
+        // 每次写入重新获取当前会话；只合并同时发出的查询，不缓存旧 CSRF。
+        if(!csrfPromise)csrfPromise=originalFetch('/api/auth/me').then(function(r){return r.ok?r.json():{};}).catch(function(){return {};}).finally(function(){csrfPromise=null;});
+        var identity=await csrfPromise;if(identity.csrf)headers.set('X-CSRF-Token',identity.csrf);
       }
-      var response=await originalFetch(input,init);if(response.status===401&&url.origin===location.origin&&url.pathname.startsWith('/api/')&&!url.pathname.startsWith('/api/auth/')){localStorage.removeItem('tao.password-session');localStorage.removeItem('tao.token');sessionStorage.removeItem('tao.control.token');location.href='/admin-login.html';}return response;
+      var response=await originalFetch(input,Object.assign({},init,{headers:headers}));
+      if(response.status===401&&url.origin===location.origin&&url.pathname.startsWith('/api/')&&!url.pathname.startsWith('/api/auth/'))goLogin();
+      return response;
     };
 
 	/* ------------------------------------------------------------- 登录态 */
@@ -58,7 +70,10 @@
 		},
 		get signedIn() { return this.token !== '' || localStorage.getItem('tao.password-session')==='true'; },
 		signOut: async function () {
-			this.token = '';localStorage.removeItem('tao.password-session');await fetch('/api/auth/logout',{method:'POST'}).catch(function(){});
+			var headers=this.token?{Authorization:'Bearer '+this.token}:{};
+            try { var response=await fetch('/api/auth/logout',{method:'POST',headers:headers});if(!response.ok)throw new Error(); }
+            catch(e){Toast.show('退出失败','请检查网络后重试','err');return;}
+            this.token='';localStorage.removeItem('tao.password-session');sessionStorage.removeItem('tao.control.token');sessionStorage.removeItem('tao.pending-submissions');csrfPromise=null;
 			global.location.href = App._r("login.html");
 		},
 	};
@@ -74,7 +89,7 @@
 	}
 	function ago(ts) {
 		if (!ts) return "";
-		var d = Date.now() - ts;
+		var d = Date.now() - new Date(ts).getTime();
 		if (d < 0) d = 0;
 		var m = Math.floor(d / 60000);
 		if (m < 1) return "刚刚";
@@ -129,7 +144,8 @@
 	 * @returns {Promise<{ok:boolean,status:number,data:any}>}
 	 * 401 时清 token 并跳登录页（除登录页自身调用外）。
 	 */
-	function api(method, path, body) {
+	var submissionKeys = Object.create(null),pendingSubmissions=Object.create(null);
+    function api(method, path, body) {
 		var init = {
 			method: method,
 			headers: { Accept: "application/json" },
@@ -139,19 +155,28 @@
 			init.headers["Content-Type"] = "application/json; charset=utf-8";
 			init.body = JSON.stringify(body);
 		}
-		return fetch(path, init).then(function (res) {
+		var pendingKey=null;
+        if(method==='POST' && (/^\/api\/tasks(?:\/[^/]+\/retry)?$/.test(path)||path==='/api/knowledge?async=true')) {
+          var fingerprint=JSON.stringify([path,body]),storageKey='tao.pending-submissions';
+          try{submissionKeys=JSON.parse(sessionStorage.getItem(storageKey)||'{}');}catch(e){}
+          if(pendingSubmissions[fingerprint])return pendingSubmissions[fingerprint];
+          pendingKey=fingerprint;
+          init.headers['Idempotency-Key']=submissionKeys[fingerprint]||(submissionKeys[fingerprint]=crypto.randomUUID());
+          try{sessionStorage.setItem(storageKey,JSON.stringify(submissionKeys));}catch(e){}
+        }
+        var responsePromise=fetch(path, init).then(function (res) {
+            if(pendingKey && (res.ok || (res.status>=400 && res.status<500 && ![408,429].includes(res.status)))) {
+              delete submissionKeys[pendingKey];try{sessionStorage.setItem('tao.pending-submissions',JSON.stringify(submissionKeys));}catch(e){}
+            }
 			var ct = res.headers.get("content-type") || "";
 			var asJson = ct.indexOf("application/json") >= 0 ? res.json().catch(function () { return {}; }) : Promise.resolve({});
 			return asJson.then(function (data) {
-				if (res.status === 401 && !/login\.html$/.test(global.location.pathname)) {
-					Auth.token = "";
-					var next = encodeURIComponent(global.location.pathname + global.location.search);
-					global.location.href = route("login") + "?next=" + next;
-					return { ok: false, status: 401, data: data };
-				}
+
 				return { ok: res.ok, status: res.status, data: data };
 			});
 		});
+        if(pendingKey){pendingSubmissions[pendingKey]=responsePromise;responsePromise.finally(function(){delete pendingSubmissions[pendingKey];}).catch(function(){});}
+        return responsePromise;
 	}
 
 	/** multipart 文件上传；返回 {ok,status,data}。 */
@@ -181,7 +206,7 @@
 	 * 返回带 close() 的句柄。onEvent 收解析后的事件对象；onOpen/onError 可选。
 	 */
 	// 轮询兜底间隔。SSE 直连可用时近乎实时；反代/隧道缓冲 SSE 时由轮询保证必达。
-	var EVENT_POLL_MS = 2000;
+	var EVENT_POLL_MS = 500;
 
 	function subscribe(taskId, handlers) {
 		var es = null;
@@ -190,7 +215,7 @@
 		var pollTimer = null;
 		// 事件按 seq 单调，中心去重：SSE 与轮询可能投递同一条，对外只发一次。
 		var seenSeq = Object.create(null);
-		var lastSeq = 0;
+		var lastSeq = 0, pollDelay=EVENT_POLL_MS, reconnectDelay=1000, lastSseAt=0;
 
 		function ticketEndpoint() {
 			return "/api/events/ticket" + (taskId ? "?taskId=" + encodeURIComponent(taskId) : "");
@@ -220,13 +245,15 @@
 			if (closed || !taskId) return;
 			api("GET", "/api/tasks/" + encodeURIComponent(taskId) + "/events?afterSeq=" + lastSeq)
 				.then(function (r) {
-					if (closed || !r.ok || !r.data || !Array.isArray(r.data.events)) return;
-					r.data.events.forEach(deliver);
+					if (closed) return;
+                    if(!r.ok||!r.data||!Array.isArray(r.data.events)){pollDelay=Math.min(10000,pollDelay*2);return;}
+					pollDelay=r.data.events.length?EVENT_POLL_MS:Math.min(5000,pollDelay*1.5);
+                    r.data.events.forEach(deliver);
 					if (r.data.events.length && handlers.onOpen) handlers.onOpen();
 				})
-				.catch(function () { /* 静默，下一轮继续；401 已由 api() 统一处理 */ })
+				.catch(function () { pollDelay=Math.min(10000,pollDelay*2); })
 				.finally(function () {
-					if (!closed && taskId) pollTimer = setTimeout(pollOnce, EVENT_POLL_MS);
+					if (!closed && taskId) pollTimer = setTimeout(pollOnce, Date.now()-lastSseAt<5000?5000:pollDelay);
 				});
 		}
 
@@ -242,6 +269,7 @@
 				}
 				var q = "?ticket=" + encodeURIComponent(r.data.ticket);
 				if (taskId) q += "&taskId=" + encodeURIComponent(taskId);
+                q += "&afterSeq=" + lastSeq;
 				es = new EventSource("/api/events" + q, { withCredentials: false });
 				var types = ["status", "step", "tool_decision", "artifact",
 					"assistant_message", "assistant_delta", "thinking_delta", "message_progress", "user_message", "usage"];
@@ -249,10 +277,11 @@
 					es.addEventListener(t, function (ev) {
 						var data;
 						try { data = JSON.parse(ev.data); } catch (e) { return; }
-						deliver(data);
+						lastSseAt=Date.now();reconnectDelay=1000;deliver(data);
 					});
 				});
-				es.onopen = function () { if (handlers.onOpen) handlers.onOpen(); };
+				es.onmessage = function(ev){try{lastSseAt=Date.now();deliver(JSON.parse(ev.data));}catch(e){}};
+                es.onopen = function () { if (handlers.onOpen) handlers.onOpen(); };
 				es.onerror = function (e) {
 					// 连接断开后旧票已一次性作废，浏览器持旧 URL 重连只会 401。
 					// 主动关闭并由我们重新换票、重建连接。
@@ -260,7 +289,7 @@
 					if (es) { try { es.close(); } catch (ignored) {} es = null; }
 					scheduleReconnect();
 				};
-			});
+            }).catch(function(){if(!closed)scheduleReconnect();});
 		}
 
 		function scheduleReconnect() {
@@ -268,7 +297,8 @@
 			retryTimer = setTimeout(function () {
 				retryTimer = null;
 				connect();
-			}, 2000);
+			}, reconnectDelay+Math.random()*300);
+            reconnectDelay=Math.min(30000,reconnectDelay*2);
 		}
 
 		connect();
@@ -291,7 +321,7 @@
 	 * @param ticketPath 换票接口（POST，Bearer 鉴权）
 	 * @param downloadPath 实际下载 GET 路径（不含 query）
 	 */
-	function ticketedDownload(ticketPath, downloadPath) {
+	function ticketedDownload(ticketPath, downloadPath, fileName) {
 		return api("POST", ticketPath, {}).then(function (r) {
 			if (!r.ok || !r.data || !r.data.ticket) {
 				Toast.show("下载失败", (r.data && r.data.error) || "请稍后重试", "err");
@@ -302,6 +332,7 @@
 			var a = document.createElement("a");
 			a.href = downloadPath + sep + "ticket=" + encodeURIComponent(r.data.ticket);
 			a.rel = "noopener";
+            if(fileName)a.download=fileName;
 			document.body.appendChild(a);
 			a.click();
 			a.remove();
@@ -312,13 +343,13 @@
 	function downloadArtifact(taskId, name) {
 		var base = "/api/tasks/" + encodeURIComponent(taskId) +
 			"/artifacts/" + encodeURIComponent(name);
-		return ticketedDownload(base + "/ticket", base);
+		return ticketedDownload(base + "/ticket", base, name);
 	}
 
 	/** 下载资料库文件（点击触发，先换票再下载）。 */
 	function downloadFile(name) {
 		var base = "/api/files/" + encodeURIComponent(name);
-		return ticketedDownload(base + "/ticket", base);
+		return ticketedDownload(base + "/ticket", base, name);
 	}
 
 	/* --------------------------------------------------------------- 主题 */

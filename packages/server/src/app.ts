@@ -1,3 +1,4 @@
+import { paginate, pageOptions } from "./pagination.ts";
 /**
  * HTTP 路由
  *
@@ -494,6 +495,10 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 			return;
 		}
 		const { tenant } = principal;
+        if(method==='GET' && (url.searchParams.has('limit')||url.searchParams.has('offset')||url.searchParams.has('cursor'))) {
+          try{pageOptions(url.searchParams);}catch{sendError(res,400,"分页参数无效");return;}
+        }
+        const listPage=(key:string, rows:readonly unknown[])=>{const {items,...meta}=paginate(rows,url.searchParams);sendJson(res,200,{[key]:items,count:meta.total,...meta});};
 
 		// ── 当前身份（侧栏渲染、角色判入口）──
 		if (method === "GET" && path.length === 2 && path[0] === "api" && path[1] === "me") {
@@ -531,7 +536,7 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 				return;
 			}
 			if (method === "GET") {
-				sendJson(res, 200, { jobs: deps.listJobs(tenant) });
+				listPage("jobs", deps.listJobs(tenant));
 				return;
 			}
 			if (method === "POST") {
@@ -570,7 +575,7 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 			if (deps.listSkills === undefined || deps.createSkill === undefined) {
 				sendError(res, 501, "当前部署未启用技能"); return;
 			}
-			if (method === "GET") { sendJson(res, 200, { skills: deps.listSkills(tenant) }); return; }
+			if (method === "GET") { listPage("skills", deps.listSkills(tenant)); return; }
 			if (method === "POST") {
 				const body = await readJsonBody(req);
 				if (!body.ok) { sendError(res, 400, body.reason); return; }
@@ -596,7 +601,7 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 			if (deps.listAgents === undefined || deps.createAgent === undefined) {
 				sendError(res, 501, "当前部署未启用智能体"); return;
 			}
-			if (method === "GET") { sendJson(res, 200, { agents: deps.listAgents(tenant) }); return; }
+			if (method === "GET") { listPage("agents", deps.listAgents(tenant)); return; }
 			if (method === "POST") {
 				const body = await readJsonBody(req);
 				if (!body.ok) { sendError(res, 400, body.reason); return; }
@@ -651,7 +656,7 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 				sendError(res, 501, "当前部署未启用资料库");
 				return;
 			}
-			sendJson(res, 200, { files: deps.listFiles(tenant) });
+			listPage("files", deps.listFiles(tenant));
 			return;
 		}
 
@@ -769,7 +774,7 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 		// ── 任务集合 ──
 		if (path.length === 2 && path[0] === "api" && path[1] === "tasks") {
 			if (method === "GET") {
-				sendJson(res, 200, { tasks: deps.listTasks(tenant) });
+				listPage("tasks", deps.listTasks(tenant));
 				return;
 			}
 
@@ -1029,7 +1034,7 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 					return;
 				}
 			} catch (error) {
-				sendError(res, 409, error instanceof Error ? error.message : "操作失败");
+				sendError(res, 409, error instanceof Error && /Runner|runner/.test(error.message) ? "任务已结束，无法操作，请发起新消息或重新执行" : error instanceof Error ? error.message : "操作失败");
 				return;
 			}
 
@@ -1073,13 +1078,13 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 					return;
 				}
 				const entries = await deps.auditLog(tenant, window.window);
-				sendJson(res, 200, { entries, count: entries.length });
+				listPage("entries", entries);
 				return;
 			}
 
 			if (method === "GET" && path[2] === "tasks") {
 				// 管理员看全工作区的任务，而成员只看自己工作区的
-				sendJson(res, 200, { tasks: deps.listTasks(tenant) });
+				listPage("tasks", deps.listTasks(tenant));
 				return;
 			}
 

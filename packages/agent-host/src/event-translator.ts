@@ -1,3 +1,4 @@
+import { toolSummary } from "@tao/core";
 /**
  * 内核事件 → 平台事件的翻译
  *
@@ -59,6 +60,7 @@ export interface KernelEvent {
 	readonly toolName?: string;
 	readonly toolCallId?: string;
 	readonly args?: unknown;
+    readonly result?: unknown;
 	readonly isError?: boolean;
 	readonly row?: {
 		readonly usage?: {
@@ -122,6 +124,7 @@ export function translate(
 					step: steps.start(event.toolCallId),
 					action: label(event.toolName),
                     ...(event.toolName?{toolName:event.toolName}:{}),
+                    ...(event.toolCallId?{toolCallId:event.toolCallId}:{}),
 					phase: "started",
 				},
 			];
@@ -135,6 +138,7 @@ export function translate(
 					step: steps.resolve(event.toolCallId),
 					action: label(event.toolName),
                     ...(event.toolName?{toolName:event.toolName}:{}),
+                    ...(event.toolCallId?{toolCallId:event.toolCallId}:{}),
 					phase: "progress",
 				},
 			];
@@ -148,8 +152,10 @@ export function translate(
 					step: steps.resolve(event.toolCallId),
 					action: label(event.toolName),
                     ...(event.toolName?{toolName:event.toolName}:{}),
+                    ...(event.toolCallId?{toolCallId:event.toolCallId}:{}),
 					// 失败的步骤要明确标出来，否则用户看到「已完成」却没有产物会困惑
 					phase: event.isError === true ? "failed" : "finished",
+                    resultSummary: event.isError ? "工具执行失败，请检查参数或文件格式" : toolSummary(event.result),
 				},
 			];
 		}

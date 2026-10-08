@@ -201,8 +201,11 @@ export class AdminIdentity {
 		target.revision += 1; target.tokenHashes = []; this.invalidate(next, id); this.persist(next);
 	}
 	revokeToken(token: string): void {
-		const digest = hash(token); if (!this.state.sessions[digest]) return;
-		const next = structuredClone(this.state); delete next.sessions[digest]; this.persist(next);
+		const digest = hash(token);
+        if (!this.state.sessions[digest] && !this.state.accounts.some(a => a.tokenHashes.includes(digest))) return;
+        const next = structuredClone(this.state); delete next.sessions[digest];
+        for (const account of next.accounts) account.tokenHashes = account.tokenHashes.filter(h => h !== digest);
+        this.persist(next);
 	}
 	private newAccount(input: AdminAccountInput, accountRole: Role): StoredAccount {
 		if (!input || typeof input !== "object") return fail(400, "账号输入不正确");

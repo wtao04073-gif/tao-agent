@@ -6,13 +6,13 @@
   function knowledgeChanged(refreshDocuments) {
     if (knowledgeJobKey) {
       try { sessionStorage.setItem(knowledgeJobKey, JSON.stringify(knowledgeJobs.filter(function (e) {
-        return e.job.jobId && e.job.status !== 'ready';
-      }).map(function (e) { return { name: e.name, jobId: e.job.jobId }; }))); } catch (e) { /* 存储不可用时继续使用内存。 */ }
+        return e.job.status !== 'ready';
+      }).map(function (e) { return { name: e.name, jobId: e.job.jobId, status:e.job.status, error:e.job.error }; }))); } catch (e) { /* 存储不可用时继续使用内存。 */ }
     }
     knowledgeNotify(refreshDocuments);
   }
   var titles = { tasks: "任务中心", scenarios: "场景", knowledge: "知识库" };
-  var statusNames = { QUEUED: "排队中", RUNNING: "执行中", AWAIT_CONFIRM: "等待确认", SUCCEEDED: "已完成", FAILED: "失败", CANCELLED: "已取消", EXCEEDED: "等待继续", INTERRUPTED: "已中断", active: "进行中", done: "已完成", archived: "已归档" };
+  var statusNames = { QUEUED: "排队中", RUNNING: "执行中", AWAIT_CONFIRM: "等待确认", SUCCEEDED: "已完成", FAILED: "失败", CANCELLED: "已取消", EXCEEDED: "已达执行限额", INTERRUPTED: "已中断", active: "进行中", done: "已完成", archived: "已归档" };
   function node(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -95,13 +95,13 @@
     heading("让每一项工作，持续向前", "在这里查看执行进展，回到对话继续协作。", button("＋ 新建长期任务", function () { if (hooks.newJob) hooks.newJob(); }, "ws-button ws-primary"));
     var toolbar = node("div", "ws-toolbar"), search = input("搜索任务", "搜索任务名称或目标…");
     toolbar.append(search, button("刷新", function () { renderRoute(); })); content.append(toolbar);
-    var kind = "all", state = "all", all = [], jobs = [], scenarioNames = {};
+    var kind = "all", state = "all", all = [], jobs = [], scenarioNames = {},taskCursor=null,jobCursor=null,searchVersion=0;
     filters(content, [["all", "全部"], ["tasks", "对话任务"], ["jobs", "长期任务"]], function (value) { kind = value; draw(); });
     var select = node("select", "ws-select"); select.setAttribute("aria-label", "按任务状态筛选");
     [["all", "全部状态"], ["running", "进行中"], ["waiting", "等待确认"], ["done", "已完成"], ["failed", "失败 / 中断"], ["cancelled", "已取消 / 归档"]].forEach(function (pair) { var o = node("option", "", pair[1]); o.value = pair[0]; select.append(o); });
     toolbar.append(select); select.addEventListener("change", function () { state = select.value; draw(); });
     var list = node("div", "ws-list"), error = node("p", "ws-inline-error"); error.setAttribute("role", "alert"); content.append(error, list); message(list, "正在加载任务…");
-    search.addEventListener("input", draw);
+    var searchTimer;search.addEventListener("input",function(){clearTimeout(searchTimer);searchTimer=setTimeout(function(){reload(false);},200);});
     function matches(s) {
       if (state === "all") return true;
       var groups = { running: ["QUEUED", "RUNNING", "active"], waiting: ["AWAIT_CONFIRM", "EXCEEDED"], done: ["SUCCEEDED", "done"], failed: ["FAILED", "INTERRUPTED"], cancelled: ["CANCELLED", "archived"] };
@@ -132,17 +132,28 @@
             catch (e) { if (valid(version)) { notice(error, e.message); cancel.disabled = false; } }
           }, "ws-button ws-danger"); actions.append(cancel);
         }
+        actions.append(button('重命名',async function(){var name=await App.Dialog.prompt({title:'重命名',label:'名称',value:title});if(name===null)return;try{await api('PATCH','/api/'+(entry.job?'jobs/':'tasks/')+encodeURIComponent(entry.job?t.jobId:t.taskId),{title:name});t.title=name;draw();}catch(e){notice(error,e.message);}}));
+        if(entry.job&&t.status==='active')actions.append(button('停止长期任务',async function(){try{await api('PATCH','/api/jobs/'+encodeURIComponent(t.jobId),{status:'cancelled'});t.status='archived';draw();}catch(e){notice(error,e.message);}}));
+        if(!entry.job&&['SUCCEEDED','FAILED','CANCELLED','INTERRUPTED','EXCEEDED'].includes(t.status))actions.append(button('删除',async function(){
+          var yes=await App.Dialog.confirm({title:'删除对话？',description:'该对话将从列表移除，审计记录和已有产物保留。',danger:true});if(!yes)return;
+          try{await api('DELETE','/api/conversations/'+encodeURIComponent(t.conversationId||t.taskId));all=all.filter(function(item){return (item.conversationId||item.taskId)!==(t.conversationId||t.taskId);});draw();}catch(e){notice(error,e.message);}
+        },'ws-button ws-danger'));
         row.append(node("span", "ws-row-icon", entry.job ? "◈" : "◷"), info, actions); list.append(row);
       });
+    if(taskCursor||jobCursor)list.append(button('加载更多',function(){reload(true);}));
     }
-    var results = await Promise.allSettled([api("GET", "/api/tasks"), api("GET", "/api/jobs"), api("GET", "/api/scenarios")]);
-    if (!valid(version)) return;
-    if (results[0].status === "fulfilled") all = results[0].value.tasks || [];
-    if (results[1].status === "fulfilled") jobs = results[1].value.jobs || [];
+    async function reload(more){
+    var sequence=++searchVersion,q=encodeURIComponent(search.value.trim());
+    var results = await Promise.allSettled([more&&!taskCursor?Promise.resolve({tasks:[]}):api("GET", "/api/tasks?limit=50&cursor="+(more?taskCursor:'0')+'&q='+q), more&&!jobCursor?Promise.resolve({jobs:[]}):api("GET", "/api/jobs?limit=50&cursor="+(more?jobCursor:'0')+'&q='+q), api("GET", "/api/scenarios")]);
+    if (!valid(version)||sequence!==searchVersion) return;
+    if (results[0].status === "fulfilled") {all = (more?all:[]).concat(results[0].value.tasks || []);taskCursor=results[0].value.nextCursor;}
+    if (results[1].status === "fulfilled") {jobs = (more?jobs:[]).concat(results[1].value.jobs || []);jobCursor=results[1].value.nextCursor;}
     if (results[2].status === "fulfilled") (results[2].value.scenarios || []).forEach(function (c) { scenarioNames[c.id] = c.title; });
     var errors = results.slice(0, 2).filter(function (r) { return r.status === "rejected"; });
     if (errors.length) notice(error, "部分任务加载失败：" + errors.map(function (r) { return r.reason.message; }).join("；"));
     draw();
+    }
+    await reload(false);
   }
   async function scenarios(version) {
     heading("从一个好场景开始", "选择适合的工作方式，补充材料，让智能体帮你完成。" );
@@ -249,18 +260,18 @@
           knowledgeJobKey = 'tao.knowledge.jobs:' + JSON.stringify([me.tenantId, me.workspaceId, me.userId]);
           var saved = JSON.parse(sessionStorage.getItem(knowledgeJobKey) || '[]');
           if (Array.isArray(saved)) saved.forEach(function (e) {
-            if (e && typeof e.name === 'string' && typeof e.jobId === 'string' && !knowledgeJobs.some(function (x) { return x.job.jobId === e.jobId; }))
-              knowledgeJobs.push({ name: e.name, job: { jobId: e.jobId, status: 'queued' } });
+            if (e && typeof e.name === 'string' && (typeof e.jobId === 'string'||e.status==='failed') && !knowledgeJobs.some(function (x) { return x.job.jobId === e.jobId; }))
+              knowledgeJobs.push({ name: e.name, job: { jobId: e.jobId, status: e.status==='failed'?'failed':'queued',error:e.error } });
           });
         }
       } catch (e) { /* 不因浏览器存储不可用阻断知识库。 */ }
     }
     if (!valid(version) || route !== 'knowledge') return;
     var picker = node('input'); picker.type = 'file'; picker.multiple = true; picker.hidden = true;
-    picker.accept = '.txt,.md,.csv,.docx,.xlsx';
+    picker.accept = '.txt,.md,.csv,.tsv,.docx,.xls,.xlsx';
     var upload = button('＋ 上传资料', function () { picker.click(); }, 'ws-button ws-primary');
     heading('让你的知识，成为协作的底气', '上传资料，自动解析切片，检索内容并引用到对话。', upload);
-    var retrievalHint = node('p', 'ws-knowledge-hint', '支持 TXT、Markdown、CSV、DOCX、XLSX。扫描件和图片暂不支持文字识别。');
+    var retrievalHint = node('p', 'ws-knowledge-hint', '支持 TXT、Markdown、CSV/TSV、DOCX、XLS/XLSX。扫描件和图片暂不支持文字识别。');
     content.append(retrievalHint);
     api('GET', '/api/capabilities').then(function (data) {
       if (!valid(version) || route !== 'knowledge') return;
@@ -268,6 +279,18 @@
       if (modes[k.retrieval]) retrievalHint.textContent += ' 当前使用' + modes[k.retrieval] + '。';
       if (k.rag && k.rag.pendingDocuments > 0) retrievalHint.textContent += ' 部分资料的向量索引待更新。';
     }).catch(function () { /* 能力提示不可用时仍允许检索。 */ });
+    var uploadsPanel=node('details','ws-uploaded-files'),uploadsTitle=node('summary','','管理上传原文件'),uploadsList=node('div','ws-list'),uploadsCursor=null,uploadsRequest=0;
+    uploadsPanel.append(uploadsTitle,uploadsList);content.append(uploadsPanel);
+    async function loadUploads(more){
+      var seq=++uploadsRequest;
+      try{var data=await api('GET','/api/files?limit=20&cursor='+(more&&uploadsCursor?uploadsCursor:'0'));if(!valid(version)||seq!==uploadsRequest)return;
+        if(!more)uploadsList.replaceChildren();var previous=uploadsList.querySelector('.uploads-more');if(previous)previous.remove();
+        (data.files||[]).forEach(function(file){var row=node('div','ws-document-row'),name=node('span','ws-row-main',file.name+' · '+App.fmtBytes(file.sizeBytes));
+          row.append(name,button('删除原文件',async function(){var yes=await App.Dialog.confirm({title:'删除原文件？',description:'将删除「'+file.name+'」。已有知识索引和任务产物保留；共享原文件需管理员操作。',danger:true});if(!yes)return;try{await api('DELETE','/api/files/'+encodeURIComponent(file.name));row.remove();}catch(e){App.Toast.show('删除失败',e.message,'err');}},'ws-button ws-danger'));uploadsList.append(row);});
+        uploadsCursor=data.nextCursor;if(uploadsCursor){var moreButton=button('加载更多原文件',function(){loadUploads(true);});moreButton.classList.add('uploads-more');uploadsList.append(moreButton);}
+      }catch(e){if(valid(version))message(uploadsList,e.message,true);}
+    }
+    uploadsPanel.addEventListener('toggle',function(){if(uploadsPanel.open)loadUploads(false);});
     var search = input('检索知识切片', '输入问题或关键词，查找相关片段…');
     var toolbar = node('form', 'ws-toolbar'), searchButton = node('button', 'ws-button', '检索切片'); searchButton.type = 'submit';
     toolbar.append(search, searchButton, button('全部资料', function () { search.value = ''; load(); }));
@@ -276,7 +299,7 @@
     var detail = node('section', 'ws-chunk-detail'); detail.hidden = true; detail.setAttribute('aria-label', '文档切片');
     progress.setAttribute('role', 'status'); error.setAttribute('role', 'alert'); jobsList.setAttribute('aria-label', '解析任务');
     content.append(picker, toolbar, progress, error, jobsList, resultTitle, list, detail);
-    var documents = [], request = 0, loadRequest = 0, detailRequest = 0, timer, pollTimer, polling = false, uploading = false;
+    var documents = [],documentCursor=null, request = 0, loadRequest = 0, detailRequest = 0, timer, pollTimer, polling = false, uploading = false;
     var jobs = knowledgeJobs;
     routeCleanup = function () { clearTimeout(timer); clearTimeout(pollTimer); knowledgeNotify = function () {}; };
     function current() { return valid(version) && route === 'knowledge'; }
@@ -350,15 +373,17 @@
           });
           if (removed && current()) { detailRequest++; detail.hidden = true; load(); }
         }, 'ws-button ws-danger');
+        if(doc.fileName)actions.append(button('删除原文件',async function(){var yes=await App.Dialog.confirm({title:'删除上传原文件？',description:'知识索引会保留；后续无法重新解析该原文件。',danger:true});if(!yes)return;try{await api('DELETE','/api/files/'+encodeURIComponent(doc.fileName));notice(error,'原文件已删除');}catch(e){notice(error,e.message);}}));
         actions.append(remove); row.append(node('span', 'ws-row-icon', '▤'), info, actions); list.append(row);
       });
     }
-    async function load() {
-      if (!current()) return;
+    async function load(more) {
+      more=more===true;if (!current()) return;
       var seq = ++loadRequest; request++; message(list, '正在加载资料…');
       try {
-        var data = await api('GET', '/api/knowledge'); if (!current() || seq !== loadRequest) return;
-        documents = data.documents || []; if (search.value.trim()) find(); else drawDocs();
+        var data = await api('GET', '/api/knowledge?limit=50&cursor='+(more&&documentCursor?documentCursor:'0')); if (!current() || seq !== loadRequest) return;
+        documents = (more?documents:[]).concat(data.documents || []);documentCursor=data.nextCursor;if (search.value.trim()) find(); else drawDocs();
+        if(documentCursor)list.append(button("加载更多资料",function(){load(true);}));
       } catch (e) { if (current() && seq === loadRequest) { message(list, e.message, true); list.append(button('重新加载', load)); } }
     }
     async function find() {

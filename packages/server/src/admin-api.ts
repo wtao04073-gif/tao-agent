@@ -29,7 +29,7 @@ export function createAdminHandler(deps:{settings:AdminSettings;originAllowed?:(
  if(path==='/api/control/bootstrap-status'&&req.method==='GET'){sendJson(res,200,{initialized:identity.initialized,claimRequired:!identity.initialized,claimConfigured:!!deps.bootstrapToken});return true;}
  if(path==='/api/control/bootstrap'&&req.method==='POST'){const b=await body(),a=Buffer.from(b.claimToken||''),expected=Buffer.from(deps.bootstrapToken||'');if(!expected.length||a.length!==expected.length||!timingSafeEqual(a,expected))throw new AdminError(403,'初始化凭据无效');await identity.bootstrap(b.claimToken,{...b,username:b.userId});sendJson(res,201,{ok:true});return true;}
  if(path==='/api/auth/login'&&req.method==='POST'){const b=await body();const r=await identity.login(String(b.userId||''),String(b.password||''));cookie(req,res,r.token);sendJson(res,200,{csrf:identity.session(r.token)?.csrf,me:r.principal});return true;}
- if(path==='/api/auth/logout'&&req.method==='POST'){identity.logout(sessionToken(req));cookie(req,res,'');sendJson(res,200,{ok:true});return true;}
+ if(path==='/api/auth/logout'&&req.method==='POST'){identity.logout(sessionToken(req));if(req.headers.authorization?.startsWith('Bearer '))identity.logout(req.headers.authorization.slice(7));cookie(req,res,'');sendJson(res,200,{ok:true});return true;}
  const p=await deps.authenticate(req);if(!p)throw new AdminError(401,'请先登录');
  if(path==='/api/auth/me'&&req.method==='GET'){sendJson(res,200,{...p,csrf:session?.csrf||null});return true;}
  if(path==='/api/auth/profile'&&req.method==='GET'){sendJson(res,200,identity.profile(p));return true;}

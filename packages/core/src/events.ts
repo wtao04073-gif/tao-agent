@@ -37,6 +37,9 @@ export interface TaskStatusEvent extends TaskEventBase {
 export interface TaskStepEvent extends TaskEventBase {
 	readonly type: "step";
     readonly toolName?: string;
+    readonly toolCallId?: string;
+    readonly inputSummary?: string;
+    readonly resultSummary?: string;
 	/** 步骤序号，从 1 开始。 */
 	readonly step: number;
 	/** 面向用户的动作描述，须是业务语言而非工具名。 */
@@ -49,6 +52,8 @@ export interface TaskStepEvent extends TaskEventBase {
 /** 工具调用的权限决策 —— 每一次拒绝都必须可审计。 */
 export interface TaskToolDecisionEvent extends TaskEventBase {
 	readonly type: "tool_decision";
+    readonly toolCallId?: string;
+    readonly inputSummary?: string;
 	readonly toolName: string;
 	readonly decision: "allowed" | "blocked" | "await_confirm";
 	/** 拒绝或需确认的原因，会展示给用户。 */

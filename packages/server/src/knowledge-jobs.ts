@@ -1,3 +1,4 @@
+import { supportsFile, KNOWLEDGE_FORMATS } from "./file-formats.ts";
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { FileJsonStore } from "@tao/knowledge";
@@ -37,6 +38,7 @@ export class KnowledgeJobs {
     public(job: Job) { const { input: _input, tenant: _tenant, fingerprint: _fingerprint, role: _role, ...data } = job; return {...data,operation:job.input.documentId?"reindex":"ingest"}; }
     owned(tenant: TenantContext, id: string) { const job = this.store.get(id); return job?.tenant.tenantId === tenant.tenantId && job.tenant.workspaceId === tenant.workspaceId ? job : undefined; }
     create(tenant: TenantContext, input: Input, key?: string, role: Role = Role.Member) {
+        if (input.fileName && !supportsFile(input.fileName, KNOWLEDGE_FORMATS)) throw new WorkspaceError(400, "知识库不支持该文件格式，支持 " + KNOWLEDGE_FORMATS.join("、"));
         if (this.queue.length >= 100)
             throw new WorkspaceError(503, "知识处理队列已满");
         if (key !== undefined && !/^[A-Za-z0-9_.:-]{1,128}$/.test(key))
@@ -113,6 +115,7 @@ export function createKnowledgeJobHandler(jobs: KnowledgeJobs, authenticate: (re
                 const body = await readJsonBody(req);
                 if (!body.ok)
                     throw new WorkspaceError(400, body.reason);
+                if (!body.value || typeof body.value !== "object" || Array.isArray(body.value)) throw new WorkspaceError(400, "入库参数无效");
                 const data = body.value as Record<string, unknown>;
                 const input: Input = {};
                 for (const key of ["name", "fileName", "text"] as const) {

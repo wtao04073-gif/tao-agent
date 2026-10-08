@@ -14,7 +14,7 @@ export class ResponseStream {
   const offset=buffer.text.length;buffer.text+=delta;
   this.options.delta(channel,messageId,delta,offset);
   if(offset===0)this.options.snapshot(channel,messageId,buffer.text,false);
-  if(!buffer.timer){buffer.timer=setTimeout(()=>{buffer!.timer=undefined;this.options.snapshot(channel,messageId,buffer!.text,false);},this.options.intervalMs??300);buffer.timer.unref();}
+  if(!buffer.timer){buffer.timer=setTimeout(()=>{buffer!.timer=undefined;this.options.snapshot(channel,messageId,buffer!.text,false);},this.options.intervalMs??1000);buffer.timer.unref();}
  }
  end(runId?:string):string {const id=this.id(runId);for(const [key,buffer] of this.buffers)if(buffer.messageId===id){this.flush(buffer,true);this.buffers.delete(key);}return id;}
  close():void {for(const buffer of this.buffers.values())this.flush(buffer,true);this.buffers.clear();}

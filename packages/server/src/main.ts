@@ -1,3 +1,5 @@
+import { supportsFile } from "./file-formats.ts";
+import { TaskPresentation, createManagementHandler } from "./workspace-management.ts";
 import {createOriginPolicy} from './request-origin.ts';
 import {ConnectionChecks} from './admin-connections.ts';
 import {outboundFetch,networkPolicy} from './admin-network.ts';
@@ -1046,6 +1048,8 @@ const guardedSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, i
  finally { submissionsInFlight--;if (key) conversationReservations.delete(key); }
 };
 
+const presentation=new TaskPresentation(join(config.workspaceDir,".execution"));
+const visibleTasks=(tenant:TenantContext)=>presentation.list(orchestrator.list(tenant));
 const app = createApp({
 	authenticate,
 	modelInfo: () => ({
@@ -1060,13 +1064,13 @@ const app = createApp({
 		if (task === undefined || task.tenant.tenantId !== tenant.tenantId) return [];
 		return orchestrator.events(taskId, afterSeq);
 	},
-	listTasks: (tenant) => orchestrator.list(tenant),
+	listTasks: visibleTasks,
 	getTask: (tenant, taskId) => {
 		const task = orchestrator.get(taskId);
 		if (task === undefined) return undefined;
 		if (task.tenant.tenantId !== tenant.tenantId) return undefined;
 		if (task.tenant.workspaceId !== tenant.workspaceId) return undefined;
-		return task;
+		return presentation.view(task);
 	},
 	createJob: async (tenant, input) => {
 		const now = Date.now();
@@ -1169,6 +1173,7 @@ const app = createApp({
 	listScenarios: (tenant) => listCards(PRESET_CARDS, tenant.tenantId),
 
 	uploadFile: async (tenant, file) => {
+        if(!supportsFile(file.name))throw new WorkspaceError(400,"不支持该文件格式，请上传文档、表格或图片");
 		const dir = resolveWorkspaceDir(config.workspaceDir, tenant.tenantId, tenant.workspaceId);
 		mkdirSync(dir, { recursive: true });
 		// 只保留安全单段文件名，防注入路径分隔符；同名加时间戳避免覆盖
@@ -1257,8 +1262,8 @@ async function controlIdentity(req:IncomingMessage):Promise<Principal|undefined>
 const backendHandler = createBackendHandler({
  authenticate, registry: executionRegistry, actions: actionStore, jobs: jobStore,
  capabilities: tenant => ({ knowledge: {retrieval:workspaceServices.ragStatus(tenant).mode,rag:workspaceServices.ragStatus(tenant),asyncIngestion:true,versioned:true,formats:["txt","md","csv","tsv","docx","xls","xlsx"],ocr:false}, subagents: { enabled: adminSettings.effective("global").SUBAGENTS_ENABLED!=="false", maxPerCall: 5, concurrency: config.maxSubtaskConcurrency, nested: false }, mcp: { supported: true, transport: "streamable-http", configured: adminSettings.effective("global").MCP_ENABLED==="true" || mcpServers.some(s => s.tenantId === tenant.tenantId && s.workspaceId === tenant.workspaceId) }, documentRevision: true }),
- listTasks: tenant => orchestrator.list(tenant),
- getTask: (tenant, id) => orchestrator.list(tenant).find(t => t.taskId === id),
+ listTasks: visibleTasks,
+ getTask: (tenant, id) => visibleTasks(tenant).find(t => t.taskId === id),
  events: (tenant, id) => orchestrator.list(tenant).some(t => t.taskId === id) ? orchestrator.events(id) : [],
  submit: (tenant, input) => executionRegistry.submit(tenant, input, () => guardedSubmit(tenant, input)),
 });
@@ -1295,10 +1300,12 @@ const adminHandler=createAdminHandler({originAllowed,settings:adminSettings,conn
  }
 });
 const handleLogo=logoHandler(config.workspaceDir,authenticate,originAllowed);
+const managementHandler=createManagementHandler({authenticate,root:config.workspaceDir,presentation,listTasks:visibleTasks,skills:skillStore,agents:agentStore,jobs:jobStore,cancel:id=>orchestrator.cancel(id,"用户取消长期任务")});
 const server = createServer((req, res) => {
  void (async()=>{
   const loginSession=identity.session(sessionToken(req));
   const requestPath=new URL(req.url||'/', 'http://localhost').pathname;
+  if(requestPath.startsWith('/api/') && !originAllowed(req)){sendError(res,403,'请求来源无效');return;}
   if(loginSession&&!req.headers.authorization&&!['GET','HEAD','OPTIONS'].includes(req.method||'GET')&&!['/api/auth/login','/api/control/bootstrap'].includes(requestPath)){
    if(req.headers['x-csrf-token']!==loginSession.csrf){sendError(res,403,'安全校验已失效，请刷新页面');return;}
    if(!originAllowed(req)){sendError(res,403,'请求来源无效');return;}
@@ -1345,6 +1352,7 @@ const server = createServer((req, res) => {
     } else {const source=workspaceFile(config.workspaceDir,principal.tenant,body.name);const file=resourceCatalog.registerFile(principal.tenant,source);sendJson(res,200,{name:body.name,path:source,fileId:file.fileId});}
    }catch{sendError(res,404,'文件不存在或无法引用');}return;
   }
+  if(await managementHandler(req,res))return;
   if(await knowledgeJobHandler(req,res))return;
   if(await resourceHandler(req,res))return;
   if(await backendHandler(req,res))return;

@@ -1,3 +1,5 @@
+import { pageOptions } from "./pagination.ts";
+import { toolSummary } from "@tao/core";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { PendingAction, StoredAction, StoredJob, TaskEvent, TenantContext } from "@tao/core";
 import type { FileJobStore, FileJsonStore } from "@tao/knowledge";
@@ -25,17 +27,12 @@ export interface BackendDeps {
     submit: AppDeps["submitTask"];
     capabilities?: (tenant: TenantContext) => Record<string, unknown>;
 }
-function page(params: URLSearchParams) {
-    const limit = Number(params.get("limit") ?? 50), offset = Number(params.get("cursor") ?? 0);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0)
-        throw new WorkspaceError(400, "分页参数无效");
-    return { limit, offset };
-}
+const page = pageOptions;
 export function createBackendHandler(deps: BackendDeps) {
     return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
         const url = new URL(req.url ?? "/", "http://localhost"), parts = url.pathname.split("/").filter(Boolean);
         const match = parts[0] === "api" && (parts[1] === "capabilities" || parts[1] === "conversations" ||
-            (parts[1] === "tasks" && parts.length === 4 && ["actions", "retry"].includes(parts[3]!)) || (parts[1] === "jobs" && req.method === "PATCH"));
+            (parts[1] === "tasks" && parts.length === 4 && ["actions", "retry"].includes(parts[3]!)) || (parts[1] === "jobs" && (req.method === "PATCH" || (parts.length===4&&parts[3]==="events"))));
         if (!match)
             return false;
         res.setHeader("Cache-Control", "no-store");
@@ -57,7 +54,7 @@ export function createBackendHandler(deps: BackendDeps) {
                     throw new WorkspaceError(404, "任务不存在");
                 if (req.method === "GET" && parts[3] === "actions") {
                     const actions: PendingAction[] = deps.actions.listByTenant(tenant.tenantId, tenant.workspaceId).filter(a => a.taskId === id)
-                        .map(({ arguments: _args, ...a }) => a);
+                        .map(({ arguments: args, ...a }) => ({...a,inputSummary:toolSummary(args)}));
                     sendJson(res, 200, { actions });
                 }
                 else if (req.method === "POST" && parts[3] === "retry") {
@@ -75,6 +72,12 @@ export function createBackendHandler(deps: BackendDeps) {
                 }
                 else
                     throw new WorkspaceError(405, "不支持的任务操作");
+            }
+            else if(parts[1]==="jobs" && parts.length===4 && parts[3]==="events" && req.method==="GET"){
+                const id=decodeURIComponent(parts[2]!),job=deps.jobs.get(id);
+                if(!job||job.tenant.tenantId!==tenant.tenantId||job.tenant.workspaceId!==tenant.workspaceId)throw new WorkspaceError(404,"长期任务不存在");
+                const {limit,offset}=page(url.searchParams),selected=[...deps.listTasks(tenant)].filter(t=>t.jobId===id).sort((a,b)=>a.createdAt-b.createdAt);
+                sendJson(res,200,{rounds:selected.slice(offset,offset+limit).map(task=>({task,events:deps.events(tenant,task.taskId)})),nextCursor:offset+limit<selected.length?String(offset+limit):null});
             }
             else if (parts[1] === "jobs" && parts.length === 3 && req.method === "PATCH") {
                 const body = await readJsonBody(req);
@@ -111,10 +114,18 @@ export function createBackendHandler(deps: BackendDeps) {
                         const row = groups.get(id) ?? { conversationId: id, title: t.title ?? "对话", taskIds: [], updatedAt: t.updatedAt, ...(t.jobId ? { jobId: t.jobId } : {}) };
                         row.taskIds.push(t.taskId);
                         row.updatedAt = Math.max(row.updatedAt, t.updatedAt);
+                        Object.assign(row,{taskId:t.taskId,status:t.status});
                         groups.set(id, row);
                     }
-                    const rows = [...groups.values()].filter(r => !q || r.title.toLowerCase().includes(q)).sort((a, b) => b.updatedAt - a.updatedAt || a.conversationId.localeCompare(b.conversationId));
+                    const rows = [...groups.values()].filter(r => (url.searchParams.get("standalone")!=="true"||!r.jobId) && (!q || r.title.toLowerCase().includes(q))).sort((a, b) => b.updatedAt - a.updatedAt || a.conversationId.localeCompare(b.conversationId));
                     sendJson(res, 200, { conversations: rows.slice(offset, offset + limit), nextCursor: offset + limit < rows.length ? String(offset + limit) : null });
+                }
+                else if (parts.length === 4 && parts[3] === "events") {
+                    const id=decodeURIComponent(parts[2]!),selected=tasks.filter(t=>(t.conversationId??t.taskId)===id);
+                    if(!selected.length)throw new WorkspaceError(404,"会话不存在");
+                    // 按轮次分页，一次返回该页全部事件，避免每轮一个请求。
+                    const rounds=selected.slice(offset,offset+limit).map(task=>({task,events:deps.events(tenant,task.taskId)}));
+                    sendJson(res,200,{rounds,total:selected.length,nextCursor:offset+limit<selected.length?String(offset+limit):null});
                 }
                 else if (parts.length === 4 && parts[3] === "messages") {
                     const id = decodeURIComponent(parts[2]!);

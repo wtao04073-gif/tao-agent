@@ -164,7 +164,7 @@ const eightDReport: ScenarioCard = {
 			required: false,
 		},
 	],
-	tools: ["read_table", "write_document"],
+	tools: ["read_table", "write_table", "write_document"],
 	systemPrompt:
 		"你是质量工程师助手，精通 8D 问题解决方法与 IATF16949 要求。8D 报告会直接提交给客户，格式不符会被退回。你必须严格按 D1-D8 八个步骤组织内容，对信息不足的步骤明确标注「待补充」并说明需要什么，绝不编造根本原因或验证数据。",
 	promptTemplate: [
@@ -220,7 +220,7 @@ const inspectionChecklist: ScenarioCard = {
 			hint: "如：冲压车间、成品仓库",
 		},
 	],
-	tools: ["read_table", "write_document"],
+	tools: ["read_table", "write_table", "write_document"],
 	systemPrompt:
 		"你是安全管理助手。产出会用于安全档案与客户验厂，需规范、可核查。对记录中描述模糊的隐患，保留原始描述并标注「描述需确认」，不要自行改写成看起来规范但失真的表述。",
 	promptTemplate: [
@@ -286,7 +286,7 @@ const productionReport: ScenarioCard = {
 			defaultValue: true,
 		},
 	],
-	tools: ["list_sheets", "read_table", "reconcile_tables", "write_document"],
+	tools: ["list_sheets", "read_table", "reconcile_tables", "write_table", "write_document"],
 	systemPrompt:
 		"你是生产管理助手。报表会上报管理层用于决策，数字必须准确且口径一致。计算指标时先说明口径（如良率 = 合格数 / 投入数），若数据不足以计算某指标，明确说明缺什么而不是用近似值代替。",
 	promptTemplate: [
@@ -359,7 +359,7 @@ const systemDocument: ScenarioCard = {
 			hint: "如：补充客户新增的追溯要求；审核开出的不符合项要闭环",
 		},
 	],
-	tools: ["read_document", "write_document", "search_knowledge"],
+	tools: ["read_document", "write_table", "write_document", "search_knowledge"],
 	systemPrompt:
 		"你是体系文件编写助手，熟悉 ISO9001 与 IATF16949 条款。体系文件会被审核员逐条对照标准检查，口径不一致会被开不符合项。编写时必须标注对应的标准条款号，引用企业已有文件时注明来源。不确定标准具体要求时明确说明，不要臆造条款号。",
 	promptTemplate: [
@@ -421,7 +421,7 @@ const selfAssessment: ScenarioCard = {
 			hint: "留空则覆盖全部指标；也可只写某几项，如「4.1 师资队伍、4.2 教学条件」",
 		},
 	],
-	tools: ["read_document", "read_table", "write_document", "search_knowledge"],
+	tools: ["read_document", "read_table", "write_table", "write_document", "search_knowledge"],
 	systemPrompt:
 		"你是高校评估材料撰写助手。自评报告会被专家组逐项对照指标审阅，每个结论都需要材料支撑。严禁编造数据或材料 —— 支撑材料里没有的数据，标注「数据待补充」并说明需要哪个部门提供什么。引用材料时注明来源文件与位置。",
 	promptTemplate: [
@@ -478,7 +478,7 @@ const rectificationLedger: ScenarioCard = {
 			hint: "更新已有台账时上传，会保留原有进度记录",
 		},
 	],
-	tools: ["read_document", "read_table", "write_document"],
+	tools: ["read_document", "read_table", "write_table", "write_document"],
 	systemPrompt:
 		"你是高校行政管理助手。整改台账要上报并被复查，每条问题必须可追溯到原始反馈意见。拆解问题时保留反馈原文，不要改写成模糊表述。责任部门无法从反馈中判断时标注「待分工」，不要随意指派。",
 	promptTemplate: [
@@ -540,7 +540,7 @@ const officialNotice: ScenarioCard = {
 			hint: "上级文件、本单位同类历史公文（用于统一口径与格式）",
 		},
 	],
-	tools: ["read_document", "write_document", "search_knowledge"],
+	tools: ["read_document", "write_table", "write_document", "search_knowledge"],
 	systemPrompt:
 		"你是高校公文写作助手，熟悉《党政机关公文格式》国家标准。公文会正式发布，格式与用语必须规范。若提供了本单位历史公文，优先沿用其格式与称谓习惯。涉及具体时间、地点、人员而用户未提供时，用方括号占位如「[会议时间]」，不要编造。",
 	promptTemplate: [
@@ -655,7 +655,7 @@ const projectApplication: ScenarioCard = {
 			defaultValue: false,
 		},
 	],
-	tools: ["read_document", "read_table", "write_document", "search_knowledge"],
+	tools: ["read_document", "read_table", "write_table", "write_document", "search_knowledge"],
 	systemPrompt:
 		"你是科研管理助手。申报书形式审查不通过会直接失去申报机会，因此完整性检查比文字润色更重要。逐条对照申报指南的要求清单核查材料，缺失项明确指出需要补什么。不要为了让申报书看起来完整而编造成果或数据。",
 	promptTemplate: [
@@ -711,7 +711,7 @@ const generalTask: ScenarioCard = {
 		},
 	],
 	// 开放当前装配的全部办公 / 文档工具；模型按需调用。
-	tools: ["list_sheets", "read_table", "reconcile_tables", "read_document", "write_document", "edit_document", "search_knowledge", "delegate_tasks", "mcp_list_tools", "mcp_call", "web_search"],
+	tools: ["list_sheets", "read_table", "reconcile_tables", "read_document", "write_table", "write_document", "edit_document", "search_knowledge", "delegate_tasks", "mcp_list_tools", "mcp_call", "web_search"],
 	systemPrompt:
 		"你是面向高校与制造业办公人员的通用办公助手。用户用一句话提出需求，可能附带了上传的文件。" +
 		"请先判断需要读取哪些附件、用哪些工具，再规划并执行；产出要可直接使用（规范的 Word / Excel）。" +

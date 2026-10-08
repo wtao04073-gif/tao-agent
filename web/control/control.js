@@ -108,11 +108,13 @@
 		breakdown("byModel", data.byModel, false);
 		$("usageData").hidden = false;
 	}
-	function audit(data) {
-		var entries = (data.entries || []).slice().sort(function (a, b) { return b.at - a.at; });
+	var auditEntries=[],auditCursor=null;
+    function audit(data,append) {
+		auditEntries=(append?auditEntries:[]).concat(data.entries||[]);auditCursor=data.nextCursor;
+        var entries = auditEntries.slice().sort(function (a, b) { return new Date(b.at).getTime() - new Date(a.at).getTime(); });
 		var host = $("auditRows");
 		host.replaceChildren();
-		$("auditCount").textContent = "共 " + number(entries.length) + " 条记录";
+		$("auditCount").textContent = "已加载 " + number(entries.length) + " / " + number(data.total??data.count??entries.length) + " 条记录";
 		if (!entries.length) emptyRow(host, 5, "所选时段暂无审计记录");
 		var labels = { allowed: "允许", blocked: "已拦截", await_confirm: "待确认" };
 		entries.forEach(function (entry) {
@@ -127,7 +129,12 @@
 			cell(row, entry.reason || "—");
 			host.appendChild(row);
 		});
-		$("auditData").hidden = false;
+		var previous=document.getElementById('auditMore');if(previous)previous.remove();
+        if(auditCursor){var more=document.createElement('button');more.id='auditMore';more.textContent='加载更多审计';more.type='button';var current=generation;
+          more.onclick=async function(){more.disabled=true;try{var query=windowQuery();var r=await App.api('GET','/api/admin/audit'+query+(query?'&':'?')+'cursor='+auditCursor);if(current!==generation)return;if(!r.ok)throw Error(r.data.error||'加载失败');audit(r.data,true);}catch(e){notice('auditError',e.message);more.disabled=false;}};
+          $("auditData").append(more);
+        }
+        $("auditData").hidden = false;
 	}
 	async function refresh(event) {
 		if (event) event.preventDefault();

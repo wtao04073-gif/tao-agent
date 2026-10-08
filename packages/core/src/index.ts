@@ -27,3 +27,5 @@ export * from "./dashboard.ts";
 export * from "./task-store.ts";
 export * from "./job.ts";
 export * from "./addon.ts";
+
+export { toolSummary } from "./tool-summary.ts";

@@ -36,3 +36,14 @@ body{font-family:Inter,"PingFang SC","Noto Sans SC",sans-serif}.rail{width:248px
 .account-menu[hidden] { display:none; }
 .account-menu button { display:block; width:100%; text-align:left; padding:10px; background:transparent; border:0; border-radius:6px; color:inherit; cursor:pointer; }
 .account-menu button:hover,.account-menu button:focus-visible { background:var(--bg,#eee); }
+
+.tool-details { grid-column: 1 / -1; width:100%; font-size:12px; margin-top:8px; }
+.tool-details pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:220px; overflow:auto; background:var(--bg-2,#f5f5f5); padding:8px; }
+.recent-manage { border:0; background:transparent; color:var(--text-3); font-size:11px; cursor:pointer; }
+.addon-actions { display:flex; gap:6px; }
+html[data-theme="dark"] { color-scheme:dark; --bg-app:#191d1a;--bg-white:#202622;--bg-soft:#262d28;--bg-soft-2:#2c352e;--line:#414c43;--line-soft:#303a32;--text:#e5e9e3;--text-2:#c1cac0;--text-3:#a1ada0;--primary:#8fbd99;--primary-h:#b2d7bb;--primary-soft:#2b3d30;--primary-border:#496850;--ok:#8dcca0;--ok-soft:#233c2b;--warn:#ecc274;--warn-soft:#493c25;--err:#f0a5a5;--err-soft:#482a2a;--bg:#202622;--bg-2:#262d28;--border:#414c43; }
+html[data-theme="dark"] .rail,html[data-theme="dark"] .chat-head,html[data-theme="dark"] .conv,html[data-theme="dark"] .stream,html[data-theme="dark"] .composer {background:var(--bg-app);border-color:var(--line);}
+html[data-theme="dark"] .inputcard,html[data-theme="dark"] .msg.user .bubble,html[data-theme="dark"] .steps-head,html[data-theme="dark"] .account-menu {background:var(--bg-white)!important;border-color:var(--line)!important;color:var(--text);}
+html[data-theme="dark"] .nav-item.active,html[data-theme="dark"] .nav-item:hover {background:var(--primary-soft);color:var(--text);}
+html[data-theme="dark"] textarea,html[data-theme="dark"] input,html[data-theme="dark"] select {color:var(--text);}
+html[data-theme="dark"] .steps,html[data-theme="dark"] .ex,html[data-theme="dark"] .rail-search .sbox {border-color:var(--line)!important;color:var(--text-2)!important;}

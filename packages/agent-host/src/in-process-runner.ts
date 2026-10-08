@@ -1,3 +1,4 @@
+import { toolSummary } from "@tao/core";
 import { ResponseStream } from "./response-stream.ts";
 /**
  * 进程内 Runner 实现
@@ -485,7 +486,7 @@ function installGate(
    const pending = await runner.confirmations.request(event.toolCallId, event.toolName, args, decision.reason);
    await runner.emit(base => ({ ...base, type: "tool_decision", toolName: event.toolName,
     decision: "await_confirm", reason: decision.kind === "confirm" ? decision.reason : "需要确认",
-    actionId: pending.action.actionId, expiresAt: pending.action.expiresAt }));
+    toolCallId:event.toolCallId, inputSummary:toolSummary(args), actionId: pending.action.actionId, expiresAt: pending.action.expiresAt }));
    if (!await pending.decision) {
     runner.noteRunFailure("动作被拒绝、过期或取消，未执行");
     return { block: { reason: "动作未获得有效授权", terminate: true } };
@@ -497,6 +498,8 @@ function installGate(
    } else decision = { kind: "allow" };
   }
   await runner.emit(base => ({ ...base, type: "tool_decision", toolName: event.toolName,
+   toolCallId:event.toolCallId,
+   ...(decision.kind === "allow" ? {inputSummary:toolSummary(args)} : {}),
    decision: decision.kind === "allow" ? "allowed" : "blocked",
    ...(decision.kind === "allow" ? {} : { reason: decision.reason }) }));
   return decision.kind === "allow" ? undefined : { block: { reason: decision.reason } };
