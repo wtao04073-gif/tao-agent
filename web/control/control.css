@@ -94,3 +94,27 @@ footer { color: #96a298; font-size: 11px; text-align: center; padding: 32px 0 25
  .account-row input,.account-row select { width:100%; }
  .card { min-width:0; }
 }
+
+/* 页面级路由与独立的网格内容，避免折叠元素布局和全局表单样式互相干扰。 */
+.sidebar{overflow-y:auto}.sidebar nav{margin-top:24px}.sidebar .nav-label{margin:22px 12px 8px;letter-spacing:1px}.sidebar .nav-link{padding:9px 13px;font-size:13px}
+.shell{min-width:0}.topbar{position:sticky;top:0;z-index:10;backdrop-filter:blur(12px)}main{width:100%;max-width:1440px;padding-bottom:24px}
+[data-control-page].card{padding:26px;margin-top:0;overflow:visible}[data-control-page]>h2{margin-bottom:12px}[data-control-page]>p{max-width:900px;color:var(--muted)}
+#controlNotice{overflow-wrap:anywhere;background:#edf3e9;color:#355c44;margin:0 0 20px}#panel>section{margin-top:24px}
+#configuration{min-width:0}.settings-group{display:block;margin:16px 0 0;border:0;padding:0}.settings-group h3{margin:8px 0 18px;font-size:16px}
+.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px 26px}
+.config-field{min-width:0;display:flex;flex-direction:column;gap:8px}.config-field>label{font-size:13px;color:#51645b}.config-field>input:not([type=checkbox]),.config-field>select{width:100%;min-height:42px;background:#fff;color:var(--ink)}
+.config-clear{flex-direction:row;align-items:center;font-size:12px;color:#8b645f}.config-clear input{width:15px;height:15px}.config-boolean{justify-content:center}.config-boolean>input{width:18px;height:18px}
+.config-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:16px 0;border-bottom:1px solid var(--line)}.config-tabs button{font-size:12px;padding:7px 12px;border-color:transparent;background:#f4f6f2}.config-tabs button[aria-pressed=true]{background:#e3eee5;color:#21634e;border-color:#b9d1bf}
+#configSearch{width:100%;max-width:540px;margin:8px 0}#configStatus{position:static;border-radius:8px;font-size:12px}
+.config-actions{position:sticky;bottom:0;z-index:3;background:#fffffff5;padding:16px 0;margin:24px 0 0;border-top:1px solid var(--line);align-items:center}.config-actions button{font-size:12px}.config-actions #suspendModel{margin-left:auto;color:#a63f34}
+.connection-tests,.create-panel{margin:20px 0;padding:16px;border:1px solid var(--line);border-radius:10px}.connection-tests summary,.create-panel summary{cursor:pointer;font-weight:600}.connection-tests summary span{font-size:12px;color:var(--muted);font-weight:400;margin-left:10px}.connection-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:18px}.connection-grid button{text-align:left;font-size:12px}
+#newAccount,#newDataset{margin-top:18px}#newAccount{grid-template-columns:repeat(2,minmax(0,1fr))}#newAccount input,#newAccount select{width:100%}#newAccount button{align-self:end}
+.account-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:18px;border:1px solid var(--line);border-radius:10px}.account-row>span{grid-column:1/-1;font-weight:600}.account-row input,.account-row select{width:100%}
+.eval-case{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:18px;margin:14px 0;background:#f5f7f3;border-radius:10px}.eval-case textarea{grid-column:1/-1;min-height:100px;resize:vertical;font:inherit}.eval-case input{width:100%}
+#knowledgeAdminData>div,#evaluationList>div,#evaluationList>details{padding:16px;margin:12px 0;border:1px solid var(--line);border-radius:10px;overflow-wrap:anywhere}#knowledgeAdminData button{margin-left:12px}
+@media(min-width:1550px){.settings-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:800px){.settings-grid,#newAccount,.account-row,.connection-grid,.eval-case{grid-template-columns:minmax(0,1fr)}.sidebar nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin-top:12px}.sidebar .nav-label{display:none}.topbar{position:static}[data-control-page].card{padding:18px}.config-actions{position:static}.config-actions #suspendModel{margin-left:0}.page-heading h1{font-size:24px}.connection-tests summary span{display:block;margin:5px 0 0}}
+
+.model-config{padding:18px;margin:14px 0;border:1px solid var(--line);border-radius:10px;background:#fcfdfb}.model-config summary{cursor:pointer;font-weight:600}.model-config>.settings-grid{margin-top:20px}.settings-group>.settings-grid:empty{display:none}.config-field[hidden],.model-config[hidden]{display:none!important}
+
+#settings>p,#evaluations>p{line-height:1.8}.page-heading{margin-bottom:24px}#settings .settings-group[hidden]{display:none!important}

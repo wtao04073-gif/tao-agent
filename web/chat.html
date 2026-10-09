@@ -351,7 +351,7 @@
 		}
 	}
 </style>
-<link rel="stylesheet" href="/assets/workspace.css?v=rag-stream-1">
+<link rel="stylesheet" href="/assets/workspace.css?v=workspace-nav-2">
 <link rel="stylesheet" href="/assets/chat-theme.css?v=rag-stream-1">
 </head>
 <body>
@@ -370,8 +370,8 @@
 			<button class="nav-item front-new-chat" id="frontNewChat">＋ 新对话</button>
 			<button class="nav-item active" id="navChat"><span>💬</span> 对话</button>
 			<button class="nav-item" id="navTasks"><span>🗂</span> 任务中心</button>
-			<button class="nav-item" id="navWorkbench"><span>▦</span> 场景</button>
-			<button class="nav-item" id="navKnowledge"><span>📚</span> 知识库</button>
+			<button class="nav-item" id="navWorkbench"><span>▦</span> 场景与技能</button>
+			<button class="nav-item" id="navKnowledge"><span>📚</span> 知识与文件</button>
 
 
 			<div class="rail-group">
@@ -379,16 +379,6 @@
 				<button class="new-job-btn" id="newJobBtn" type="button">＋ 新建任务</button>
 				<div id="jobList"></div>
 			</div>
-			<button class="nav-item" id="navFiles">文件管理</button>
-<button class="nav-item" id="navConversations">会话分组</button>
-<button class="nav-item" id="navPreferences">个人偏好</button>
-<button class="nav-item" id="navSharing">分享与转交</button>
-<button class="nav-item" id="navCollaboration">产物协作</button>
-<button class="nav-item" id="navTeams">团队空间</button>
-<button class="nav-item" id="navPackages">技能包</button>
-<button class="nav-item" id="navAutomation">自动化</button>
-<button class="nav-item" id="navCapabilities">能力状态</button>
-<button class="nav-item" id="navNewWindow">在新窗口打开工作区</button>
 <div class="recent">
 				<button class="recent-head" id="recentHead" type="button"><span>最近对话</span><span class="recent-caret">▾</span></button>
 				<div id="recentList"></div>
@@ -542,9 +532,9 @@
 	<div class="toast" id="toast"></div>
 <script src="/assets/core.js?v=app-dialog-1"></script>
 <script src="/assets/forms.js"></script>
-<script src="/assets/workbench.js"></script>
-<script src="/assets/automation.js"></script>
-<script src="/assets/workspace.js?v=app-dialog-1"></script>
+<script src="/assets/workbench.js?v=workspace-nav-2"></script>
+<script src="/assets/automation.js?v=workspace-nav-2"></script>
+<script src="/assets/workspace.js?v=workspace-nav-2"></script>
 <script src="/assets/chat-interactions.js"></script>
 <script src="/assets/run-display.js"></script>
 <script>
@@ -1785,7 +1775,7 @@
         showDeliver();ChatUI.preview(null,file.name);
       }});
     $('#navChat').addEventListener('click',function(){TaoWorkspace.showChat();});
-    $('#navNewWindow').addEventListener('click',function(){var a=document.createElement('a');a.href='/chat.html';a.target='_blank';a.rel='noopener noreferrer';a.click();});
+
     $('#frontNewChat').addEventListener('click',resetAll);
     $('#railScrim').addEventListener('click',function(){setRail(true);});
     ['#lInput','#sInput'].forEach(function(sel){$(sel).addEventListener('input',function(){var value=this.value;$('#lInput').value=$('#sInput').value=value;drafts[currentDraft]=value;});});
@@ -1835,6 +1825,6 @@
 	});
 })();
 </script>
-<script src="/assets/admin-entry.js"></script>
+<script src="/assets/admin-entry.js?v=workspace-nav-2"></script>
 <script src="/assets/branding.js" defer></script></body>
 </html>

@@ -4,33 +4,42 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>管控平台 · Tao Agent</title>
-  <link rel="stylesheet" href="/control/control.css"><link rel="stylesheet" href="/assets/dialog.css">
+  <link rel="stylesheet" href="/control/control.css?v=control-nav-2"><link rel="stylesheet" href="/assets/dialog.css">
   <script src="/assets/core.js" defer></script>
-  <script src="/control/control.js" defer></script>
-  <script src="/control/settings.js" defer></script>
+  <script src="/control/navigation.js?v=control-nav-2" defer></script>
+  <script src="/control/control.js?v=control-nav-2" defer></script>
+  <script src="/control/settings.js?v=control-nav-2" defer></script>
 <link rel="stylesheet" href="/control/enterprise.css"></head>
 <body>
   <a class="skip" href="#main">跳到主内容</a>
   <aside class="sidebar">
     <a class="brand" href="/control/"><span class="brand-icon">T</span><span><b data-brand-name>Tao Agent</b><small>管控平台</small></span></a>
-    <p class="nav-label">运行管理</p>
     <nav aria-label="管控导航">
-      <a href="#settings" class="nav-link">系统配置</a><a href="#knowledgeAdmin" class="nav-link">知识库索引</a><a href="#accounts" class="nav-link">用户管理</a><a href="#observability" class="nav-link">运行观测</a><a href="#evaluations" class="nav-link">评测中心</a>
-      <a href="#usage" class="nav-link" aria-current="page"><span aria-hidden="true">◫</span> 用量总览</a>
-      <a href="#audit" class="nav-link"><span aria-hidden="true">≡</span> 审计日志</a>
+      <p class="nav-label">运行与质量</p>
+      <a href="#usage" class="nav-link">用量总览</a>
+      <a href="#observability" class="nav-link">运行与能力</a>
+      <a href="#audit" class="nav-link">审计日志</a>
+      <a href="#evaluations" class="nav-link">评测中心</a>
+      <p class="nav-label">组织与资源</p>
+      <a href="#accounts" class="nav-link">用户账号</a>
+      <a href="#enterpriseSettings" class="nav-link">组织与连接器</a>
+      <a href="#knowledgeAdmin" class="nav-link">知识索引维护</a>
+      <p class="nav-label">平台设置</p>
+      <a href="#settings" class="nav-link" data-platform-only hidden>模型与系统配置</a>
     </nav>
     <div class="sidebar-bottom"><span class="scope-label">管理员空间</span><p>查看当前租户用量与工具审计记录。</p><a href="/chat.html">← 返回工作区</a></div>
   </aside>
   <div class="shell">
-    <header class="topbar"><span>组织运行 / <strong>管控概览</strong></span><div class="account"><span id="identity">正在验证身份…</span><button id="signOut" type="button">退出登录</button></div></header>
+    <header class="topbar"><span>组织运行 / <strong id="currentSection">用量总览</strong></span><div class="account"><span id="identity">正在验证身份…</span><button id="signOut" type="button">退出登录</button></div></header>
     <main id="main">
-      <div class="page-heading"><div><p class="eyebrow">运行管理</p><h1>让每一次执行，清晰可见。</h1><p class="muted">从实际用量到操作审计，掌握当前租户的运行情况。</p></div><span class="admin-badge">管理员专属</span></div>
+      <div class="page-heading"><div><p class="eyebrow">运行管理</p><h1 id="pageTitle">用量总览</h1><p class="muted" id="pageDescription">查看当前组织的用量、费用与配额。</p></div><span class="admin-badge">管理员专属</span></div>
+      <p id="controlNotice" class="notice" role="status" aria-live="polite" hidden></p>
       <p id="accessError" class="notice error" role="alert" hidden></p>
-      <section id="settings" class="card"><h2>系统配置</h2><p>保存草稿后可测试连接，再应用到新任务。有运行中任务时请等待完成。空白密钥保持原值，清除需勾选。</p><p id="configStatus" role="status">正在加载配置…</p><div id="configuration"></div><div class="config-actions"><button id="saveConfig">保存草稿</button><button id="applyConfig" class="primary">应用配置</button><button data-test-connection="model">测试模型（消耗少量额度）</button><button data-test-connection="lite">测试轻量模型</button><button data-test-connection="evaluation">测试评测模型</button><button data-test-connection="embedding">测试嵌入</button><button data-test-connection="search">测试搜索</button><button data-test-connection="mcp">测试 MCP 工具目录</button><button data-test-connection="sandbox">测试沙箱（创建后自动释放）</button><button data-test-connection="model-a">测试模型 A</button><button data-test-connection="model-b">测试模型 B</button><button data-test-connection="model-c">测试模型 C</button><button data-test-connection="vision">测试视觉模型连接</button><button id="suspendModel">暂停模型调用</button><button id="exportConfig">导出脱敏配置</button><button id="historyConfig">配置历史</button></div><div id="configHistory"></div></section>
-<section id="knowledgeAdmin" class="card"><h2>知识库索引</h2><p>更换嵌入模型、维度或切片配置后，请对已有文档重建索引；重建失败会保留原索引。</p><button id="refreshKnowledge">刷新索引状态</button><div id="knowledgeAdminData"></div></section>
-<section id="accounts" class="card"><h2>用户账号</h2><form id="newAccount"><label>登录名<input name="username" required></label><label>显示名<input name="name" required></label><label>初始密码<input name="password" type="password" minlength="12" required></label><label>工作区<input name="workspaceId" value="default" required></label><label>角色<select name="role"><option value="MEMBER">成员</option><option value="WORKSPACE_ADMIN">工作区管理员</option><option value="TENANT_ADMIN">租户管理员</option></select></label><button type="submit">创建账号</button></form><div id="accountsList"></div></section>
-<section id="observability" class="card"><h2>运行观测</h2><button id="refreshObserve">刷新观测</button><p>展示任务状态、模型请求耗时、首字延迟和用量，不采集提示词正文。未接通能力在状态中明确显示。</p><div id="observabilityData"></div></section>
-<section id="evaluations" class="card"><h2>评测中心</h2><p>在独立评测工作区执行，支持关键词、JSON字段、工具成功执行与任务状态评分，可比较同一评测集的两次运行。评测会消耗当前模型额度，按配置的评测并发运行；Token 与费用在每次模型请求前保守预留，失败请求保留预算。费用使用最高单价估算。</p><form id="newDataset"><label>评测集名称<input name="name" required></label><div id="datasetCases"></div><button type="button" id="addEvalCase">添加用例</button><button type="submit">保存评测集</button></form><button id="refreshEvaluations">刷新评测</button><div id="evaluationList"></div></section>
+      <section id="settings" class="card" data-control-page hidden><h2>系统配置</h2><p>保存草稿后可测试连接，再应用到新任务。有运行中任务时请等待完成。空白密钥保持原值，清除需勾选。</p><p id="configStatus" role="status">正在加载配置…</p><input id="configSearch" type="search" placeholder="搜索配置项，例如：模型、搜索、并发" aria-label="搜索配置项"><nav id="configTabs" class="config-tabs" aria-label="配置分类"></nav><div id="configuration"></div><div class="config-actions"><button id="saveConfig">保存草稿</button><button id="applyConfig" class="primary">应用配置</button><button id="suspendModel">暂停模型调用</button><button id="exportConfig">导出脱敏配置</button><button id="historyConfig">配置历史</button></div><details class="connection-tests"><summary>连接诊断 <span>按需测试，模型测试会消耗少量额度</span></summary><div class="connection-grid"><button data-test-connection="model">测试模型（消耗少量额度）</button><button data-test-connection="lite">测试轻量模型</button><button data-test-connection="evaluation">测试评测模型</button><button data-test-connection="embedding">测试嵌入</button><button data-test-connection="search">测试搜索</button><button data-test-connection="mcp">测试 MCP 工具目录</button><button data-test-connection="sandbox">测试沙箱（创建后自动释放）</button><button data-test-connection="model-a">测试模型 A</button><button data-test-connection="model-b">测试模型 B</button><button data-test-connection="model-c">测试模型 C</button><button data-test-connection="vision">测试视觉模型连接</button></div></details><div id="configHistory"></div></section>
+<section id="knowledgeAdmin" class="card" data-control-page hidden><h2>知识库索引</h2><p>更换嵌入模型、维度或切片配置后，请对已有文档重建索引；重建失败会保留原索引。</p><button id="refreshKnowledge">刷新索引状态</button><div id="knowledgeAdminData"></div></section>
+<section id="accounts" class="card" data-control-page hidden><h2>用户账号</h2><details class="create-panel"><summary>创建用户账号</summary><form id="newAccount" autocomplete="off"><label>登录名<input name="username" required></label><label>显示名<input name="name" required></label><label>初始密码<input name="password" type="password" minlength="12" required></label><label>工作区<input name="workspaceId" value="default" required></label><label>角色<select name="role"><option value="MEMBER">成员</option><option value="WORKSPACE_ADMIN">工作区管理员</option><option value="TENANT_ADMIN">租户管理员</option></select></label><button type="submit">创建账号</button></form></details><div id="accountsList"></div></section>
+<section id="observability" class="card" data-control-page hidden><h2>运行观测</h2><button id="refreshObserve">刷新观测</button><p>展示任务状态、模型请求耗时、首字延迟和用量，不采集提示词正文。未接通能力在状态中明确显示。</p><div id="observabilityData"></div></section>
+<section id="evaluations" class="card" data-control-page hidden><h2>评测中心</h2><p>在独立评测工作区执行，支持关键词、JSON字段、工具成功执行与任务状态评分，可比较同一评测集的两次运行。评测会消耗当前模型额度，按配置的评测并发运行；Token 与费用在每次模型请求前保守预留，失败请求保留预算。费用使用最高单价估算。</p><details class="create-panel"><summary>创建评测集</summary><form id="newDataset"><label>评测集名称<input name="name" required></label><div id="datasetCases"></div><button type="button" id="addEvalCase">添加用例</button><button type="submit">保存评测集</button></form></details><button id="refreshEvaluations">刷新评测</button><div id="evaluationList"></div></section>
 <div id="panel" hidden>
         <form id="filters" class="filters">
           <label>时间范围<select id="range"><option value="month">本月</option><option value="week">最近 7 天</option><option value="custom">自定义</option></select></label>
@@ -41,7 +50,7 @@
           <span id="updated" class="muted" role="status" aria-live="polite">尚未刷新</span>
         </form>
         <p id="filterError" class="notice error" role="alert" hidden></p>
-        <section id="usage" aria-labelledby="usageTitle">
+        <section id="usage" data-control-page hidden aria-labelledby="usageTitle">
           <div class="section-heading"><h2 id="usageTitle">用量总览</h2><span id="period" class="muted"></span></div>
           <p id="usageError" class="notice error" role="alert" hidden></p>
           <div id="usageData" hidden>
@@ -51,10 +60,10 @@
             <div class="breakdowns"><article class="card"><div class="card-heading"><h3>按用户查看</h3><span class="muted">用量分布</span></div><div class="table-scroll"><table><thead><tr><th>用户</th><th>Token</th><th>任务</th><th>费用 / 元</th><th>占比</th></tr></thead><tbody id="byUser"></tbody></table></div></article><article class="card"><div class="card-heading"><h3>按模型查看</h3><span class="muted">资源消耗</span></div><div class="table-scroll"><table><thead><tr><th>模型</th><th>Token</th><th>任务</th><th>费用 / 元</th></tr></thead><tbody id="byModel"></tbody></table></div></article></div>
           </div>
         </section>
-        <section id="audit" aria-labelledby="auditTitle"><div class="section-heading"><div><h2 id="auditTitle">审计日志</h2><p class="muted">工具调用决策与执行记录</p></div><span id="auditCount" class="muted"></span></div><p id="auditError" class="notice error" role="alert" hidden></p><div id="auditData" class="card table-scroll" hidden><table><thead><tr><th>时间</th><th>用户</th><th>工具</th><th>决策</th><th>原因</th></tr></thead><tbody id="auditRows"></tbody></table></div></section>
+        <section id="audit" data-control-page hidden aria-labelledby="auditTitle"><div class="section-heading"><div><h2 id="auditTitle">审计日志</h2><p class="muted">工具调用决策与执行记录</p></div><span id="auditCount" class="muted"></span></div><p id="auditError" class="notice error" role="alert" hidden></p><div id="auditData" class="card table-scroll" hidden><table><thead><tr><th>时间</th><th>用户</th><th>工具</th><th>决策</th><th>原因</th></tr></thead><tbody id="auditRows"></tbody></table></div></section>
       </div>
       <footer>管控数据仅对管理员开放 · 数据范围由当前登录身份决定</footer>
-    <section id="enterpriseSettings" class="card"></section></main>
+    <section id="enterpriseSettings" class="card" data-control-page hidden></section></main>
   </div>
-<script src="/assets/branding.js" defer></script><script src="/control/enterprise.js" defer></script></body>
+<script src="/assets/branding.js" defer></script><script src="/control/enterprise.js?v=control-nav-2" defer></script></body>
 </html>

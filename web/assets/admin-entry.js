@@ -5,6 +5,8 @@
  function close(){menu.hidden=true;card.setAttribute('aria-expanded','false');}
  function action(label,fn){var b=document.createElement('button');b.type='button';b.textContent=label;b.addEventListener('click',async function(){close();try{await fn();}catch(e){await App.Dialog.alert({description:e.message});}});menu.appendChild(b);}
  async function toggle(){if(!menu.hidden){close();return;}var me=await App.api('GET','/api/me');if(!me.ok)return;menu.replaceChildren();
+  action('回复偏好',async function(){TaoWorkspace.navigate('preferences');});
+  action('在新窗口打开工作区',async function(){window.open('/chat.html','_blank','noopener,noreferrer');});
   action('个人设置',async function(){location.href='/profile.html';});
   action(document.documentElement.getAttribute('data-theme')==='dark'?'当前暗色 · 切换为浅色':'当前浅色 · 切换为暗色',async function(){var dark=document.documentElement.getAttribute('data-theme')!=='dark';localStorage.setItem('tao.theme',dark?'dark':'light');location.reload();});
   if(['TENANT_ADMIN','PLATFORM_ADMIN'].includes(me.data.role))action('管理后台',async function(){var r=await App.api('POST','/api/control/session',{});if(!r.ok)throw Error(r.data.error||'无法进入管理后台');location.href='/control/';});
