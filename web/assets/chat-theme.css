@@ -47,3 +47,23 @@ html[data-theme="dark"] .inputcard,html[data-theme="dark"] .msg.user .bubble,htm
 html[data-theme="dark"] .nav-item.active,html[data-theme="dark"] .nav-item:hover {background:var(--primary-soft);color:var(--text);}
 html[data-theme="dark"] textarea,html[data-theme="dark"] input,html[data-theme="dark"] select {color:var(--text);}
 html[data-theme="dark"] .steps,html[data-theme="dark"] .ex,html[data-theme="dark"] .rail-search .sbox {border-color:var(--line)!important;color:var(--text-2)!important;}
+
+/* 最近会话：操作与标题同排，聚焦可见，触屏无需悬停。 */
+.recent-conversation{position:relative;display:flex;align-items:center;min-width:0;border-radius:8px}
+.recent-conversation .recent-title{flex:1;min-width:0;width:auto;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;padding:9px 8px}
+.recent-actions{display:flex;align-items:center;gap:2px;max-width:0;opacity:0;overflow:hidden;pointer-events:none;flex-shrink:0}
+.recent-conversation:hover,.recent-conversation:focus-within{background:var(--bg-soft)}
+.recent-conversation:hover .recent-actions,.recent-conversation:focus-within .recent-actions,.recent-conversation[data-busy=true] .recent-actions{max-width:112px;opacity:1;overflow:visible;pointer-events:auto;padding-right:4px}
+.recent-action{border:0;border-radius:5px;background:transparent;color:var(--text-2);font:inherit;font-size:11px;white-space:nowrap;padding:6px 4px;cursor:pointer}
+.recent-action:hover{background:var(--primary-soft);color:var(--primary)}.recent-action:focus-visible{outline:2px solid var(--primary);outline-offset:1px}.recent-action:disabled{opacity:.45;cursor:wait}
+@media(hover:none),(pointer:coarse){.recent-conversation .recent-actions{max-width:124px;opacity:1;overflow:visible;pointer-events:auto;padding-right:4px}.recent-action{min-height:40px;min-width:38px;padding:6px 3px}}
+
+.nav-icon{width:18px;height:18px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.recent-conversation[data-editing=true]{flex-wrap:wrap;padding:4px}.recent-conversation [hidden]{display:none!important}.recent-title-input{width:100%;min-width:0;padding:7px;border:1px solid var(--primary);border-radius:5px;font:inherit;font-size:12px;background:var(--bg-white);color:var(--text)}.recent-edit-error{font-size:11px;color:var(--err);overflow-wrap:anywhere}
+.task-mode-hint{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;font-size:12px;color:var(--text-2)}.task-mode-hint[hidden]{display:none}.task-mode-hint button{border:0;background:transparent;color:var(--primary);font:inherit;cursor:pointer}
+:root[data-theme=dark] .rendered-markdown code{background:#303a33;color:#e8eee9}
+:root[data-theme=dark] .code-block{background:#202a24;border-color:#46534a;color:#e8eee9}
+:root[data-theme=dark] .code-block pre,:root[data-theme=dark] .code-block pre code{background:transparent;color:#e8eee9}
+:root[data-theme=dark] .code-block button,:root[data-theme=dark] .message-actions button{background:#303a33;color:#e8eee9;border-color:#546259}
+:root[data-theme=dark] .rendered-markdown blockquote{color:#bdcbbf;border-color:#6b8571}
+:root[data-theme=dark] .rendered-markdown a{color:#9dd9b1}

@@ -1,4 +1,5 @@
 import {CustomExtensions,createCustomExtensionHandler} from "./custom-extensions.ts";
+import {chatJobTool,chatJobId} from "./chat-job.ts";
 import {webReaderTool} from "./web-reader.ts";
 import {modelProfiles,extraModelEndpoints,EXTRA_MODELS} from './model-profiles.ts';
 import {mediaTools,mediaCapabilities,imageAttachments,textModerator} from './multimodal.ts';
@@ -926,7 +927,9 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
         if(adminSettings.effective('global').SUBAGENTS_ENABLED==='false')tools=tools.filter(t=>t.name!=='delegate_tasks');
         if(tenant.workspaceId.startsWith('evaluation_'))tools=tools.filter(t=>['list_sheets','read_table','read_document','search_knowledge'].includes(t.name));
 
-		const pathGate = createPermissionGate({
+		const chatMode=input.taskMode!==undefined&&!tenant.workspaceId.startsWith('evaluation_');
+        if(chatMode)basePolicies.push({tool:'register_chat_task'});
+        const pathGate = createPermissionGate({
 			policies: basePolicies,
 			// 权限门的 workspace 收窄到本任务专属产物目录：工具输出天然落其内，
 			// 读其他任务 artifacts（artifacts/<otherTaskId>/…）即越界被拒。
@@ -1024,7 +1027,15 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
 			title = summarizeTitle(rawQuery);
 		}
 
-		executionRegistry.snapshots.put({ taskId, tenant, input: { ...input, fields, ...(job ? {} : { conversationId }) }, configurationHash, sources, configuration: { card, addons, ragCitations, embeddingSpace:embeddings?.space, activeTools: activateableTools(activeToolNames,tools.map(t=>t.name)), tier: input.tier ?? "flagship", modelName: runtimeModels.modelForId(selectedModelId).id, modelId:selectedModelId },
+		const existingJob=jobStore.listByTenant(tenant.tenantId,tenant.workspaceId).find(j=>j.tenant.userId===tenant.userId&&j.conversationIds.includes(conversationId));
+        if(!job&&existingJob){if(existingJob.status!=='active')throw new WorkspaceError(409,'该任务已归档，请新建对话');job=existingJob;}
+        const registration=chatMode&&!input.jobId&&(!existingJob||existingJob.title==='新任务')?chatJobTool({tenant,conversationId,taskId,store:jobStore,presentation,tasks:()=>visibleTasks(tenant),onRegistered:registered=>{job=registered;}}):undefined;
+        if(registration) {
+            tools=filterTools([...tools,registration],adminSettings.effective('global'));
+            personaPrompt+='\n任务整理：'+(input.taskMode==='task'?'用户主动选择任务模式，必须先调用 register_chat_task，用用户语言概括一个简短任务名称及目标，再开始执行。':'判断用户是否要求完成具体工作；如果是，先调用 register_chat_task 概括任务名称与目标；普通问答、寒暄和仅咨询能力不要建档。')+' 不要在正文输出协议或JSON；已登记且名称明确的任务不重复登记；名称仍为新任务时调用工具补全名称。';
+        }
+        const activeTools=activateableTools([...activeToolNames,...(registration?['register_chat_task']:[])],tools.map(t=>t.name));
+        executionRegistry.snapshots.put({ taskId, tenant, input: { ...input, fields, ...(job ? {jobId:job.jobId} : { conversationId }) }, configurationHash, sources, configuration: { card, addons, ragCitations, embeddingSpace:embeddings?.space, activeTools, tier: input.tier ?? "flagship", modelName: runtimeModels.modelForId(selectedModelId).id, modelId:selectedModelId },
 			...(input.retryOf ? { retryOf: input.retryOf } : {}), createdAt: Date.now() });
 		await orchestrator.submit({
 			tenant,
@@ -1046,11 +1057,15 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
 			history,
             inputReferences: sources.map(({fileId,name,sha256})=>({fileId,name,sha256})),
 			...(!(addons.skills.length||selectedSkillPackage)?{}:{skills:[...addons.skills,...(selectedSkillPackage?[{name:selectedSkillPackage.name,description:selectedSkillPackage.description,content:selectedSkillPackage.instructions}]:[])]}),
-			activeTools: activateableTools(
-				activeToolNames,
-				tools.map((t) => t.name),
-			),
+			activeTools,
 		});
+
+        if(input.taskMode==='task'&&registration&&!job){
+            const now=Date.now(),id=chatJobId(tenant,conversationId);
+            const stored:StoredJob={jobId:id,tenant,title:'新任务',goal:rawQuery,status:'active',createdAt:now,updatedAt:now,conversationIds:[conversationId],memory:[]};
+            if(!jobStore.create(stored))throw new Error('任务建档失败');
+            job=stored;const task=orchestrator.get(taskId);if(task)presentation.attachJob(task,id);
+        }
 
 		/**
 		 * **提交后立即返回，执行在后台跑** —— 这是「执行任务时能继续对话」
@@ -1086,7 +1101,7 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
 				await closeFinishedTask(taskId);
 			});
 
-		return { taskId, conversationId, ...(sensitiveMode==="warn"&&sensitiveFindings.length?{warnings:["输入可能包含敏感凭据，请避免在对话中提交密钥或密码；可在后台配置相关服务。"]}:{}) };
+		return { taskId, conversationId, ...(job?{jobId:job.jobId}:{}), ...(sensitiveMode==="warn"&&sensitiveFindings.length?{warnings:["输入可能包含敏感凭据，请避免在对话中提交密钥或密码；可在后台配置相关服务。"]}:{}) };
 };
 
 const guardedSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, input) => {

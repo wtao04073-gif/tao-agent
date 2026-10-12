@@ -8400,6 +8400,143 @@
           }
         }
       }
+    },
+    "/api/extensions": {
+      "get": {
+        "summary": "列出部署扩展、可用命令及Web组件",
+        "responses": {
+          "200": {
+            "description": "成功"
+          },
+          "400": {
+            "description": "参数无效"
+          },
+          "401": {
+            "description": "需要登录"
+          },
+          "403": {
+            "description": "无权操作"
+          },
+          "409": {
+            "description": "确认失效或扩展不可用"
+          }
+        }
+      }
+    },
+    "/api/extensions/commands": {
+      "post": {
+        "summary": "发起或确认一次扩展命令；确认绑定当前用户和参数，禁止自动重放",
+        "responses": {
+          "200": {
+            "description": "成功"
+          },
+          "400": {
+            "description": "参数无效"
+          },
+          "401": {
+            "description": "需要登录"
+          },
+          "403": {
+            "description": "无权操作"
+          },
+          "409": {
+            "description": "确认失效或扩展不可用"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "command",
+                  "args"
+                ],
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "example": "office:calculate"
+                  },
+                  "args": {
+                    "type": "object"
+                  },
+                  "confirmationId": {
+                    "type": "string",
+                    "description": "首次响应取得，用户明确确认后随完全相同的参数提交"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/control/extensions": {
+      "get": {
+        "summary": "平台管理员查看扩展",
+        "responses": {
+          "200": {
+            "description": "成功"
+          },
+          "400": {
+            "description": "参数无效"
+          },
+          "401": {
+            "description": "需要登录"
+          },
+          "403": {
+            "description": "无权操作"
+          },
+          "409": {
+            "description": "确认失效或扩展不可用"
+          }
+        }
+      },
+      "patch": {
+        "summary": "平台管理员启停已部署扩展",
+        "responses": {
+          "200": {
+            "description": "成功"
+          },
+          "400": {
+            "description": "参数无效"
+          },
+          "401": {
+            "description": "需要登录"
+          },
+          "403": {
+            "description": "无权操作"
+          },
+          "409": {
+            "description": "确认失效或扩展不可用"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "enabled"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

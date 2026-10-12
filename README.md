@@ -1,6 +1,6 @@
 # tao-agent
 
-面向**高校服务机构**与**传统制造业**的通用 AI 办公 Agent 平台。以 [Pi](https://pi.dev/) 为 Agent 内核，支持 Docker 私有化部署与 SaaS 多租户两种形态。
+面向企业的通用 AI 办公 Agent 平台。以 [Pi](https://pi.dev/) 为 Agent 内核，支持 Docker 私有化部署与 SaaS 多租户两种形态。
 
 ## 这是什么
 

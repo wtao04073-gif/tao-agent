@@ -351,8 +351,8 @@
 		}
 	}
 </style>
-<link rel="stylesheet" href="/assets/workspace.css?v=rag-stream-1">
-<link rel="stylesheet" href="/assets/chat-theme.css?v=rag-stream-1">
+<link rel="stylesheet" href="/assets/workspace.css?v=workspace-nav-2">
+<link rel="stylesheet" href="/assets/chat-theme.css?v=inline-task-2">
 <link rel="stylesheet" href="/assets/extensions.css">
 </head>
 <body>
@@ -365,14 +365,14 @@
 			<span class="bot">🤖</span><b>Tao Agent</b>
 		</div>
 		<div class="rail-search">
-			<div class="sbox">🔍<input id="historySearch" placeholder="搜索对话与任务…" aria-label="搜索对话与任务"></div>
+			<div class="sbox"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="historySearch" placeholder="搜索对话与任务…" aria-label="搜索对话与任务"></div>
 		</div>
 		<nav class="rail-nav">
 			<button class="nav-item front-new-chat" id="frontNewChat">＋ 新对话</button>
-			<button class="nav-item active" id="navChat"><span>💬</span> 对话</button>
-			<button class="nav-item" id="navTasks"><span>🗂</span> 任务中心</button>
-			<button class="nav-item" id="navWorkbench"><span>▦</span> 场景</button>
-			<button class="nav-item" id="navKnowledge"><span>📚</span> 知识库</button>
+			<button class="nav-item active" id="navChat"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2v-9.5A8.5 8.5 0 0 1 10.5 4H13a8 8 0 0 1 8 7.5Z"/></svg> 对话</button>
+			<button class="nav-item" id="navTasks"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3h8v4H8zM8 12h8M8 16h5"/></svg> 任务中心</button>
+			<button class="nav-item" id="navWorkbench"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> 场景与技能</button>
+			<button class="nav-item" id="navKnowledge"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h6a4 4 0 0 1 3 1 4 4 0 0 1 3-1h6v15h-6a4 4 0 0 0-3 1 4 4 0 0 0-3-1H3zM12 6v15"/></svg> 知识与文件</button>
 
 
 			<div class="rail-group">
@@ -380,16 +380,6 @@
 				<button class="new-job-btn" id="newJobBtn" type="button">＋ 新建任务</button>
 				<div id="jobList"></div>
 			</div>
-			<button class="nav-item" id="navFiles">文件管理</button>
-<button class="nav-item" id="navConversations">会话分组</button>
-<button class="nav-item" id="navPreferences">个人偏好</button>
-<button class="nav-item" id="navSharing">分享与转交</button>
-<button class="nav-item" id="navCollaboration">产物协作</button>
-<button class="nav-item" id="navTeams">团队空间</button>
-<button class="nav-item" id="navPackages">技能包</button>
-<button class="nav-item" id="navAutomation">自动化</button>
-<button class="nav-item" id="navCapabilities">能力状态</button>
-<button class="nav-item" id="navNewWindow">在新窗口打开工作区</button>
 <div class="recent">
 				<button class="recent-head" id="recentHead" type="button"><span>最近对话</span><span class="recent-caret">▾</span></button>
 				<div id="recentList"></div>
@@ -410,6 +400,7 @@
 		<h1>今天，我们一起完成什么？</h1>
 		<p class="lead">从一个问题、一份资料或一个目标开始。</p>
 		<div class="lcard">
+            <div id="taskModeHint" class="task-mode-hint" hidden><span>任务模式 · 发送需求后自动创建并命名</span><button id="exitTaskMode" type="button">返回普通对话</button></div>
 			<div class="inputcard">
 				<div class="ta">
 					<textarea id="lInput" aria-label="输入任务" rows="2" placeholder="请输入问题或任务，例如：核对这两份对账单并标出差异"></textarea>
@@ -543,9 +534,9 @@
 	<div class="toast" id="toast"></div>
 <script src="/assets/core.js?v=app-dialog-1"></script>
 <script src="/assets/forms.js"></script>
-<script src="/assets/workbench.js"></script>
-<script src="/assets/automation.js"></script>
-<script src="/assets/workspace.js?v=app-dialog-1"></script>
+<script src="/assets/workbench.js?v=workspace-nav-2"></script>
+<script src="/assets/automation.js?v=workspace-nav-2"></script>
+<script src="/assets/workspace.js?v=workspace-nav-2"></script>
 <script src="/assets/chat-interactions.js"></script>
 <script src="/assets/run-display.js"></script>
 <script src="/assets/extensions.js"></script>
@@ -712,16 +703,51 @@
     function loadRecent(more) {
       var request=++recentRequest,q=$('#historySearch').value.trim(),cursor=more&&recentCursor?recentCursor:'0';
       App.api('GET','/api/conversations?standalone=true&limit=20&cursor='+encodeURIComponent(cursor)+'&q='+encodeURIComponent(q)).then(function(r){
-        if(request!==recentRequest||!r.ok)return;var box=$('#recentList');if(!more)box.replaceChildren();
+        if(request!==recentRequest||!r.ok||document.querySelector('.recent-conversation[data-editing=true]'))return;var box=$('#recentList');if(!more)box.replaceChildren();
         var old=box.querySelector('.load-more');if(old)old.remove();
         (r.data.conversations||[]).forEach(function(t){
-          var b=document.createElement('button');b.className='recent-item';b.textContent=t.title||'对话';b.title=b.textContent;
-          b.addEventListener('click',function(){openExisting(t.taskId||t.taskIds[t.taskIds.length-1]);});box.append(b);
-          var manage=document.createElement('button');manage.className='recent-manage';manage.textContent='管理';manage.setAttribute('aria-label','管理对话 '+t.title);
-          manage.onclick=async function(){
-            var title=await App.Dialog.prompt({title:'重命名对话',label:'对话名称',value:t.title,description:'修改显示名称；删除操作可在任务中心进行。'});
-            if(title===null)return;var r=await App.api('PATCH','/api/conversations/'+encodeURIComponent(t.conversationId),{title:title});if(!r.ok)toast(r.data.error);else refreshHistory({query:title.trim(),title:title.trim(),conversationId:t.conversationId});
-          };box.append(manage);
+          var row=document.createElement('div');row.className='recent-conversation';
+          var title=t.title||'对话',id=t.conversationId,taskId=t.taskId||(t.taskIds||[]).slice(-1)[0];
+          var open=document.createElement('button');open.type='button';open.className='recent-item recent-title';open.textContent=title;open.title=title;
+          open.addEventListener('click',function(){if(taskId)openExisting(taskId);});
+          var actions=document.createElement('div');actions.className='recent-actions';actions.setAttribute('role','group');actions.setAttribute('aria-label','对话操作：'+title);
+          function action(label,description,run){
+            var button=document.createElement('button');button.type='button';button.className='recent-action';button.textContent=label;button.title=description;button.setAttribute('aria-label',description+'：'+title);
+            button.addEventListener('click',async function(event){
+              event.stopPropagation();if(row.dataset.busy==='true')return;
+              row.dataset.busy='true';actions.querySelectorAll('button').forEach(function(b){b.disabled=true;});
+              try{await run();}catch(error){toast(error.message||'操作失败，请重试');}
+              finally{delete row.dataset.busy;actions.querySelectorAll('button').forEach(function(b){b.disabled=false;});}
+            });actions.append(button);
+          }
+          action('修改','修改对话标题',function(){
+            return new Promise(function(resolve){
+              row.dataset.editing='true';open.hidden=true;actions.hidden=true;
+              var input=document.createElement('input'),error=document.createElement('span'),saving=false,closed=false;
+              input.className='recent-title-input';input.value=title;input.maxLength=120;input.setAttribute('aria-label','对话名称');
+              error.className='recent-edit-error';error.setAttribute('role','alert');row.append(input,error);input.focus();input.select();
+              function close(){if(closed)return;closed=true;input.remove();error.remove();open.hidden=false;actions.hidden=false;delete row.dataset.editing;open.focus();resolve();}
+              async function save(){if(saving||closed)return;var value=input.value.trim();if(!value){error.textContent='名称不能为空';input.focus();return;}if(value===title){close();return;}
+                saving=true;input.disabled=true;error.textContent='';
+                try{var result=await App.api('PATCH','/api/conversations/'+encodeURIComponent(id),{title:value});if(!result.ok)throw Error(result.data&&result.data.error||'保存失败');title=value;t.title=value;open.textContent=value;open.title=value;close();if(state.conversationId===id)$('#chatTitle').textContent=value;toast('对话标题已修改');}
+                catch(e){error.textContent=e.message||'保存失败，请重试';input.disabled=false;saving=false;input.focus();}
+              }
+              input.addEventListener('keydown',function(e){if(e.isComposing)return;if(e.key==='Enter'){e.preventDefault();save();}if(e.key==='Escape'&&!saving){e.preventDefault();close();}});
+              input.addEventListener('blur',function(){if(!saving)save();});
+            });
+          });
+          action('删除','删除对话',async function(){
+            if(!await App.Dialog.confirm({title:'删除对话？',description:'“'+title+'”将从会话列表移除，审计记录和已有产物保留。',confirmText:'删除',danger:true}))return;
+            var result=await App.api('DELETE','/api/conversations/'+encodeURIComponent(id));
+            if(!result.ok)throw Error(result.data&&result.data.error||'删除失败，请重试');
+            if(state.conversationId===id){resetAll();history.replaceState(null,'','/chat.html#chat');}
+            refreshHistory();toast('对话已删除');
+          });
+          action('复制','复制对话标题',async function(){
+            if(!navigator.clipboard||!navigator.clipboard.writeText)throw Error('当前浏览器不支持复制，请手动选择标题');
+            await navigator.clipboard.writeText(title);toast('对话标题已复制');
+          });
+          row.append(open,actions);box.append(row);
         });
         recentCursor=r.data.nextCursor;if(recentCursor){var moreButton=document.createElement('button');moreButton.className='recent-item load-more';moreButton.textContent='加载更多';moreButton.onclick=function(){moreButton.disabled=true;loadRecent(true);};box.append(moreButton);}
       });
@@ -755,21 +781,12 @@
       loadRecent(false);loadJobs(false);
     }
 	// 新建长程任务：询问目标，建 Job 后进入任务视图。
-	async function newJob() {
-        var jobId = await App.Dialog.prompt({
-            title: '新建长期任务', label: '任务目标', multiline: true,
-            description: '为长期工作建立一个独立空间，持续记录对话、进展和交付物。',
-            placeholder: '例如：开发一个客户管理系统，先梳理需求，再逐步完成设计与开发',
-            requiredMessage: '请填写这个长期任务的目标', confirmText: '创建任务', busyText: '正在创建…',
-            onSubmit: async function (goal) {
-                var r = await App.api('POST', '/api/jobs', { goal: goal });
-                if (!r.ok) throw new Error(r.data && r.data.error || '创建失败，请稍后重试');
-                if (!r.data || !r.data.jobId) throw new Error('未收到任务编号，请先到任务中心确认创建结果');
-                return r.data.jobId;
-            }
-        });
-        if (jobId !== null) { loadJobs(); openJob(jobId); }
+    var pendingTaskMode=false;
+    function setTaskMode(value){pendingTaskMode=value;$('#taskModeHint').hidden=!value;$('#lInput').placeholder=value?'描述你的任务目标，发送后自动整理并创建任务':'请输入问题或任务';}
+    function newJob(){
+        var draft=$('#sInput').value||$('#lInput').value;resetAll();setTaskMode(true);if(draft)$('#lInput').value=draft;$('#lInput').focus();
     }
+    $('#exitTaskMode').addEventListener('click',function(){setTaskMode(false);$('#lInput').focus();});
 
 	// 打开长程任务：显示目标与历次会话，可继续发起新会话。
 	function openJob(jobId) {
@@ -1069,6 +1086,7 @@
 	// continueConv=true 表示在当前已结束的会话里追问：复用 conversationId、追加气泡，
 	// 不重建整页视图；false 表示从空态开启一个全新对话。
 	function submit(text, continueConv) {
+        var requestedTaskMode=pendingTaskMode?"task":"auto";
 		if (uploading()) { toast("附件仍在上传，请稍候再发送"); return; }
 		var files = state.pending.splice(0);
 		["#attachRow", "#lAttachRow"].forEach(function (sel) {
@@ -1094,7 +1112,7 @@
 		state.running = true; state.booting = true;
 		updateTopStatus(); updateSendEnabled();
 
-		var payload = { query: text, tier: tier };
+		var payload = { query: text, tier: tier, taskMode:requestedTaskMode };
         if(state.modelId)payload.modelId=state.modelId;
         if(state.skillPackageId)payload.skillPackageId=state.skillPackageId;
 		if (files.length) payload.files = files.map(function (f) { return f.path; });
@@ -1111,7 +1129,7 @@
 				if (gen !== generation) return;
 				if (!r.ok) { fail((r.data && r.data.error) || "任务提交失败");submissionRetry(); return; }
 				if(Array.isArray(r.data.warnings)&&r.data.warnings.length)toast(r.data.warnings.join('；'));
-            state.taskId = r.data.taskId;rememberView(state.taskId,state.mode==="job"?state.jobId:null);
+            state.taskId = r.data.taskId;if(r.data.jobId){state.jobId=r.data.jobId;state.mode='job';}setTaskMode(false);rememberView(state.taskId,state.mode==="job"?state.jobId:null);
 				if (r.data.conversationId) {state.conversationId = r.data.conversationId;currentDraft=state.mode==="job"?"job:"+state.jobId:state.conversationId;drafts[currentDraft]="";$("#sInput").value=$("#lInput").value="";}
 				state.booting = false; updateSendEnabled();
 				subscribe(gen, r.data.taskId); loadRecent(); loadJobs();
@@ -1211,6 +1229,7 @@
             if (["SUCCEEDED","FAILED","CANCELLED","EXCEEDED","INTERRUPTED"].indexOf(ev.to) >= 0) finishRun(ev.to, ev.reason);
         } else if (ev.type === "step") {
             renderStepEvent(ev);
+            if(ev.toolName==='register_chat_task'&&ev.phase==='finished')syncRegisteredJob();
             state.activityKind = 'waiting'; state.activityAt = Date.now();
             updateActivity(); scrollDown();
 		} else if (ev.type === "tool_decision") {
@@ -1278,7 +1297,12 @@
         if (!state.steps.order.length) state.steps.root.hidden = true;
         if (to === 'SUCCEEDED') state.steps.root.classList.add('collapsed');
     }
+    function syncRegisteredJob(){
+        var gen=generation,id=state.taskId;if(!id)return;
+        App.api('GET','/api/tasks/'+encodeURIComponent(id)).then(function(r){if(gen!==generation||state.taskId!==id||!r.ok||!r.data.jobId)return;state.jobId=r.data.jobId;state.mode='job';currentDraft='job:'+state.jobId;rememberView(id,state.jobId);loadRecent();loadJobs();});
+    }
     function finishRun(to, reason) {
+        syncRegisteredJob();
         runDisplay.finish();
         state.running = false; updateTopStatus(); updateSendEnabled(); closeSub();
         settleSteps(to);
@@ -1749,6 +1773,7 @@
 
 	function resetAll() {
         extensionUI.reset();
+        setTaskMode(false);
         rememberView(null,null);
         state.previewOnly=false;
         saveDraft();selectDraft("new");
@@ -1806,7 +1831,7 @@
         showDeliver();ChatUI.preview(null,file.name);
       }});
     $('#navChat').addEventListener('click',function(){TaoWorkspace.showChat();});
-    $('#navNewWindow').addEventListener('click',function(){var a=document.createElement('a');a.href='/chat.html';a.target='_blank';a.rel='noopener noreferrer';a.click();});
+
     $('#frontNewChat').addEventListener('click',resetAll);
     $('#railScrim').addEventListener('click',function(){setRail(true);});
     ['#lInput','#sInput'].forEach(function(sel){$(sel).addEventListener('input',function(){var value=this.value;$('#lInput').value=$('#sInput').value=value;drafts[currentDraft]=value;});});
@@ -1856,6 +1881,6 @@
 	});
 })();
 </script>
-<script src="/assets/admin-entry.js"></script>
+<script src="/assets/admin-entry.js?v=workspace-nav-2"></script>
 <script src="/assets/branding.js" defer></script></body>
 </html>

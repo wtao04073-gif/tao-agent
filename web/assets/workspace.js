@@ -12,6 +12,18 @@
     knowledgeNotify(refreshDocuments);
   }
   var titles = { tasks: "任务中心", scenarios: "场景", knowledge: "知识库", files:"文件管理", conversations:"会话分组", preferences:"个人偏好", sharing:"分享与转交", share:"分享摘要", collaboration:"产物协作", teams:"团队空间", packages:"技能包", automation:"自动化",capabilities:"能力状态" };
+  var groups = [
+    {nav:'navTasks', routes:[['tasks','任务列表'],['conversations','会话分组'],['automation','定时自动化'],['teams','团队协作']]},
+    {nav:'navWorkbench', routes:[['scenarios','场景模板'],['packages','我的技能']]},
+    {nav:'navKnowledge', routes:[['knowledge','知识库'],['files','工作区文件'],['collaboration','产物版本与评论'],['sharing','分享与转交']]}
+  ];
+  function routeGroup(value) { return groups.find(function(g){return g.routes.some(function(r){return r[0]===value;});}); }
+  function subnav() {
+    var group=routeGroup(route);if(!group)return;
+    var nav=node('nav','ws-subnav');nav.setAttribute('aria-label','功能分组');
+    group.routes.forEach(function(item){var link=node('a','ws-subnav-link',item[1]);link.href='#'+item[0];if(item[0]===route)link.setAttribute('aria-current','page');nav.append(link);});
+    content.append(nav);
+  }
   var statusNames = { QUEUED: "排队中", RUNNING: "执行中", AWAIT_CONFIRM: "等待确认", SUCCEEDED: "已完成", FAILED: "失败", CANCELLED: "已取消", EXCEEDED: "已达执行限额", INTERRUPTED: "已中断", active: "进行中", done: "已完成", archived: "已归档" };
   function node(tag, cls, text) {
     var n = document.createElement(tag);
@@ -67,24 +79,26 @@
     route = titles[next] ? next : "chat";
     revision++;
     document.querySelectorAll("[data-workspace-route]").forEach(function (n) {
-      var selected = n.dataset.workspaceRoute === route;
+      var group=routeGroup(route);var selected = group ? n.id===group.nav : n.dataset.workspaceRoute === route;
       n.classList.toggle("active", selected);
       if (selected) n.setAttribute("aria-current", "page"); else n.removeAttribute("aria-current");
     });
-    if (route === "chat") { restoreChat(); return; }
-    var chatNav=document.getElementById("navChat");if(chatNav)chatNav.classList.remove("active");
+    if (route === "chat") { var chat=document.getElementById('navChat');if(chat){chat.classList.add('active');chat.setAttribute('aria-current','page');}restoreChat(); return; }
+    var chatNav=document.getElementById("navChat");if(chatNav){chatNav.classList.remove("active");chatNav.removeAttribute("aria-current");}
     page.hidden = false; document.body.classList.add("workspace-active");
     ["landing", "session"].forEach(function (id) { var el = document.getElementById(id); if (el) el.classList.add("hidden"); });
     content.replaceChildren(); page.scrollTop = 0;
+    subnav();
     var current = revision;
     if (route === "tasks") tasks(current);
     if (route === "scenarios") scenarios(current);
     if (route === "knowledge") knowledge(current);
-    if(route === 'automation' && global.TaoAutomation){var automationHost=node('section');content.append(automationHost);global.TaoAutomation.mount(automationHost,{api:function(path,options){options=options||{};return api(options.method||'GET',path,typeof options.body==='string'?JSON.parse(options.body):options.body);},openTask:function(id){openChat(function(){hooks.openTask(id);});}}).then(function(cleanup){if(typeof cleanup!=='function')return;if(valid(current)&&route==='automation')routeCleanup=cleanup;else cleanup();});}
-    if(['files','conversations','preferences','sharing','share','collaboration','teams','packages','capabilities'].includes(route)) {
-      heading(titles[route], '');
+    if(route === 'capabilities') { heading('能力状态已归入管控平台','模型、搜索与执行环境由管理员统一管理。普通使用请通过场景与技能选择能力。');content.append(button('查看场景与技能',function(){go('scenarios');}));return; }
+    if(route === 'automation' && global.TaoAutomation){heading('定时自动化','统一管理计划、运行历史与结果投递。');var automationHost=node('section');content.append(automationHost);global.TaoAutomation.mount(automationHost,{api:function(path,options){options=options||{};return api(options.method||'GET',path,typeof options.body==='string'?JSON.parse(options.body):options.body);},openTask:function(id){openChat(function(){hooks.openTask(id);});}}).then(function(cleanup){if(typeof cleanup!=='function')return;if(valid(current)&&route==='automation')routeCleanup=cleanup;else cleanup();});}
+    if(['files','conversations','preferences','sharing','share','collaboration','teams','packages'].includes(route)) {
+      heading(titles[route], ({files:'管理输入文件、分类与回收站；需要检索的资料请加入知识库。',conversations:'整理历史会话，按分组快速找到工作记录。',preferences:'设置你的称呼和回复偏好，后续任务将沿用这些设置。',sharing:'选择任务后分享成果或导出转交包。',collaboration:'选择任务，查看产物版本、评论和修订建议。',teams:'与成员共同整理任务，原任务的访问权限保持不变。',packages:'上传并管理个人技能，选择后即可在对话中使用。'})[route]||'');
       var workbenchHost=node('section');content.append(workbenchHost);
-      global.TaoWorkbench.mount(workbenchHost,route,Object.assign({},hooks,{api:api,openTask:function(id){openChat(function(){hooks.openTask(id);});}}));
+      global.TaoWorkbench.mount(workbenchHost,route,Object.assign({},hooks,{api:api,currentTask:function(){return new URLSearchParams(location.hash.split('?')[1]||'').get('task')||(hooks.currentTask&&hooks.currentTask())||'';},openTask:function(id){openChat(function(){hooks.openTask(id);});}}));
     }
   }
   function filters(host, options, onChange) {
@@ -98,7 +112,7 @@
     }); host.append(group); return group;
   }
   async function tasks(version) {
-    heading("让每一项工作，持续向前", "在这里查看执行进展，回到对话继续协作。", button("＋ 新建长期任务", function () { if (hooks.newJob) hooks.newJob(); }, "ws-button ws-primary"));
+    heading("任务中心", "在这里查看执行进展，回到对话继续协作。", button("＋ 新建长期任务", function () { if (hooks.newJob) hooks.newJob(); }, "ws-button ws-primary"));
     var toolbar = node("div", "ws-toolbar"), search = input("搜索任务", "搜索任务名称或目标…");
     toolbar.append(search, button("刷新", function () { renderRoute(); })); content.append(toolbar);
     var kind = "all", state = "all", all = [], jobs = [], scenarioNames = {},taskCursor=null,jobCursor=null,searchVersion=0;
@@ -138,6 +152,7 @@
             catch (e) { if (valid(version)) { notice(error, e.message); cancel.disabled = false; } }
           }, "ws-button ws-danger"); actions.append(cancel);
         }
+        if(!entry.job){var menu=node('details','ws-row-menu'),summary=node('summary','','更多');menu.append(summary);menu.append(button('分享与转交',function(){go('sharing?task='+encodeURIComponent(t.taskId));}),button('产物版本与评论',function(){go('collaboration?task='+encodeURIComponent(t.taskId));}));actions.append(menu);}
         actions.append(button('重命名',async function(){var name=await App.Dialog.prompt({title:'重命名',label:'名称',value:title});if(name===null)return;try{await api('PATCH','/api/'+(entry.job?'jobs/':'tasks/')+encodeURIComponent(entry.job?t.jobId:t.taskId),{title:name});t.title=name.trim();search.value=name.trim();if(hooks.refreshHistory)hooks.refreshHistory({query:name.trim(),title:name.trim(),conversationId:t.conversationId||t.taskId,jobId:entry.job?t.jobId:undefined});await reload(false);}catch(e){notice(error,e.message);}}));
         if(entry.job)actions.append(button(t.status==='archived'?'恢复长期任务':'归档长期任务',async function(){try{await api('PATCH','/api/jobs/'+encodeURIComponent(t.jobId),{status:t.status==='archived'?'active':'archived'});t.status=t.status==='archived'?'active':'archived';draw();}catch(e){notice(error,e.message);}}));
         if(entry.job&&t.status==='active')actions.append(button('停止长期任务',async function(){try{await api('PATCH','/api/jobs/'+encodeURIComponent(t.jobId),{status:'cancelled'});t.status='archived';draw();}catch(e){notice(error,e.message);}}));

@@ -245,7 +245,7 @@ export class CustomExtensions {
     finally {clearTimeout(timeout);signal.removeEventListener('abort',abort);}
   }
   async lifecycle(event:ExtensionLifecycleEvent,context:ExtensionContext):Promise<void> {
-    const lifecycleSignal=AbortSignal.any([context.signal,this.stop.signal,AbortSignal.timeout(Math.min(2000,Math.max(1,this.options.lifecycleTimeoutMs??2000)))]);
+    const lifecycleSignal=AbortSignal.any([context.signal,this.stop.signal,AbortSignal.timeout(10000)]);
     if(this.closed||lifecycleSignal.aborted)return;
     for(const entry of this.entries.values())for(const subscription of entry.subscriptions) {
       if(this.closed||lifecycleSignal.aborted)return;

@@ -134,12 +134,13 @@ export interface AppDeps {
 			readonly conversationId?: string;
 			/** 所属长程任务 id；省略表示临时对话。 */
 			readonly jobId?: string;
+            readonly taskMode?: "auto" | "task";
 			/** 本次使用的技能 id。 */
 			readonly skillId?: string;
 			/** 本次使用的智能体 id。 */
 			readonly agentId?: string;
 		},
-	) => Promise<{ readonly taskId: string; readonly conversationId: string; readonly warnings?: readonly string[] }>;
+	) => Promise<{ readonly taskId: string; readonly conversationId: string; readonly jobId?: string; readonly warnings?: readonly string[] }>;
 	/** 创建长程任务。 */
 	readonly createJob?: (
 		tenant: TenantContext,
@@ -796,10 +797,12 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
                     skillPackageId?: unknown;
 					conversationId?: unknown;
 					jobId?: unknown;
+                    taskMode?: unknown;
 					skillId?: unknown;
 					agentId?: unknown;
 				};
 				if((input.modelId!==undefined&&(typeof input.modelId!=="string"||input.modelId.length>64))||(input.skillPackageId!==undefined&&(typeof input.skillPackageId!=="string"||input.skillPackageId.length>80))){sendError(res,400,"模型或技能包标识无效");return;}
+                if(input.taskMode!==undefined&&input.taskMode!=="auto"&&input.taskMode!=="task"){sendError(res,400,"任务模式无效");return;}
                 // 自由文本入口：未给 scenarioId 时允许直接给一句话 query，
 				// 路由归一到内置「通用任务」卡（fields.query），让前台能一句话发起。
 				let scenarioId: string;
@@ -862,6 +865,7 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 						tier,
 						...(conversationId === undefined ? {} : { conversationId }),
 						...(jobId === undefined ? {} : { jobId }),
+                        ...(input.taskMode===undefined?{}:{taskMode:input.taskMode as "auto"|"task"}),
 						...(skillId === undefined ? {} : { skillId }),
 						...(agentId === undefined ? {} : { agentId }),
                         ...(typeof input.modelId==="string"?{modelId:input.modelId}:{}),

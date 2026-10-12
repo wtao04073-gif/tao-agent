@@ -56,7 +56,7 @@
   }
   async function confirmChange(title, description) {
     if (global.App && App.Dialog) return App.Dialog.confirm({ title: title, description: description, danger: true });
-    return global.confirm(title + '\n' + description);
+    throw new Error('确认对话框暂不可用，请刷新页面后重试');
   }
   function listText(value) { return value.replaceAll('，', ',').split(/[,\r\n]+/).map(function (s) { return s.trim(); }).filter(Boolean); }
 

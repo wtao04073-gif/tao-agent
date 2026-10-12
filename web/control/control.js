@@ -23,6 +23,7 @@
 	function deny(message) {
 		denied = true;
 		$("panel").hidden = true;
+        if(window.TaoControlNavigation)TaoControlNavigation.deny();
 		notice("accessError", message);
 	}
 	function preset() {
@@ -177,12 +178,6 @@
 	$("filters").addEventListener("submit", refresh);
 	$("range").addEventListener("change", preset);
 	["from", "to"].forEach(function (id) { $(id).addEventListener("change", function () { $("range").value = "custom"; }); });
-	document.querySelectorAll(".nav-link").forEach(function (link) {
-		link.addEventListener("click", function () {
-			document.querySelectorAll(".nav-link").forEach(function (item) { item.removeAttribute("aria-current"); });
-			link.setAttribute("aria-current", "page");
-		});
-	});
 	preset();
 	App.api("GET", "/api/me").then(function (response) {
 		if (!response.ok) { deny(response.status === 401 ? "请先登录管理员账号。" : "无法获取登录身份，请重新加载页面。"); return; }
@@ -190,7 +185,7 @@
 		var admin = me.role === "TENANT_ADMIN" || me.role === "PLATFORM_ADMIN";
 		$("identity").textContent = (me.name || me.userId || "当前账号") + " · " + (me.role === "PLATFORM_ADMIN" ? "平台管理员" : admin ? "租户管理员" : "成员");
 		if (!admin) { deny("当前账号没有管控权限。请联系租户管理员或平台管理员。"); return; }
-		$("panel").hidden = false;
+		if(window.TaoControlNavigation)TaoControlNavigation.authorize(me.role);
 		refresh();
 	}).catch(function () { deny("网络异常，暂时无法验证身份，请重新加载页面。"); });
 })();

@@ -84,3 +84,20 @@ body.workspace-active #landing, body.workspace-active #session { display: none !
 @media(max-width:720px){.ws-chunk-detail{padding:16px}.ws-ingest-row{flex-wrap:wrap}.ws-ingest-row .ws-row-main{flex-basis:100%}}
 .wb-field{display:flex;flex-direction:column;gap:6px;margin:12px 0;min-width:160px}.wb-field input,.wb-field textarea,.wb-field select{border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--bg-white);color:var(--text);font:inherit}.wb-field textarea{min-height:110px}.wb-card{padding:16px;border:1px solid var(--line);border-radius:12px;margin:12px 0}.wb-card .ws-button{margin:4px}.wb-diff{display:grid;grid-template-columns:1fr 1fr;gap:10px}.wb-diff pre{white-space:pre-wrap;overflow:auto;max-height:500px;border:1px solid var(--line);padding:12px}.ws-toolbar{flex-wrap:wrap}.artifact-preview img{max-width:100%}@media(max-width:700px){.wb-diff{grid-template-columns:1fr}.wb-field{width:100%}.ws-document-row{flex-wrap:wrap}}
 .wb-web-link{margin:0 16px 12px;padding:10px;border:1px solid var(--line);border-radius:10px;font-size:12px}.wb-web-link label{display:block;margin:8px 0}.wb-web-link input{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px}.wb-change{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto;background:var(--bg-soft);padding:12px}
+
+/* 功能按工作流聚合，表单使用页面自身的浅色表面，避免继承深色侧栏。 */
+.ws-subnav{display:flex;flex-wrap:wrap;gap:6px;border-bottom:1px solid #e5e2dc;margin:0 0 28px;padding-bottom:12px}
+.ws-subnav-link{padding:8px 13px;border-radius:8px;color:#736e65;text-decoration:none;font-size:13px}
+.ws-subnav-link[aria-current=page]{background:#e6ede3;color:#34563f;font-weight:600}
+.ws-subnav-link:hover{background:#efeee8}.ws-subnav-link:focus-visible{outline:2px solid #557a61;outline-offset:2px}
+.workspace-page{--line:#e5e2dc;--bg-white:#fffefa;--bg-soft:#f2f1eb;--text:#302e2b;color-scheme:light}
+.workspace-page .wb-field{min-width:0;flex:1 1 200px;font-size:13px;color:#625f56}
+.workspace-page .wb-field input:not([type=checkbox]),.workspace-page .wb-field textarea,.workspace-page .wb-field select{width:100%;background:#fffefa;color:#302e2b;border-color:#dad8d0;min-height:42px}
+.workspace-page .wb-field input[type=checkbox]{width:16px;height:16px;accent-color:#446353}
+.workspace-page .wb-card{background:#fffefa}.ws-row-main{overflow-wrap:anywhere}.ws-toolbar{align-items:flex-end}
+.wb-selection{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 16px;margin-bottom:16px;background:#eaf0e6;border-radius:10px}
+.wb-selection[hidden]{display:none}.wb-selection-count{margin-right:auto;font-size:13px}
+.ws-row-menu{position:relative}.ws-row-menu summary{cursor:pointer;padding:7px 12px;font-size:12px;color:#696359}.ws-row-menu[open]{background:#f2f3ed;border-radius:8px}.ws-row-menu .ws-button{display:block;margin:6px}
+.rail-nav .recent{margin-top:20px}.wb-task-picker{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+
+.automation-panel{font-size:14px;line-height:1.7}.automation-panel h2{font-size:26px;margin:0 0 10px}.automation-panel h3{margin:28px 0 14px}.automation-panel>details,.automation-panel article{padding:20px;margin:12px 0;border:1px solid #e5e2dc;border-radius:12px;background:#fffefa}.automation-panel summary{cursor:pointer;font-weight:600}.automation-panel form{max-width:780px}.automation-panel label{display:flex;flex-direction:column;gap:6px;font-size:13px}.automation-panel input,.automation-panel select,.automation-panel textarea{width:100%;padding:10px;border:1px solid #dad8d0;border-radius:8px;background:#fff;color:#302e2b;font:inherit}.automation-panel textarea{min-height:100px}.automation-panel button{padding:8px 14px;border:1px solid #dad8d0;border-radius:8px;background:#fff;color:#446353;margin:4px}.automation-panel [hidden]{display:none!important}
