@@ -138,7 +138,10 @@ export interface TaskUsageEvent extends TaskEventBase {
 	readonly cacheWriteTokens: number;
 }
 
+export interface TaskExtensionUIEvent extends TaskEventBase { readonly type:"extension_ui"; readonly ui:import("./extension.ts").ExtensionUI; }
+
 export type TaskEvent =
+ | TaskExtensionUIEvent
 	| TaskStatusEvent
 	| TaskStepEvent
 	| TaskToolDecisionEvent

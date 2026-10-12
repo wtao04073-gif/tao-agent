@@ -29,3 +29,5 @@ export * from "./job.ts";
 export * from "./addon.ts";
 
 export { toolSummary } from "./tool-summary.ts";
+
+export * from "./extension.ts";

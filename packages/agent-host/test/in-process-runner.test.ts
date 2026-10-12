@@ -764,3 +764,19 @@ describe("RunnerAdapter 适配层", () => {
 		});
 	});
 });
+
+describe('受信扩展生命周期与持久UI',()=>{
+ it('真实Pi工具调用产生UI事件并严格触发生命周期，关闭只触发一次',async()=>{
+  const {factory,faux}=createRuntime();const life:string[]=[],events:TaskEvent[]=[];
+  const runner=await factory.createRunner({tenant:TENANT,taskId:'ext-task',sessionId:'ext-session',systemPrompt:'s',gate:()=>allowAll,extensions:{async lifecycle(e){life.push(e.type+(e.toolName?':'+e.toolName:''));}},tools:[{name:'ext_sample_sum',label:'求和',description:'求和',parameters:{type:'object',properties:{}},async execute(){return {text:'3',ui:{extensionId:'sample',component:'result',instanceId:'one',view:{type:'text',text:'求和结果3'}}};}}]});
+  runner.subscribe(e=>{events.push(e);});faux.setResponses([fauxAssistantMessage([fauxToolCall('ext_sample_sum',{})]),fauxAssistantMessage('完成')]);
+  await runner.prompt('计算');await runner.close();await runner.close();
+  expect(life.filter(x=>x!=='task_event')).toEqual(['session_start','before_prompt','before_tool:ext_sample_sum','after_tool:ext_sample_sum','after_prompt','session_end']);
+  const ui=events.find(e=>e.type==='extension_ui');expect(ui).toMatchObject({taskId:'ext-task',tenant:TENANT,ui:{view:{type:'text',text:'求和结果3'}}});expect(ui!.seq).toBeGreaterThan(0);
+ });
+ it('权限拒绝时不调用扩展工具执行前后观察器',async()=>{
+  const {factory,faux}=createRuntime();const life:string[]=[];let calls=0;
+  const runner=await factory.createRunner({tenant:TENANT,taskId:'ext-denied',sessionId:'ext-denied',systemPrompt:'s',gate:()=>({kind:'block',reason:'拒绝'}),extensions:{async lifecycle(e){life.push(e.type);}},tools:[{name:'ext_denied',label:'拒绝',description:'拒绝',parameters:{type:'object',properties:{}},async execute(){calls++;return {text:'错误'};}}]});
+  faux.setResponses([fauxAssistantMessage([fauxToolCall('ext_denied',{})]),fauxAssistantMessage('已拒绝')]);await runner.prompt('执行');await runner.close();expect(calls).toBe(0);expect(life).not.toContain('before_tool');expect(life).not.toContain('after_tool');
+ });
+});

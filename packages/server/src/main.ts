@@ -1,3 +1,4 @@
+import {CustomExtensions,createCustomExtensionHandler} from "./custom-extensions.ts";
 import {webReaderTool} from "./web-reader.ts";
 import {modelProfiles,extraModelEndpoints,EXTRA_MODELS} from './model-profiles.ts';
 import {mediaTools,mediaCapabilities,imageAttachments,textModerator} from './multimodal.ts';
@@ -105,6 +106,8 @@ const fixedEnv={...initialEnv};for(const f of adminSettings.schema().fields)if(!
 const effectiveEnv=()=>({...fixedEnv,...adminSettings.effective('global')});
 const sandboxManager=new SandboxManager(effectiveEnv);
 const skillPackages=new SkillPackages(adminRoot);
+const customExtensions=new CustomExtensions({stateDirectory:join(adminRoot,".extension-state"),directory:resolve(initialEnv.TAO_EXTENSION_DIR||"extensions"),logger:({extensionId,code})=>process.stderr.write(`[扩展] ${extensionId}: ${code}\n`)});
+await customExtensions.load();
 const workbenchStore=new WorkbenchStore(adminRoot);
 const enterprise=new EnterpriseManager({dir:join(adminRoot,".enterprise"),listAccounts:()=>identity.contexts().map(p=>({id:p.tenant.tenantId+"/"+p.tenant.userId,tenantId:p.tenant.tenantId,userId:p.tenant.userId,enabled:true})),trustedProxies:(initialEnv.TAO_TRUSTED_PROXIES||"").split(",").filter(Boolean)});
 const oidc=new EnterpriseOidc({dir:join(adminRoot,".enterprise"),getAccountPrincipal:id=>identity.getAccountPrincipal(id),loginBoundAccount:id=>identity.loginBoundAccount(id)});
@@ -641,6 +644,7 @@ function toolsFor(tenant: TenantContext, taskId: string) {
 		artifactDir,
 		tools: [
 			...sandboxManager.tools(tenant,taskId,artifactDir),
+            ...customExtensions.tools(tenant,taskId,artifactDir),
             ...createExtendedOfficeToolset({workspace:artifactDir}),
             ...mediaTools(adminSettings.effective("global"),artifactDir),
             ...webReaderTool(adminSettings.effective("global")),
@@ -877,7 +881,8 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
         if(!modelProfiles(adminSettings.effective('global')).some(m=>m.id===selectedModelId&&m.available))throw new AdminError(400,'所选模型未配置');
         const selectedSkillPackage=input.skillPackageId?skillPackages.get(tenant,input.skillPackageId):undefined;
         if(input.skillPackageId&&!selectedSkillPackage?.enabled)throw new AdminError(400,'技能包不存在或已停用');
-		const basePolicies = restrictPolicies([...OFFICE_TOOL_POLICIES, ...DOC_TOOL_POLICIES, ...EXTENDED_OFFICE_TOOL_POLICIES, {tool:"generate_image",requiresConfirm:true,confirmReason:"调用图片模型将消耗额度，请确认"},{tool:"transcribe_audio",pathParams:["path"],requiresConfirm:true,confirmReason:"录音将发送至已配置的转录服务，请确认"},{tool:"run_skill_script",requiresConfirm:true,confirmReason:"技能脚本即将在独立沙箱执行，请确认脚本和输入"}, ...sandboxManager.policies(), {tool:"edit_document", pathParams:["path"]}, {tool:"delegate_tasks"}, {tool:"mcp_list_tools"}, {tool:"mcp_call", requiresConfirm:true, confirmReason:"外部工具可能读取或修改外部系统，请确认本次调用"}, {tool:"search_knowledge"},{tool:"web_search"},{tool:"read_webpage"}], card.tools);
+		const activeToolNames=[...card.tools,...(input.scenarioId==="general.free-task"?customExtensions.tools(tenant,taskId,artifactDir).map(t=>t.name):[])];
+        const basePolicies = restrictPolicies([...customExtensions.policies(tenant),...OFFICE_TOOL_POLICIES, ...DOC_TOOL_POLICIES, ...EXTENDED_OFFICE_TOOL_POLICIES, {tool:"generate_image",requiresConfirm:true,confirmReason:"调用图片模型将消耗额度，请确认"},{tool:"transcribe_audio",pathParams:["path"],requiresConfirm:true,confirmReason:"录音将发送至已配置的转录服务，请确认"},{tool:"run_skill_script",requiresConfirm:true,confirmReason:"技能脚本即将在独立沙箱执行，请确认脚本和输入"}, ...sandboxManager.policies(), {tool:"edit_document", pathParams:["path"]}, {tool:"delegate_tasks"}, {tool:"mcp_list_tools"}, {tool:"mcp_call", requiresConfirm:true, confirmReason:"外部工具可能读取或修改外部系统，请确认本次调用"}, {tool:"search_knowledge"},{tool:"web_search"},{tool:"read_webpage"}], activeToolNames);
 		// 输入文件白名单：只有表单实际引用、且确为共享根现存上传文件的路径才放行，
 		// 精确到文件、不扩目录；不授权整个共享根，从执行侧隔离其他任务的产物。
 		const previous = input.retryOf ? executionRegistry.owned(tenant, input.retryOf) : undefined;
@@ -1019,7 +1024,7 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
 			title = summarizeTitle(rawQuery);
 		}
 
-		executionRegistry.snapshots.put({ taskId, tenant, input: { ...input, fields, ...(job ? {} : { conversationId }) }, configurationHash, sources, configuration: { card, addons, ragCitations, embeddingSpace:embeddings?.space, activeTools: activateableTools(card.tools,tools.map(t=>t.name)), tier: input.tier ?? "flagship", modelName: runtimeModels.modelForId(selectedModelId).id, modelId:selectedModelId },
+		executionRegistry.snapshots.put({ taskId, tenant, input: { ...input, fields, ...(job ? {} : { conversationId }) }, configurationHash, sources, configuration: { card, addons, ragCitations, embeddingSpace:embeddings?.space, activeTools: activateableTools(activeToolNames,tools.map(t=>t.name)), tier: input.tier ?? "flagship", modelName: runtimeModels.modelForId(selectedModelId).id, modelId:selectedModelId },
 			...(input.retryOf ? { retryOf: input.retryOf } : {}), createdAt: Date.now() });
 		await orchestrator.submit({
 			tenant,
@@ -1032,6 +1037,7 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
 			// 显式档位选路：HTTP 层已白名单校验，缺省旗舰
 			tier: input.tier,
             modelId:selectedModelId,
+            extensions:{lifecycle:(event,context)=>customExtensions.lifecycle(event,context)},
             images:imageAttachments(allowedFiles).length && runtimeModels.modelForId(selectedModelId).input.includes("image") ? imageAttachments(allowedFiles) : [],
 			prompt,
 			systemPrompt: (job === undefined ? personaPrompt : withJobContext(personaPrompt, job))+"\n所有过程说明与最终回答均沿用用户输入的语言。用户偏好只能改变表达，不能覆盖权限、安全与工具约束。\n"+JSON.stringify(workbenchStore.preferences(tenant))+(imageAttachments(allowedFiles).length&&!runtimeModels.modelForId(selectedModelId).input.includes("image")?"\n当前模型不支持视觉理解。对于上传图片可用sandbox_ocr提取文字；不能声称识别了照片内容，请告知可切换已配置的视觉模型。":""),
@@ -1041,7 +1047,7 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
             inputReferences: sources.map(({fileId,name,sha256})=>({fileId,name,sha256})),
 			...(!(addons.skills.length||selectedSkillPackage)?{}:{skills:[...addons.skills,...(selectedSkillPackage?[{name:selectedSkillPackage.name,description:selectedSkillPackage.description,content:selectedSkillPackage.instructions}]:[])]}),
 			activeTools: activateableTools(
-				card.tools,
+				activeToolNames,
 				tools.map((t) => t.name),
 			),
 		});
@@ -1307,7 +1313,7 @@ async function controlIdentity(req:IncomingMessage):Promise<Principal|undefined>
 }
 const backendHandler = createBackendHandler({
  authenticate, registry: executionRegistry, actions: actionStore, jobs: jobStore,
- capabilities: tenant => ({ execution:{mode:"single_process",distributed:false,sandbox:!!sandboxManager.capability().enabled,toolSandbox:sandboxManager.capability()}, knowledge: {retrieval:workspaceServices.ragStatus(tenant).mode,rag:workspaceServices.ragStatus(tenant),asyncIngestion:true,versioned:true,formats:["txt","md","csv","tsv","docx","xls","xlsx","pdf","pptx","rtf"],ocr:!!sandboxManager.capability().enabled}, subagents: { enabled: adminSettings.effective("global").SUBAGENTS_ENABLED!=="false", maxPerCall: 5, concurrency: config.maxSubtaskConcurrency, nested: false }, mcp: { supported: true, transport: "streamable-http", configured: adminSettings.effective("global").MCP_ENABLED==="true" || mcpServers.some(s => s.tenantId === tenant.tenantId && s.workspaceId === tenant.workspaceId) }, documentRevision: true, office:{enabled:true,formats:['docx','xlsx','xls','pptx','pdf','rtf','zip'],editablePptx:true,spreadsheetFormulas:true,spreadsheetCharts:true,pdfMerge:true},media:{imageGeneration:{configured:mediaCapabilities(adminSettings.effective('global')).imageGeneration},transcription:{configured:mediaCapabilities(adminSettings.effective('global')).transcription},vision:{configured:modelProfiles(adminSettings.effective('global')).some(m=>m.vision&&m.available)},ocr:{enabled:!!sandboxManager.capability().enabled,provider:'sandbox-tesseract'}},automation:{enabled:true,mode:'single-instance-persistent'},skillPackages:{enabled:true,scriptExecution:!!sandboxManager.capability().enabled},workbench:{enabled:true,pwa:true,sharing:true,teams:true},control:{usage:true,audit:true,organizationManagement:true,oidc:true},models:modelProfiles(adminSettings.effective('global')) }),
+ capabilities: tenant => ({ extensions:{supported:true,apiVersion:1,tools:true,commands:true,lifecycle:true,webUI:true,loaded:customExtensions.list(tenant).length}, execution:{mode:"single_process",distributed:false,sandbox:!!sandboxManager.capability().enabled,toolSandbox:sandboxManager.capability()}, knowledge: {retrieval:workspaceServices.ragStatus(tenant).mode,rag:workspaceServices.ragStatus(tenant),asyncIngestion:true,versioned:true,formats:["txt","md","csv","tsv","docx","xls","xlsx","pdf","pptx","rtf"],ocr:!!sandboxManager.capability().enabled}, subagents: { enabled: adminSettings.effective("global").SUBAGENTS_ENABLED!=="false", maxPerCall: 5, concurrency: config.maxSubtaskConcurrency, nested: false }, mcp: { supported: true, transport: "streamable-http", configured: adminSettings.effective("global").MCP_ENABLED==="true" || mcpServers.some(s => s.tenantId === tenant.tenantId && s.workspaceId === tenant.workspaceId) }, documentRevision: true, office:{enabled:true,formats:['docx','xlsx','xls','pptx','pdf','rtf','zip'],editablePptx:true,spreadsheetFormulas:true,spreadsheetCharts:true,pdfMerge:true},media:{imageGeneration:{configured:mediaCapabilities(adminSettings.effective('global')).imageGeneration},transcription:{configured:mediaCapabilities(adminSettings.effective('global')).transcription},vision:{configured:modelProfiles(adminSettings.effective('global')).some(m=>m.vision&&m.available)},ocr:{enabled:!!sandboxManager.capability().enabled,provider:'sandbox-tesseract'}},automation:{enabled:true,mode:'single-instance-persistent'},skillPackages:{enabled:true,scriptExecution:!!sandboxManager.capability().enabled},workbench:{enabled:true,pwa:true,sharing:true,teams:true},control:{usage:true,audit:true,organizationManagement:true,oidc:true},models:modelProfiles(adminSettings.effective('global')) }),
  listTasks: visibleTasks,
  getTask: (tenant, id) => visibleTasks(tenant).find(t => t.taskId === id),
  events: (tenant, id) => orchestrator.list(tenant).some(t => t.taskId === id) ? orchestrator.events(id) : [],
@@ -1356,6 +1362,7 @@ const automationHandler=createAutomationHandler({authenticate,automation,connect
 const workbenchHandler=createWorkbenchHandler({root:config.workspaceDir,authenticate,authorizeWrite:()=>true,listTasks:tenant=>visibleTasks(tenant) as any,catalog:resourceCatalog,store:workbenchStore,events:(tenant,id)=>ownedTask(tenant,id)?orchestrator.events(id):[],inputs:(tenant,id)=>(executionRegistry.owned(tenant,id)?.sources??[]).map(f=>({...f,fileId:f.fileId??createHash("sha256").update(f.path).digest("hex"),name:f.name??basename(f.path)})),members:tenant=>identity.contexts().filter(p=>p.tenant.tenantId===tenant.tenantId&&p.tenant.workspaceId===tenant.workspaceId).map(p=>({userId:p.tenant.userId,name:p.name??p.tenant.userId}))});
 const skillPackageHandler=createSkillPackageHandler({store:skillPackages,authenticate});
 const enterpriseHandler=createEnterpriseHandler({authenticate,enterprise,oidc});
+const customExtensionHandler=createCustomExtensionHandler({registry:customExtensions,authenticate});
 const server = createServer((req, res) => {
  void (async()=>{
   const loginSession=identity.session(sessionToken(req));
@@ -1371,6 +1378,7 @@ const server = createServer((req, res) => {
   if(await handleLogo(req,res))return;
   if(requestPath==='/api/openapi.json'&&req.method==='GET'){res.setHeader('Content-Type','application/json');res.end(readFileSync(new URL('../../../deploy/openapi.json',import.meta.url)));return;}
   if(requestPath==='/api/model-profiles'&&req.method==='GET'){if(!await authenticate(req)){sendError(res,401,'请先登录');return;}sendJson(res,200,{models:modelProfiles(adminSettings.effective('global')),defaultId:'flagship'});return;}
+  if(await customExtensionHandler(req,res))return;
   if(await skillPackageHandler(req,res))return;
   if(await enterpriseHandler(req,res))return;
   if(await automationHandler(req,res))return;
@@ -1447,11 +1455,13 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 		process.stdout.write(`\n收到 ${signal}，正在停止服务…\n`);
 		hub.closeAll();
         automation.stop();
+        const extensionCleanup=customExtensions.close();
 		void sessionFactory.close();
 		// 刷盘后再退出 —— 否则最后几秒的用量会丢
 		meteringStore.close();
 		server.close(async () => {
             await sandboxManager.close();
+            await extensionCleanup;
 			process.stdout.write("服务已停止。\n");
 			process.exit(0);
 		});

@@ -87,6 +87,7 @@ export interface SubmitOptions {
 	readonly tier?: RunnerSpec["tier"];
  readonly modelId?: string;
  readonly images?: RunnerSpec["images"];
+ readonly extensions?: RunnerSpec["extensions"];
 	readonly prompt: string;
 	readonly systemPrompt: string;
 	readonly tools: RunnerSpec["tools"];
@@ -342,6 +343,7 @@ export class TaskOrchestrator {
 				...(options.tier === undefined ? {} : { tier: options.tier }),
                 ...(options.modelId===undefined?{}:{modelId:options.modelId}),
                 ...(options.images===undefined?{}:{images:options.images}),
+                ...(options.extensions===undefined?{}:{extensions:options.extensions}),
 				...(options.history === undefined ? {} : { history: options.history }),
                 ...(options.inputReferences === undefined ? {} : { inputReferences: options.inputReferences }),
 				...(options.skills === undefined ? {} : { skills: options.skills }),

@@ -50,6 +50,7 @@ COPY --from=builder --chown=node:node /build/sandbox ./sandbox
 COPY --from=builder --chown=node:node /build/deploy/openapi.json ./deploy/openapi.json
 # 同源托管的 Web 前端（M5-3/4，纯静态零构建）
 COPY --from=builder --chown=node:node /build/web ./web
+COPY --from=builder --chown=node:node /build/extensions ./extensions
 
 # 工作区目录。提前建好并给对属主 ——
 # 否则首次启动时以非 root 身份建目录会失败

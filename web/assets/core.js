@@ -272,7 +272,7 @@
                 q += "&afterSeq=" + lastSeq;
 				es = new EventSource("/api/events" + q, { withCredentials: false });
 				var types = ["status", "step", "tool_decision", "artifact",
-					"assistant_message", "assistant_delta", "thinking_delta", "message_progress", "user_message", "usage"];
+					"assistant_message", "assistant_delta", "thinking_delta", "message_progress", "extension_ui", "user_message", "usage"];
 				types.forEach(function (t) {
 					es.addEventListener(t, function (ev) {
 						var data;

@@ -194,6 +194,8 @@ function toKernelTool(
 		tenant: RunnerSpec["tenant"];
 		emitDetail: (detail: string) => void;
 		emitArtifact: (path: string, details?: unknown) => Promise<void>;
+        lifecycle: (type:"before_tool"|"after_tool",toolName:string,outcome?:"success"|"error")=>Promise<void>;
+        emitUI:(ui:import("@tao/core").ExtensionUI)=>Promise<void>;
 	},
 ): AgentHarnessTool<undefined> {
 	return {
@@ -204,7 +206,9 @@ function toKernelTool(
 		parameters: tool.parameters as AgentHarnessTool<undefined>["parameters"],
 		replay: tool.replay ?? "never",
 		async execute(_toolCallId, args, _onUpdate, _toolContext, _invocation, context) {
-			const outcome = await tool.execute({
+			await ctx.lifecycle("before_tool",tool.name);
+            let outcome: import("@tao/core").ToolOutcome;
+            try { outcome = await tool.execute({
 				args,
 				tenant: ctx.tenant,
 				taskId: ctx.taskId,
@@ -212,7 +216,10 @@ function toKernelTool(
 				// 内核通过 context 传递中止信号；没有则给一个永不中止的
 				signal: context.abortSignal ?? new AbortController().signal,
 			});
-			// 成功产出文件时发 artifact 事件（失败结果不发，避免把坏文件当可交付物）。
+			} catch(error) { await ctx.lifecycle("after_tool",tool.name,"error"); throw error; }
+            await ctx.lifecycle("after_tool",tool.name,outcome.isError?"error":"success");
+            if(outcome.ui&&!outcome.isError)await ctx.emitUI(outcome.ui);
+            // 成功产出文件时发 artifact 事件（失败结果不发，避免把坏文件当可交付物）。
 			// 这是「取产物」全链路的数据源：编排器据此累积任务产物、前端据此给下载入口。
 			const delivered: string[] = [];
 			if (outcome.isError !== true) {
@@ -292,8 +299,13 @@ class InProcessRunner implements Runner {
 	}
 
 	/** 发布一个平台事件。监听器异常不影响其他监听器，也不影响执行。 */
+    async lifecycle(type:import("@tao/core").ExtensionLifecycleName,toolName?:string,outcome?:"success"|"error",event?:TaskEvent):Promise<void> {
+        try { await this.spec.extensions?.lifecycle({type,taskId:this.spec.taskId,...(toolName?{toolName}:{}),...(outcome?{outcome}:{}),...(event?{event}:{})},{tenant:this.spec.tenant,taskId:this.spec.taskId,signal:this.extensionAbort.signal}); } catch { /* 插件观察失败不改变主任务 */ }
+    }
+    private readonly extensionAbort=new AbortController();
+    private extensionStarted=false;
     private publish(event:TaskEvent):Promise<void> {
-        this.delivery=this.delivery.then(async()=>{for(const listener of this.listeners){try{await listener(event);}catch{/* 展示失败不改变模型执行结果 */}}});
+        this.delivery=this.delivery.then(async()=>{if(event.seq>0)await this.lifecycle("task_event",undefined,undefined,event);for(const listener of this.listeners){try{await listener(event);}catch{/* 展示失败不改变模型执行结果 */}}});
         return this.delivery;
     }
 
@@ -377,6 +389,9 @@ class InProcessRunner implements Runner {
 	async prompt(text: string, rawUserText?: string): Promise<void> {
 		this.assertOpen();
 		this.runFailure = undefined;
+        if(!this.extensionStarted){this.extensionStarted=true;await this.lifecycle("session_start");}
+        await this.lifecycle("before_prompt");
+        let promptOutcome:"success"|"error"="error";
 
 		// 先落本轮用户原文（持久化、进事件流）：多轮历史重建与前端展示都依赖它。
 		// 在模型调用前发，失败也已记录用户意图。
@@ -413,12 +428,14 @@ class InProcessRunner implements Runner {
 			// 抛出去让编排层把任务转入 FAILED —— 静默成功比报错难查得多。
 			if (this.runFailure !== undefined) throw new Error(this.runFailure);
             await this.responsePhase("finished","本轮模型执行已结束");
+            promptOutcome="success";
         } catch(error) {
             await this.responsePhase("failed","本轮未完成，请查看任务状态与失败原因");
             throw error;
         } finally {
             this.responseStream?.close();
             await this.delivery;
+            await this.lifecycle("after_prompt",undefined,promptOutcome);
 			release?.();
 		}
 	}
@@ -462,6 +479,8 @@ class InProcessRunner implements Runner {
 	async close(): Promise<void> {
 		if (this.closed) return; // 幂等
 		this.closed = true;
+        await this.lifecycle("session_end");
+        this.extensionAbort.abort();
 		await this.confirmations.cancel();
 		this.listeners.clear();
 		await this.session.close(BACKGROUND_CONTEXT);
@@ -576,6 +595,8 @@ export class InProcessRunnerFactory implements RunnerFactory {
 				tenant: spec.tenant,
 				emitDetail,
 				emitArtifact: (path, details) => runnerRef?.emitArtifact(path, details) ?? Promise.resolve(),
+                lifecycle:(type,toolName,outcome)=>runnerRef?.lifecycle(type,toolName,outcome)??Promise.resolve(),
+                emitUI:ui=>runnerRef?.emit(base=>({...base,type:"extension_ui",ui}))??Promise.resolve(),
 			}),
 		);
 

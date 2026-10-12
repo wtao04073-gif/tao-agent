@@ -8,6 +8,7 @@
  * 否则 vendor 的类型会顺着接口泄漏到整个平台层，边界形同虚设。
  */
 
+import type { ExtensionUI, ExtensionRuntimeHooks } from "./extension.ts";
 import type { TaskEvent } from "./events.ts";
 import type { TenantContext } from "./tenant.ts";
 
@@ -59,6 +60,7 @@ export interface ToolOutcome {
 	/** 供前端展示的结构化细节（可选）。 */
 	readonly details?: unknown;
 	readonly isError?: boolean;
+ readonly ui?: ExtensionUI;
 }
 
 /**
@@ -94,6 +96,7 @@ export interface PlatformTool {
 
 /** 创建一个会话所需的一切。 */
 export interface RunnerSpec {
+ readonly extensions?: ExtensionRuntimeHooks;
 	readonly tenant: TenantContext;
 	readonly taskId: string;
 	/** 会话标识。**一人一会话** —— 见下方 createRunner 的说明。 */

@@ -353,6 +353,7 @@
 </style>
 <link rel="stylesheet" href="/assets/workspace.css?v=rag-stream-1">
 <link rel="stylesheet" href="/assets/chat-theme.css?v=rag-stream-1">
+<link rel="stylesheet" href="/assets/extensions.css">
 </head>
 <body>
 <button class="rail-scrim" id="railScrim" aria-label="收起导航"></button>
@@ -547,6 +548,7 @@
 <script src="/assets/workspace.js?v=app-dialog-1"></script>
 <script src="/assets/chat-interactions.js"></script>
 <script src="/assets/run-display.js"></script>
+<script src="/assets/extensions.js"></script>
 <script>
 (function () {
 	"use strict";
@@ -577,6 +579,17 @@
         answerNode:answerParagraph,currentBubble:function(){return state.statusEl?state.statusEl.closest(".bubble"):addMsg("bot","智能体","");},
         renderAnswer:function(node,text){ChatUI.renderAnswer(node,text);},answerFinished:function(){if(state.answerP)state.answerP.dataset.final='true';state.answerP=null;},changed:scrollDown});
     document.querySelectorAll(".composer-bar .bar-left").forEach(function(parent){runDisplay.mount(parent);});
+    var extensionUI = TaoExtensions.create({
+      context:function(){return {generation:generation,draft:currentDraft};},
+      isCurrent:function(snapshot){return snapshot.generation===generation&&snapshot.draft===currentDraft;},
+      openSkills:function(){openAddonPicker('skill');},
+      fillPrompt:function(text){
+        var input=$($('#landing').classList.contains('hidden')?'#sInput':'#lInput');
+        var value=input.value.trim()?input.value+'\n\n'+text:text;
+        $('#lInput').value=$('#sInput').value=value;drafts[currentDraft]=value;autosize(input);input.focus();
+      }
+    });
+    ['lInput','sInput'].forEach(function(id){var input=document.getElementById(id);extensionUI.mount(input,input.closest('.inputcard').querySelector('.bar-left'));});
 
 	// 当前选中的模型档位；两个输入卡的选择器始终保持同步。
 	function currentTier() {
@@ -662,7 +675,7 @@
     ['lInput','sInput'].forEach(function(id){
       var ta=document.getElementById(id);
       ta.addEventListener('paste',function(event){var files=Array.from(event.clipboardData&&event.clipboardData.files||[]).filter(function(f){return /^image\/(png|jpeg|webp)$/.test(f.type);});if(!files.length)return;event.preventDefault();if(state.running||state.booting){toast('请等待任务结束后粘贴图片');return;}trackUploads({files:files,value:''},document.getElementById(id==='lInput'?'lAttachRow':'attachRow'));});
-      ta.addEventListener('input',function(){if(/(?:^|\s)\/$/.test(ta.value)){ta.value=ta.value.slice(0,-1);openAddonPicker('skill');}if(/(?:^|\s)@$/.test(ta.value)){ta.value=ta.value.slice(0,-1);TaoWorkspace.navigate('files');}});
+      ta.addEventListener('input',function(){if(/\s\/$/.test(ta.value)){ta.value=ta.value.slice(0,-1);openAddonPicker('skill');}if(/(?:^|\s)@$/.test(ta.value)){ta.value=ta.value.slice(0,-1);TaoWorkspace.navigate('files');}});
     });
     App.api('GET','/api/model-profiles').then(function(r){if(!r.ok)return;document.querySelectorAll('.bar-right').forEach(function(bar){var select=document.createElement('select');select.className='model-pick';select.setAttribute('aria-label','选择模型配置');var automatic=document.createElement('option');automatic.value='';automatic.textContent='自动模型';select.append(automatic);(r.data.models||[]).forEach(function(m){var o=document.createElement('option');o.value=m.id;o.textContent=m.name+(m.vision?' · 识图':'');o.disabled=!m.available;select.append(o);});select.onchange=function(){state.modelId=select.value;document.querySelectorAll('select[aria-label="选择模型配置"]').forEach(function(s){s.value=select.value;});};bar.prepend(select);});}).catch(function(){});
     if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(function(){});
@@ -883,6 +896,7 @@
 			if (e.type === "artifact" && e.final) renderArtifactEvent(Object.assign({},e,{taskId:task.taskId}));
 		});
         runDisplay.history(bot, events);
+        events.forEach(function(event){extensionUI.consume(event,bot);});
         if (!events.some(function(e){return e.type === 'message_progress' || (e.type === 'assistant_message' && e.messageId);})) answerTexts.forEach(function (text, index) {
             var p = index === 0 ? bot.querySelector('p') : document.createElement('p');
             if (index > 0) bot.insertBefore(p, isLast && state.running ? state.statusEl : holder.root);
@@ -989,6 +1003,7 @@
 		$("#lFile").value = ""; $("#sFile").value = "";
 		$("#inner").innerHTML = "";
         runDisplay.reset();
+        extensionUI.reset();
 		$("#deliverBody").innerHTML = '<div class="deliver-empty">交付物将在这里预览</div>';
 		state.seenSeq = Object.create(null);
 		state.seenArtifact = Object.create(null);
@@ -1182,6 +1197,10 @@
 			if (state.seenSeq[ev.seq]) return;
 			state.seenSeq[ev.seq] = true;
 		}
+        if(ev.type==='extension_ui'){
+          var extensionBubble=state.statusEl?state.statusEl.closest('.bubble'):state.steps?state.steps.root.closest('.bubble'):addMsg('bot','扩展','');
+          extensionUI.consume(ev,extensionBubble);scrollDown();return;
+        }
         if (runDisplay.consume(ev)) {
             state.activityKind = ev.type === 'assistant_message' ? 'waiting' : 'generating';
             state.activityAt = Date.now(); updateActivity(); return;
@@ -1402,6 +1421,7 @@
 		// 启动闸门：仅拦截「详情/创建仍在进行」的空窗，且不动已输入文本。
 		if (state.booting) { toast("任务正在启动，请稍候再发送"); return; }
 		var ta = $("#sInput"); var text = ta.value.trim(); if (!text) return;
+		if(extensionUI.dispatchSlash(text,ta))return;
 		ta.value = ""; autosize(ta);
 		// 长程任务视图：每次发送都是该任务下的一次新会话（submit 内按 jobId 处理）。
 		if (!state.running && state.mode === "job" && state.jobId) { submit(text, false); return; }
@@ -1448,7 +1468,7 @@
 	});
 	$("#lSend").addEventListener("click", doLanding);
 	$("#sSend").addEventListener("click", steer);
-	function doLanding() { var t = $("#lInput").value.trim(); if (t && !uploading() && !state.booting) { $("#lInput").value = ""; submit(t); } }
+	function doLanding() { var t = $("#lInput").value.trim(); if (t && !uploading() && !state.booting) { if(extensionUI.dispatchSlash(t,$('#lInput')))return; $("#lInput").value = ""; submit(t); } }
 
 	// ＋ 添加菜单：文件 / 技能 / 智能体。技能与智能体均接真实后端（列表 + 上传）。
 	var PLUS_ITEMS = [
@@ -1728,6 +1748,7 @@
 	});
 
 	function resetAll() {
+        extensionUI.reset();
         rememberView(null,null);
         state.previewOnly=false;
         saveDraft();selectDraft("new");
