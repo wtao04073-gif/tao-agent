@@ -352,7 +352,7 @@
 	}
 </style>
 <link rel="stylesheet" href="/assets/workspace.css?v=workspace-nav-2">
-<link rel="stylesheet" href="/assets/chat-theme.css?v=rag-stream-1">
+<link rel="stylesheet" href="/assets/chat-theme.css?v=recent-actions-1">
 </head>
 <body>
 <button class="rail-scrim" id="railScrim" aria-label="收起导航"></button>
@@ -692,13 +692,39 @@
         if(request!==recentRequest||!r.ok)return;var box=$('#recentList');if(!more)box.replaceChildren();
         var old=box.querySelector('.load-more');if(old)old.remove();
         (r.data.conversations||[]).forEach(function(t){
-          var b=document.createElement('button');b.className='recent-item';b.textContent=t.title||'对话';b.title=b.textContent;
-          b.addEventListener('click',function(){openExisting(t.taskId||t.taskIds[t.taskIds.length-1]);});box.append(b);
-          var manage=document.createElement('button');manage.className='recent-manage';manage.textContent='管理';manage.setAttribute('aria-label','管理对话 '+t.title);
-          manage.onclick=async function(){
-            var title=await App.Dialog.prompt({title:'重命名对话',label:'对话名称',value:t.title,description:'修改显示名称；删除操作可在任务中心进行。'});
-            if(title===null)return;var r=await App.api('PATCH','/api/conversations/'+encodeURIComponent(t.conversationId),{title:title});if(!r.ok)toast(r.data.error);else refreshHistory({query:title.trim(),title:title.trim(),conversationId:t.conversationId});
-          };box.append(manage);
+          var row=document.createElement('div');row.className='recent-conversation';
+          var title=t.title||'对话',id=t.conversationId,taskId=t.taskId||(t.taskIds||[]).slice(-1)[0];
+          var open=document.createElement('button');open.type='button';open.className='recent-item recent-title';open.textContent=title;open.title=title;
+          open.addEventListener('click',function(){if(taskId)openExisting(taskId);});
+          var actions=document.createElement('div');actions.className='recent-actions';actions.setAttribute('role','group');actions.setAttribute('aria-label','对话操作：'+title);
+          function action(label,description,run){
+            var button=document.createElement('button');button.type='button';button.className='recent-action';button.textContent=label;button.title=description;button.setAttribute('aria-label',description+'：'+title);
+            button.addEventListener('click',async function(event){
+              event.stopPropagation();if(row.dataset.busy==='true')return;
+              row.dataset.busy='true';actions.querySelectorAll('button').forEach(function(b){b.disabled=true;});
+              try{await run();}catch(error){toast(error.message||'操作失败，请重试');}
+              finally{delete row.dataset.busy;actions.querySelectorAll('button').forEach(function(b){b.disabled=false;});}
+            });actions.append(button);
+          }
+          action('修改','修改对话标题',async function(){
+            var value=await App.Dialog.prompt({title:'修改对话标题',label:'对话名称',value:title});
+            if(value===null)return;value=value.trim();if(!value){toast('对话名称不能为空');return;}if(value===title)return;
+            var result=await App.api('PATCH','/api/conversations/'+encodeURIComponent(id),{title:value});
+            if(!result.ok)throw Error(result.data&&result.data.error||'修改失败，请重试');
+            refreshHistory({title:value,conversationId:id});toast('对话标题已修改');
+          });
+          action('删除','删除对话',async function(){
+            if(!await App.Dialog.confirm({title:'删除对话？',description:'“'+title+'”将从会话列表移除，审计记录和已有产物保留。',confirmText:'删除',danger:true}))return;
+            var result=await App.api('DELETE','/api/conversations/'+encodeURIComponent(id));
+            if(!result.ok)throw Error(result.data&&result.data.error||'删除失败，请重试');
+            if(state.conversationId===id){resetAll();history.replaceState(null,'','/chat.html#chat');}
+            refreshHistory();toast('对话已删除');
+          });
+          action('复制','复制对话标题',async function(){
+            if(!navigator.clipboard||!navigator.clipboard.writeText)throw Error('当前浏览器不支持复制，请手动选择标题');
+            await navigator.clipboard.writeText(title);toast('对话标题已复制');
+          });
+          row.append(open,actions);box.append(row);
         });
         recentCursor=r.data.nextCursor;if(recentCursor){var moreButton=document.createElement('button');moreButton.className='recent-item load-more';moreButton.textContent='加载更多';moreButton.onclick=function(){moreButton.disabled=true;loadRecent(true);};box.append(moreButton);}
       });
