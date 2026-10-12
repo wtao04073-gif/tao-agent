@@ -5,14 +5,15 @@ import { FileJsonStore, type FileJobStore } from "@tao/knowledge";
 import type { StoredSkill, StoredAgent, StoredTask, TenantContext } from "@tao/core";
 import { sendJson, sendError, readJsonBody, type Principal } from "./app.ts";
 import { WorkspaceError, workspaceFile } from "./workspace-services.ts";
-interface Metadata { id:string; tenant:TenantContext; title?:string; deleted?:boolean }
+interface Metadata { id:string; tenant:TenantContext; title?:string; deleted?:boolean; jobId?:string }
 const finished=(t:StoredTask)=>["SUCCEEDED","FAILED","CANCELLED","EXCEEDED","INTERRUPTED"].includes(t.status);
 export class TaskPresentation {
  private readonly store:FileJsonStore<Metadata>;
  constructor(dir:string){this.store=new FileJsonStore({dir,collection:"task-presentation",idOf:m=>m.id});}
- view<T extends StoredTask>(task:T):T|undefined {const m=this.store.get(task.taskId);return m?.deleted?undefined:m?.title?{...task,title:m.title}:task;}
+ view<T extends StoredTask>(task:T):T|undefined {const m=this.store.get(task.taskId);return m?.deleted?undefined:m?{...task,...(m.title?{title:m.title}:{}),...(m.jobId?{jobId:m.jobId}:{})}:task;}
  list<T extends StoredTask>(tasks:readonly T[]):T[]{return tasks.map(t=>this.view(t)).filter((t):t is T=>!!t);}
- update(tasks:readonly StoredTask[],title?:string,deleted=false){for(const t of tasks)this.store.put({id:t.taskId,tenant:t.tenant,...(title?{title}:{}),deleted});}
+ attachJob(task:StoredTask,jobId:string){const old=this.store.get(task.taskId);this.store.put({...old,id:task.taskId,tenant:task.tenant,jobId});}
+ update(tasks:readonly StoredTask[],title?:string,deleted=false){for(const t of tasks)this.store.put({...this.store.get(t.taskId),id:t.taskId,tenant:t.tenant,...(title?{title}:{}),deleted});}
 }
 export function createManagementHandler(d:{authenticate:(r:IncomingMessage)=>Promise<Principal|undefined>;root:string;presentation:TaskPresentation;listTasks:(t:TenantContext)=>readonly StoredTask[];skills:FileJsonStore<StoredSkill>;agents:FileJsonStore<StoredAgent>;jobs:FileJobStore;cancel:(id:string)=>Promise<unknown>}){
  return async(req:IncomingMessage,res:ServerResponse)=>{
