@@ -38,13 +38,20 @@ describe('本机隔离配置', () => {
     expect(argv[rootIndex - 1]).toBe('--ro-bind');
     expect(argv).toContain('--share-net');
   });
-  it('Seatbelt 默认拒绝文件访问，授权路径正确转义，保护路径额外拒绝', () => {
+  it('Seatbelt 放行进程初始化，仅开放授权根写入并拒绝保护路径', () => {
     const cfg = config({ roots: ['/tmp/space "quoted"'], protectedPaths: ['/tmp/private'], mode: 'seatbelt' });
     const profile = seatbeltProfile(cfg);
-    expect(profile).toContain('(deny default)');
+    expect(profile).toContain('(allow default)');
+    expect(profile).not.toContain('(deny default)');
+    expect(profile).toContain('(deny file-write* (subpath "/"))');
     expect(profile).toContain('(deny network*)');
     expect(profile).toContain(JSON.stringify(cfg.roots[0]));
     expect(profile).toContain('(deny file-read* file-write* (subpath "/tmp/private"))');
+    expect(profile.indexOf('(deny file-write*')).toBeLessThan(profile.indexOf('(allow file-write* (subpath'));
+    expect(profile.indexOf('(allow file-write* (subpath')).toBeLessThan(profile.indexOf('(deny file-read* file-write*'));
+    expect(profile).toContain('(literal "/dev/tty")');
+    expect(profile).toContain('(literal "/dev/stderr")');
+    expect(seatbeltProfile({ ...cfg, network: true })).toContain('(allow network*)');
     expect(seatbeltProfile({ ...cfg, level: 'readonly' })).not.toContain('(allow file-write* (subpath');
   });
   it('环境完全独立于宿主凭证与启动脚本变量', () => {
