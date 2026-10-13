@@ -30,3 +30,12 @@ it("异步授权落盘期间取消，不会恢复工具执行", async () => {
  await c.cancel(); hold.resolve(); await approval;
  expect(await a.decision).toBe(false); expect(c.list()[0]?.status).toBe("rejected");
 });
+
+it('本机会话授权先持久化再放行，不能授权高危或普通工具',async()=>{
+ const stored:any[]=[];const order:string[]=[];const c=new Confirmations('task-local',{tenantId:'t',workspaceId:'w',userId:'u'},a=>{stored.push(a);order.push(a.status);});
+ const meta={command:'ls',cwd:'/work',roots:['/work'],network:false,confined:true,capabilities:['read'],highRisk:false,sessionAllowed:true,maxTtlMinutes:30,policyHash:'p'};
+ const p=await c.request('call','local_shell',{command:'ls'},'确认',meta);
+ await c.approve(p.action.actionId,{scope:'session',ttlMinutes:5},async()=>{order.push('grant');});expect(await p.decision).toBe(true);expect(order).toEqual(['pending','approved','grant']);expect(stored.at(-1).grant.scope).toBe('session');
+ const q=await c.request('q','local_shell',{command:'curl'},'高危',{...meta,highRisk:true});await expect(c.approve(q.action.actionId,{scope:'session'},async()=>{})).rejects.toThrow('不支持');await c.cancel();expect(await q.decision).toBe(false);
+});
+it('授权持久化失败不产生会话放权',async()=>{let grants=0;const c=new Confirmations('task-local',{tenantId:'t',workspaceId:'w',userId:'u'},a=>{if(a.status==='approved')throw Error('save failed');});const p=await c.request('c','local_shell',{command:'ls'},'确认',{command:'ls',cwd:'/work',roots:['/work'],network:false,confined:true,capabilities:['read'],highRisk:false,sessionAllowed:true,maxTtlMinutes:30,policyHash:'p'});await expect(c.approve(p.action.actionId,{scope:'session'},async()=>{grants++;})).rejects.toThrow();expect(grants).toBe(0);expect(await p.decision).toBe(false);});

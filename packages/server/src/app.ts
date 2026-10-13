@@ -106,7 +106,7 @@ export interface AppDeps {
 		name: string,
 	) => string | undefined;
 	/** 用户确认高危动作后继续。 */
-	readonly confirmTask?: (tenant: TenantContext, taskId: string, actionId?: string) => Promise<void>;
+	readonly confirmTask?: (tenant: TenantContext, taskId: string, actionId?: string,options?:import("@tao/core").ConfirmationOptions) => Promise<void>;
 	/** 用户拒绝高危动作（取消任务）。 */
 	readonly rejectTask?: (tenant: TenantContext, taskId: string, reason: string, actionId?: string) => Promise<void>;
 	/** 取某任务的事件历史，供 SSE 重连补发。 */
@@ -992,7 +992,7 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 				sendError(res, 400, body.reason);
 				return;
 			}
-			const payload = body.value as { text?: unknown; reason?: unknown; actionId?: unknown };
+			const payload = body.value as { text?: unknown; reason?: unknown; actionId?: unknown; scope?:unknown;ttlMinutes?:unknown };
 			if (payload.actionId !== undefined && (typeof payload.actionId !== "string" || payload.actionId.trim() === "")) { sendError(res, 400, "actionId 无效"); return; }
 
 			try {
@@ -1027,7 +1027,9 @@ export function createApp(deps: AppDeps, options: AppOptions = {}) {
 						sendError(res, 501, "当前部署未启用动作确认");
 						return;
 					}
-					await deps.confirmTask(tenant, taskId, payload.actionId as string | undefined);
+					if(payload.scope!==undefined&&!(["once","session"] as unknown[]).includes(payload.scope)){sendError(res,400,"确认范围无效");return;}
+                    if(payload.ttlMinutes!==undefined&&(!Number.isInteger(payload.ttlMinutes)||Number(payload.ttlMinutes)<1||Number(payload.ttlMinutes)>480)){sendError(res,400,"确认时限无效");return;}
+                    await deps.confirmTask(tenant, taskId, payload.actionId as string | undefined,{...(payload.scope?{scope:payload.scope as "once"|"session"}:{}),...(payload.ttlMinutes?{ttlMinutes:Number(payload.ttlMinutes)}:{})});
 					sendJson(res, 200, { status: "confirmed" });
 					return;
 				}

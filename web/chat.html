@@ -553,7 +553,7 @@
 	// generation：页面/任务代次，每次重置 +1；旧代次发起的上传即使晚完成也作废，
 	// 不得再写入新代次的 pending，杜绝跨任务污染。
 	var generation = 0,toolInputs=Object.create(null),capabilities={};
-    App.api("GET","/api/capabilities").then(function(r){if(r.ok)capabilities=r.data;});
+    App.api("GET","/api/capabilities").then(function(r){if(r.ok){capabilities=r.data;mountLocalControlEntry();}}).catch(function(){});
     var drafts=Object.create(null),currentDraft="new";
     function saveDraft(){drafts[currentDraft]=$($("#landing").classList.contains("hidden")?"#sInput":"#lInput").value;}
     function selectDraft(key){currentDraft=key;$('#sInput').value=$('#lInput').value=drafts[key]||'';}
@@ -1361,35 +1361,64 @@
         catch(e){toast(e.message);button.disabled=false;}
       });host.append(button);
     }
+	function mountLocalControlEntry(){
+        var local=capabilities.localControl;
+        document.querySelectorAll('[data-local-control-entry]').forEach(function(n){n.remove();});
+        if(!local||local.enabled!==true)return;
+        document.querySelectorAll('.composer-bar .bar-left').forEach(function(parent){
+            var entry=document.createElement('button');entry.type='button';entry.className='btn-2';entry.dataset.localControlEntry='true';entry.textContent='本机处理';
+            entry.title='在服务所在电脑的授权目录内处理文件或运行脚本';
+            entry.addEventListener('click',async function(){
+                if(state.running||state.booting){toast('请等待当前任务结束');return;}
+                if(local.confined===false){toast('当前为弱隔离环境，本机处理暂不可用');return;}
+                var yes=await App.Dialog.confirm({title:'本机文件与脚本处理',description:'命令会在运行 Tao Agent 的电脑上真实执行。请核对每条命令，操作范围由管理员配置和你的确认共同决定。授权目录：'+(local.roots||[]).join('、'),confirmText:'填写处理任务'});
+                if(!yes)return;
+                var input=$($('#landing').classList.contains('hidden')?'#sInput':'#lInput');
+                input.value=(input.value.trim()?input.value+'\n':'')+'请在本机授权目录内处理文件：';drafts[currentDraft]=input.value;autosize(input);input.focus();
+            });parent.append(entry);
+            if(local.confined===false){var warning=document.createElement('span');warning.dataset.localControlEntry='true';warning.textContent='弱隔离：本机执行暂不可用';warning.style.color='#c2410c';parent.append(warning);}
+        });
+    }
 	function showConfirm(ev) {
-		var box = document.createElement("div"); box.className = "confirm";
-		box.innerHTML = '<div class="ct">⚠ 需要你确认一个操作</div>' +
-			'<div class="cd"></div>' +
-			'<div class="crow"><button class="btn-primary">确认执行</button>' +
-			'<button class="btn-2">拒绝</button></div>' +
-			'<div class="cerr" style="display:none;margin-top:8px;font-size:12.5px;color:var(--err)"></div>';
-		box.querySelector(".cd").textContent = ev.toolName + (ev.reason ? " · " + ev.reason : "");
-        showToolDetails(box,ev.inputSummary);
-		var btn = box.querySelector(".btn-primary"), no = box.querySelector(".btn-2"),
-			errEl = box.querySelector(".cerr");
-		function failBtn(label, r) {
-			btn.disabled = false; no.disabled = false; errEl.style.display = "block";
-			errEl.textContent = label + "失败：" + ((r && r.data && r.data.error) || "请稍后重试");
-			toast(label + "失败");
-		}
-		btn.addEventListener("click", function () {
-			btn.disabled = true; no.disabled = true;
-			App.api("POST", "/api/tasks/" + (ev.taskId || state.taskId) + "/confirm", ev.actionId ? { actionId: ev.actionId } : {}).then(function (r) {
-				if (r.ok) box.remove(); else failBtn("确认", r);
-			}).catch(function () { failBtn("确认", null); });
-		});
-		no.addEventListener("click", function () {
-			btn.disabled = true; no.disabled = true;
-			App.api("POST", "/api/tasks/" + (ev.taskId || state.taskId) + "/reject", ev.actionId ? { actionId: ev.actionId } : {}).then(function (r) {
-				if (r.ok) box.remove(); else failBtn("拒绝", r);
-			}).catch(function () { failBtn("拒绝", null); });
-		});
-		$("#inner").appendChild(box); scrollDown();
+        var local=ev.localControl,isLocal=ev.toolName==='local_shell'||Boolean(local),targetTask=ev.taskId||state.taskId;
+        var categories=local&&Array.isArray(local.capabilities)?local.capabilities:[];
+        var categoryNames={read:'读取文件',write_in_root:'授权目录内写入',delete:'删除或移动文件',execute_local:'执行本地脚本',network:'联网',install_pkg:'安装软件包',write_outside:'额外授权目录写入',system_maintenance:'系统维护'};
+        var highRisk=Boolean(local&&(local.highRisk===true||local.risk==='high'||categories.some(function(c){return ['network','install_pkg','write_outside','system_maintenance'].includes(c);})));
+        var complete=local&&typeof local.command==='string'&&typeof local.cwd==='string'&&typeof local.network==='boolean';
+        var box=document.createElement('div');box.className='confirm';
+        if(highRisk){box.style.borderColor='#ef4444';box.style.borderWidth='2px';}
+        var title=document.createElement('div');title.className='ct';title.textContent=isLocal?(highRisk?'高危本机操作：请核对授权范围':'本机命令执行确认'):'需要你确认一个操作';
+        var detail=document.createElement('div');detail.className='cd';detail.textContent=(ev.toolName||'操作')+(ev.reason?' · '+ev.reason:'');box.append(title,detail);
+        if(isLocal&&complete){
+            var command=document.createElement('pre');command.textContent=local.command;command.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;font-family:monospace;padding:10px;border:1px solid var(--line);border-radius:6px';command.setAttribute('aria-label','完整命令');
+            var metadata=document.createElement('div');metadata.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px';
+            metadata.textContent='工作目录：'+local.cwd+'\n网络：'+(local.network?'允许联网':'禁止联网')+'\n风险等级：'+(highRisk?'高危':(local.risk||'普通，需确认'))+'\n能力类别：'+categories.map(function(c){return categoryNames[c]||c;}).join('、');box.append(command,metadata);
+            if(highRisk){var warning=document.createElement('p');warning.style.color='var(--err,#b91c1c)';warning.textContent='此操作可能向外发送数据、安装软件或更改额外授权目录。仅允许本次操作，不提供会话批量放行。';box.append(warning);}
+            if(local.confined===false){var weak=document.createElement('p');weak.style.color='#c2410c';weak.textContent='弱隔离：无法保证目录与网络边界，本次操作不可批准。';box.append(weak);}
+        }else if(isLocal){var missing=document.createElement('p');missing.textContent='完整命令或执行边界缺失，无法批准。请拒绝后重新发起任务。';box.append(missing);}else showToolDetails(box,ev.inputSummary);
+        var row=document.createElement('div');row.className='crow';row.style.flexWrap='wrap';
+        var btn=document.createElement('button');btn.className='btn-primary';btn.type='button';btn.textContent=isLocal?'允许一次，在我的电脑上执行':'确认执行';
+        var no=document.createElement('button');no.className='btn-2';no.type='button';no.textContent='拒绝';row.append(btn,no);
+        var errEl=document.createElement('div');errEl.className='cerr';errEl.style.cssText='display:none;margin-top:8px;font-size:12.5px;color:var(--err)';errEl.setAttribute('role','alert');box.append(row,errEl);
+        var ttl=local?Number(local.ttlMinutes===undefined?local.maxTtlMinutes:local.ttlMinutes):0;
+        var sessionAllowed=local&&(local.allowSessionGrant===undefined?local.sessionAllowed===true:local.allowSessionGrant===true);
+        var grant=null,blocked=isLocal&&(!complete||local.confined===false||capabilities.localControl&&capabilities.localControl.enabled!==true);
+        if(isLocal&&complete&&sessionAllowed&&!highRisk&&!blocked&&Number.isInteger(ttl)&&ttl>=5&&ttl<=480){
+            grant=document.createElement('button');grant.type='button';grant.className='btn-2';grant.textContent='本会话允许此类（'+ttl+' 分钟）';grant.title='仅本任务会话有效，到期自动收回；不能超过管理员配置的能力边界';row.append(grant);
+            grant.addEventListener('click',function(){decide('confirm','session');});
+        }
+        function disabled(busy){btn.disabled=busy||blocked;no.disabled=busy;if(grant)grant.disabled=busy||blocked;}
+        function failure(label,message){disabled(false);errEl.style.display='block';errEl.textContent=label+'失败：'+message;toast(label+'失败');}
+        function decide(action,scope){
+            if(action==='confirm'&&blocked)return;
+            if(ev.expiresAt&&Number(ev.expiresAt)<=Date.now()){blocked=true;disabled(false);errEl.style.display='block';errEl.textContent='此操作已过期，请重新发起任务。';return;}
+            disabled(true);var body=ev.actionId?{actionId:ev.actionId}:{};
+            if(action==='confirm'&&isLocal){body.scope=scope||'once';if(scope==='session')body.ttlMinutes=ttl;}
+            var label=action==='confirm'?'确认':'拒绝';
+            App.api('POST','/api/tasks/'+encodeURIComponent(targetTask)+'/'+action,body).then(function(r){if(r.ok)box.remove();else failure(label,(r.data&&r.data.error)||'请稍后重试');}).catch(function(){failure(label,'请稍后重试');});
+        }
+        btn.addEventListener('click',function(){decide('confirm','once');});no.addEventListener('click',function(){decide('reject');});disabled(false);
+        $('#inner').appendChild(box);scrollDown();
 	}
 
 	function addArtifact(ev) {

@@ -3350,6 +3350,19 @@
                   },
                   "actionId": {
                     "type": "string"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "once",
+                      "session"
+                    ]
+                  },
+                  "ttlMinutes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 480,
+                    "description": "不得超过管理员配置；高危和非本机工具不接受会话授权"
                   }
                 }
               }
@@ -8534,6 +8547,44 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/control/local-control/preflight": {
+      "post": {
+        "summary": "部署管理员预检本机隔离与授权目录，不启用能力",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedRevision": {
+                    "type": "integer"
+                  },
+                  "values": {
+                    "type": "object",
+                    "description": "仅LOCAL_CONTROL_*配置，仍经服务端权限与范围校验"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "返回ok/confined/checks/message，失败不会降级裸Shell"
+          },
+          "400": {
+            "description": "本机配置不满足要求"
+          },
+          "403": {
+            "description": "无部署权限"
+          },
+          "409": {
+            "description": "配置版本变化"
           }
         }
       }

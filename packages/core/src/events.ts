@@ -51,6 +51,7 @@ export interface TaskStepEvent extends TaskEventBase {
 
 /** 工具调用的权限决策 —— 每一次拒绝都必须可审计。 */
 export interface TaskToolDecisionEvent extends TaskEventBase {
+ readonly localControl?:import("./runner.ts").LocalControlConfirmation;
 	readonly type: "tool_decision";
     readonly toolCallId?: string;
     readonly inputSummary?: string;

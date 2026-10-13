@@ -88,6 +88,7 @@ export interface SubmitOptions {
  readonly modelId?: string;
  readonly images?: RunnerSpec["images"];
  readonly extensions?: RunnerSpec["extensions"];
+ readonly onConfirmationGrant?:RunnerSpec["onConfirmationGrant"];
 	readonly prompt: string;
 	readonly systemPrompt: string;
 	readonly tools: RunnerSpec["tools"];
@@ -344,6 +345,7 @@ export class TaskOrchestrator {
                 ...(options.modelId===undefined?{}:{modelId:options.modelId}),
                 ...(options.images===undefined?{}:{images:options.images}),
                 ...(options.extensions===undefined?{}:{extensions:options.extensions}),
+                ...(options.onConfirmationGrant?{onConfirmationGrant:options.onConfirmationGrant}:{}),
 				...(options.history === undefined ? {} : { history: options.history }),
                 ...(options.inputReferences === undefined ? {} : { inputReferences: options.inputReferences }),
 				...(options.skills === undefined ? {} : { skills: options.skills }),
@@ -469,7 +471,7 @@ export class TaskOrchestrator {
 	}
 
 	/** 用户确认高危动作后继续执行。 */
-	async confirm(taskId: string, actionId?: string): Promise<TaskRecord> {
+	async confirm(taskId: string, actionId?: string,options?:import("@tao/core").ConfirmationOptions): Promise<TaskRecord> {
 		const runner = this.runners.get(taskId);
 		if (!runner?.confirmAction) throw new Error("执行上下文不可恢复，请重新提交任务");
 		const actions = runner.listActions?.() ?? [];
@@ -479,7 +481,7 @@ export class TaskOrchestrator {
 		if (chosen.status === "approved" || chosen.status === "executed") return this.tasks.get(taskId) as TaskRecord;
 		if (chosen.status !== "pending" || chosen.expiresAt <= this.now()) throw new Error("动作已过期或不再等待确认");
 		await this.transition(taskId, TaskStatus.Running);
-		try { await runner.confirmAction(chosen.actionId); }
+		try { await runner.confirmAction(chosen.actionId,options); }
 		catch (error) { await this.transition(taskId, TaskStatus.Failed, "授权失败，动作未执行"); throw error; }
 		return this.tasks.get(taskId) as TaskRecord;
 	}

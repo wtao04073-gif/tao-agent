@@ -18,6 +18,7 @@ export interface SettingsField {
 	integer?: boolean;
 	options?: string[];
 	readOnly?: boolean;
+	danger?: boolean;
 	effect: "new-task" | "refresh" | "restart" | "reindex";
 }
 
@@ -96,6 +97,24 @@ for (const [key,label,initial,min,max] of [
 ] as const) field(key,label,"sandbox","number",{default:initial,min,max,integer:true});
 for(const key of ["SANDBOX_LOCAL_RUNTIME","SANDBOX_LOCAL_BROWSERS","SANDBOX_LOCAL_UID","SANDBOX_CUBE_EGRESS_GUARD"]) field(key,"本地运行时部署参数","deployment","string",{readOnly:true,effect:"restart"});
 
+field("LOCAL_CONTROL_ENABLED", "启用本机命令能力", "localcontrol", "boolean", { default: false, danger: true });
+field("LOCAL_CONTROL_SINGLE_USER_ACK", "确认仅单机单用户使用，不用于对外服务", "localcontrol", "boolean", { default: false });
+field("LOCAL_CONTROL_LEVEL", "权限档位", "localcontrol", "string", { default: "off", options: ["off", "readonly", "workspace", "extended", "full"] });
+field("LOCAL_CONTROL_ROOTS", "授权目录（第一个为主工作区）", "localcontrol", "string", { default: "~/tao-data/local", effect: "restart" });
+field("LOCAL_CONTROL_NETWORK", "允许沙箱内联网", "localcontrol", "boolean", { default: false, danger: true });
+field("LOCAL_CONTROL_ALLOW_INSTALL", "允许安装软件包", "localcontrol", "boolean", { default: false, danger: true });
+field("LOCAL_CONTROL_ALLOW_DELETE", "允许删除或移动授权目录内文件", "localcontrol", "boolean", { default: true });
+field("LOCAL_CONTROL_ALLOW_WRITE_OUTSIDE", "允许使用额外授权目录写入（仍禁止未授权目录）", "localcontrol", "boolean", { default: false, danger: true });
+field("LOCAL_CONTROL_CONFIRM_MODE", "命令确认策略", "localcontrol", "string", { default: "always", options: ["always", "risk", "session", "never"], danger: true });
+field("LOCAL_CONTROL_SESSION_GRANT_TTL_MIN", "本会话授权有效期（分钟）", "localcontrol", "number", { default: 30, min: 5, max: 480, integer: true });
+field("LOCAL_CONTROL_TIMEOUT_SEC", "单命令超时（秒）", "localcontrol", "number", { default: 60, min: 1, max: 1800, integer: true });
+field("LOCAL_CONTROL_MAX_OUTPUT_KB", "命令输出上限（KB）", "localcontrol", "number", { default: 64, min: 1, max: 4096, integer: true });
+field("LOCAL_CONTROL_MODE", "隔离方式", "localcontrol", "string", { default: "auto", options: ["auto", "seatbelt", "bwrap", "advisory"], effect: "restart", danger: true });
+field("LOCAL_CONTROL_ALLOW_PATTERNS", "额外允许的命令模式（正则，每行一条；不能绕过硬底线）", "localcontrol", "string", { default: "", danger: true });
+field("LOCAL_CONTROL_DENY_PATTERNS", "额外禁止的命令模式（正则，每行一条）", "localcontrol", "string", { default: "" });
+field("LOCAL_CONTROL_DANGER_ACK", "确认理解高危能力可能修改文件、联网或安装软件", "localcontrol", "boolean", { default: false });
+field("LOCAL_CONTROL_FULL_DISCLAIMER", "L4 免责声明：请输入「我已知晓风险」", "localcontrol", "string", { default: "" });
+
 field("MODERATION_ENABLED","启用文本审核（审核通过后显示回答）","security","boolean",{default:false});
 field("MODERATION_API_URL","文本审核兼容API基础地址","security");
 field("MODERATION_API_KEY","文本审核密钥","security","string",{secret:true});
@@ -125,7 +144,7 @@ field("WORKSPACE_DIR", "存储位置（部署管理）", "deployment", "string",
 const byKey = new Map(fields.map((entry) => [entry.key, entry]));
 const groups = [
 	["model", "模型"], ["limits", "限流与配额"], ["knowledge", "知识库"], ["search", "联网搜索"],
-	["extensions", "扩展与子智能体"], ["media","多模态"], ["security","工具与安全策略"], ["sandbox", "沙箱执行环境"], ["observability", "观测"], ["evaluation", "评测"], ["branding", "品牌"], ["deployment", "部署"],
+	["extensions", "扩展与子智能体"], ["media","多模态"], ["security","工具与安全策略"], ["sandbox", "沙箱执行环境"], ["localcontrol", "本机控制"], ["observability", "观测"], ["evaluation", "评测"], ["branding", "品牌"], ["deployment", "部署"],
 ].map(([id, label]) => ({ id: id!, label: label! }));
 
 export class AdminError extends Error {

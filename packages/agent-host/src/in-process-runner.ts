@@ -455,7 +455,7 @@ class InProcessRunner implements Runner {
 	}
 
 	listActions() { return this.confirmations.list(); }
-	async confirmAction(actionId?: string): Promise<void> { await this.confirmations.approve(actionId); }
+	async confirmAction(actionId?: string,options?:import("@tao/core").ConfirmationOptions): Promise<void> { await this.confirmations.approve(actionId,options,this.spec.onConfirmationGrant); }
 
 	async abort(reason: string): Promise<void> {
 		this.assertOpen();
@@ -508,9 +508,10 @@ function installGate(
   const request = { toolName: event.toolName, args, tenant: spec.tenant, taskId: spec.taskId };
   let decision = await gate(request);
   if (decision.kind === "confirm") {
-   const pending = await runner.confirmations.request(event.toolCallId, event.toolName, args, decision.reason);
+   const pending = await runner.confirmations.request(event.toolCallId, event.toolName, args, decision.reason,decision.localControl);
    await runner.emit(base => ({ ...base, type: "tool_decision", toolName: event.toolName,
     decision: "await_confirm", reason: decision.kind === "confirm" ? decision.reason : "需要确认",
+    ...(pending.action.localControl?{localControl:pending.action.localControl}:{}),
     toolCallId:event.toolCallId, inputSummary:toolSummary(args), actionId: pending.action.actionId, expiresAt: pending.action.expiresAt }));
    if (!await pending.decision) {
     runner.noteRunFailure("动作被拒绝、过期或取消，未执行");

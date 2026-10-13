@@ -29,6 +29,7 @@ export interface ToolDescriptor {
 }
 
 export const TOOL_CATALOG: readonly ToolDescriptor[] = [
+ {name:"local_shell",label:"本机命令执行",status:ToolStatus.Available,access:"write"},
  ...['edit_spreadsheet','write_presentation','merge_pdf','fill_document_template','generate_image','transcribe_audio','run_skill_script','sandbox_browser_session'].map(name=>({name,label:name,status:ToolStatus.Available,access:'write' as const})),
  ...['read_file','sandbox_ocr','read_webpage'].map(name=>({name,label:name,status:ToolStatus.Available,access:'read' as const})),
  {name:"sandbox_execute",label:"沙箱代码执行",status:ToolStatus.Available,access:"write"},

@@ -12,7 +12,14 @@ import type { ExtensionUI, ExtensionRuntimeHooks } from "./extension.ts";
 import type { TaskEvent } from "./events.ts";
 import type { TenantContext } from "./tenant.ts";
 
+export interface LocalControlConfirmation {
+ readonly command:string;readonly cwd:string;readonly roots:readonly string[];readonly network:boolean;readonly confined:boolean;readonly capabilities:readonly string[];readonly highRisk:boolean;readonly sessionAllowed:boolean;readonly maxTtlMinutes:number;readonly policyHash:string;
+}
+export interface ConfirmationOptions {readonly scope?:"once"|"session";readonly ttlMinutes?:number;}
+
 export interface PendingAction {
+ readonly localControl?:LocalControlConfirmation;
+ readonly grant?:{scope:"session";capabilities:readonly string[];expiresAt:number};
 	readonly actionId: string;
 	readonly taskId: string;
 	readonly tenant: TenantContext;
@@ -36,7 +43,7 @@ export type ToolDecision =
 	/** 拒绝。reason 会作为工具错误结果反馈给模型，也会展示给用户。 */
 	| { readonly kind: "block"; readonly reason: string }
 	/** 需用户确认。任务转入 AWAIT_CONFIRM，保留原调用等待授权。 */
-	| { readonly kind: "confirm"; readonly reason: string };
+	| { readonly kind: "confirm"; readonly reason: string; readonly localControl?:LocalControlConfirmation };
 
 /**
  * 权限门。
@@ -97,6 +104,7 @@ export interface PlatformTool {
 /** 创建一个会话所需的一切。 */
 export interface RunnerSpec {
  readonly extensions?: ExtensionRuntimeHooks;
+ readonly onConfirmationGrant?:(action:PendingAction,options:ConfirmationOptions)=>Promise<void>;
 	readonly tenant: TenantContext;
 	readonly taskId: string;
 	/** 会话标识。**一人一会话** —— 见下方 createRunner 的说明。 */
@@ -182,7 +190,7 @@ export interface Runner {
 	/** 中止执行。这是唯一能取消进行中工具的手段。 */
 	abort(reason: string): Promise<void>;
 	/** 继续原来被挂起的工具调用，不重新发起模型请求。 */
-	confirmAction?(actionId?: string): Promise<void>;
+	confirmAction?(actionId?: string,options?:ConfirmationOptions): Promise<void>;
 	listActions?(): readonly PendingAction[];
 
 	/** 订阅事件。返回取消订阅的函数。 */

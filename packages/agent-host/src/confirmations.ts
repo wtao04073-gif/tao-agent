@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { PendingAction, StoredAction, TenantContext } from "@tao/core";
+import type { PendingAction, StoredAction, TenantContext, LocalControlConfirmation, ConfirmationOptions } from "@tao/core";
 export class Confirmations {
     private cancelled = false;
+    private readonly approving=new Set<string>();
     private readonly records = new Map<string, StoredAction>();
     private readonly waiting = new Map<string, {
         settle: (ok: boolean) => void;
@@ -22,11 +23,11 @@ export class Confirmations {
     list(): PendingAction[] {
         return [...this.records.values()].map(({ arguments: _args, ...item }) => ({ ...item }));
     }
-    async request(toolCallId: string, toolName: string, args: unknown, reason: string) {
+    async request(toolCallId: string, toolName: string, args: unknown, reason: string, localControl?:LocalControlConfirmation) {
         const action: StoredAction = {
             actionId: randomUUID(), taskId: this.taskId, tenant: this.tenant, toolCallId, toolName,
             arguments: structuredClone(args), argsHash: createHash("sha256").update(JSON.stringify(args)).digest("hex"),
-            reason, createdAt: this.now(), expiresAt: this.now() + this.timeoutMs, status: "pending",
+            reason, ...(localControl?{localControl}:{}), createdAt: this.now(), expiresAt: this.now() + this.timeoutMs, status: "pending",
         };
         await this.save(action);
         this.records.set(action.actionId, action);
@@ -48,7 +49,7 @@ export class Confirmations {
         });
         return { action, decision };
     }
-    async approve(actionId?: string): Promise<void> {
+    async approve(actionId?: string, options:ConfirmationOptions={}, grant?:(action:PendingAction,options:ConfirmationOptions)=>Promise<void>): Promise<void> {
         const candidates = this.list().filter((a) => a.status === "pending");
         const id = actionId ?? (candidates.length === 1 ? candidates[0]?.actionId : this.records.size === 1 ? this.list()[0]?.actionId : undefined);
         const action = id === undefined ? undefined : this.records.get(id);
@@ -58,9 +59,21 @@ export class Confirmations {
             return;
         if (action.status !== "pending" || action.expiresAt <= this.now())
             throw new Error("动作已过期或不再等待确认");
+        if(this.approving.has(action.actionId))throw new Error("授权处理中");
+        if(options.scope==="session") {
+            if(!action.localControl?.sessionAllowed||action.localControl.highRisk||!grant)throw new Error("此动作不支持会话授权");
+            const ttl=options.ttlMinutes??action.localControl.maxTtlMinutes;
+            if(!Number.isInteger(ttl)||ttl<1||ttl>action.localControl.maxTtlMinutes)throw new Error("会话授权时限无效");
+            this.approving.add(action.actionId);
+            const grantData={scope:"session" as const,capabilities:action.localControl.capabilities,expiresAt:this.now()+ttl*60000};
+            this.records.set(action.actionId,{...action,grant:grantData});
+            try { await this.finish(action.actionId,"approved",()=>grant(action,{scope:"session",ttlMinutes:ttl})); }
+            finally{this.approving.delete(action.actionId);}
+            return;
+        }
         await this.finish(action.actionId, "approved");
     }
-    async finish(id: string, status: StoredAction["status"]): Promise<void> {
+    async finish(id: string, status: StoredAction["status"], beforeSettle?:()=>Promise<void>): Promise<void> {
         const action = this.records.get(id);
         if (!action)
             return;
@@ -69,6 +82,7 @@ export class Confirmations {
         this.records.set(id, updated);
         try {
             await this.save(updated);
+            if(this.records.get(id)===updated&&!this.cancelled)await beforeSettle?.();
         }
         catch (error) {
             this.records.set(id, { ...updated, status: "failed" });
