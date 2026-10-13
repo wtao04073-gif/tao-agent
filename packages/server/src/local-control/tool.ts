@@ -221,10 +221,20 @@ export async function preflightLocalControl(cfg: LocalControlConfig): Promise<{ 
     assertRuntime(cfg);
     temporary = await mkdtemp(join(tmpdir(), 'tao-local-probe-'));
     await writeFile(join(temporary, 'private'), 'probe', { mode: 0o600 });
+    const protectedProbe = join(temporary, 'protected');
+    mkdirSync(protectedProbe, { mode: 0o700 });
+    await writeFile(join(protectedProbe, 'private'), 'probe', { mode: 0o600 });
+    const probeConfig = { ...cfg, protectedPaths: [...cfg.protectedPaths, await realpath(protectedProbe)] };
     await new Promise<void>((resolveListen, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolveListen()); });
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('网络边界预检无法启动');
-    const tests = [`test ! -r ${quote(join(temporary, 'private'))} || exit 40`, `if ( : > ${quote(join(temporary, 'escape'))} ) 2>/dev/null; then exit 41; fi`];
+    // Seatbelt 按 protectedPaths 限制读取；bwrap 仍不暴露授权根外的普通文件。
+    const tests = [
+      cfg.mode === 'seatbelt' ? `test -r ${quote(join(temporary, 'private'))} || exit 40` : `test ! -r ${quote(join(temporary, 'private'))} || exit 40`,
+      `if ( : > ${quote(join(temporary, 'escape'))} ) 2>/dev/null; then exit 41; fi`,
+      `if cat ${quote(join(protectedProbe, 'private'))} >/dev/null 2>&1; then exit 44; fi`,
+      `if ( : > ${quote(join(protectedProbe, 'write'))} ) 2>/dev/null; then exit 47; fi`,
+    ];
     for (const root of cfg.roots) {
       const probe = await mkdtemp(join(root, '.tao-probe-')); probeDirs.push(probe);
       tests.push(cfg.level === 'readonly' ? `if ( : > ${quote(join(probe, 'write'))} ) 2>/dev/null; then exit 42; fi` : `: > ${quote(join(probe, 'write'))} || exit 43`);
@@ -233,9 +243,9 @@ export async function preflightLocalControl(cfg: LocalControlConfig): Promise<{ 
     const connection = `( : > /dev/tcp/127.0.0.1/${address.port} ) 2>/dev/null`;
     tests.push(cfg.network ? `${connection} || exit 45` : `if ${connection}; then exit 46; fi`);
     const root = cfg.roots[0]!;
-    const result = await runLocalProcess(buildLocalRunner({ cfg, cwd: root, home: join(root, 'home'), tmp: join(root, 'tmp'), command: tests.join('\n') + '\nexit 0' }), { cwd: root, env: scrubLocalEnv(join(root, 'home'), join(root, 'tmp')), timeoutMs: 5000, maxBytes: 4096, signal: new AbortController().signal, report: () => {} });
+    const result = await runLocalProcess(buildLocalRunner({ cfg: probeConfig, cwd: root, home: join(root, 'home'), tmp: join(root, 'tmp'), command: tests.join('\n') + '\nexit 0' }), { cwd: root, env: scrubLocalEnv(join(root, 'home'), join(root, 'tmp')), timeoutMs: 5000, maxBytes: 4096, signal: new AbortController().signal, report: () => {} });
     if (result.code !== 0 || result.timedOut) throw new Error('实际隔离执行或目录/网络边界预检未通过');
-    checks.push('隔离进程可运行', cfg.level === 'readonly' ? '授权目录只读' : '授权目录可写', '授权范围外不可读写', cfg.network ? '联网已开放' : '网络隔离生效');
+    checks.push('隔离进程可运行', cfg.level === 'readonly' ? '授权目录只读' : '授权目录可写', cfg.mode === 'seatbelt' ? '授权范围外不可写；普通文件读取开放' : '授权范围外不可读写', '受保护路径不可读写', cfg.network ? '联网已开放' : '网络隔离生效');
     return { ok: true, confined: true, message: '本机隔离预检通过', checks };
   } catch (error) {
     return { ok: false, confined: false, message: error instanceof Error && !('code' in error) ? error.message : '本机隔离预检失败', checks };

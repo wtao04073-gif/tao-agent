@@ -10,7 +10,6 @@ export interface LocalRunnerInput {
 }
 
 const SYSTEM_READS = ['/usr/bin', '/usr/sbin', '/usr/lib', '/usr/lib64', '/usr/share', '/usr/local/bin', '/usr/local/lib', '/opt/homebrew/bin', '/opt/homebrew/lib', '/opt/homebrew/opt', '/opt/homebrew/Cellar', '/bin', '/sbin', '/lib', '/lib64'];
-const MAC_READS = ['/System', '/Library/Apple', '/private/var/db/dyld'];
 const schemeString = (value: string) => JSON.stringify(value);
 
 /** No inherited credentials, shell hooks, search paths, or runtime loader options. */
@@ -23,16 +22,16 @@ export function scrubLocalEnv(home: string, tmp: string): NodeJS.ProcessEnv {
 }
 
 export function seatbeltProfile(cfg: LocalControlConfig): string {
-  const read = [...SYSTEM_READS, ...MAC_READS, ...cfg.roots];
+  const writableRoots = cfg.level === 'readonly' ? [] : cfg.roots;
   return [
-    '(version 1)', '(deny default)',
-    '(allow process-exec process-fork)', '(allow sysctl-read)',
-    '(allow signal (target same-sandbox))',
-    ...read.map(path => `(allow file-read* (subpath ${schemeString(path)}))`),
-    '(allow file-read* (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random") (literal "/private/etc/localtime"))',
-    '(allow file-write* (literal "/dev/null"))',
-    ...(cfg.level === 'readonly' ? [] : cfg.roots.map(path => `(allow file-write* (subpath ${schemeString(path)}))`)),
-    ...(cfg.network ? ['(allow network*)', '(allow file-read* (literal "/private/etc/resolv.conf") (subpath "/private/etc/ssl"))'] : ['(deny network*)']),
+    '(version 1)',
+    // macOS 15 的进程初始化依赖 Mach/IPC；默认放行启动，再限制写入、网络和受保护路径。
+    // 普通文件读取默认开放，凭据、源码和产品数据由 protectedPaths 显式拒绝。
+    '(allow default)',
+    cfg.network ? '(allow network*)' : '(deny network*)',
+    '(deny file-write* (subpath "/"))',
+    ...writableRoots.map(path => `(allow file-write* (subpath ${schemeString(path)}))`),
+    '(allow file-write* (literal "/dev/null") (literal "/dev/tty") (literal "/dev/stderr"))',
     ...cfg.protectedPaths.map(path => `(deny file-read* file-write* (subpath ${schemeString(path)}))`),
   ].join('\n');
 }
