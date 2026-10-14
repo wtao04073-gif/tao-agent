@@ -106,6 +106,8 @@ field("LOCAL_CONTROL_ALLOW_INSTALL", "允许安装软件包", "localcontrol", "b
 field("LOCAL_CONTROL_ALLOW_DELETE", "允许删除或移动授权目录内文件", "localcontrol", "boolean", { default: true });
 field("LOCAL_CONTROL_ALLOW_WRITE_OUTSIDE", "允许使用额外授权目录写入（仍禁止未授权目录）", "localcontrol", "boolean", { default: false, danger: true });
 field("LOCAL_CONTROL_CONFIRM_MODE", "命令确认策略", "localcontrol", "string", { default: "always", options: ["always", "risk", "session", "never"], danger: true });
+field("LOCAL_CONTROL_TRUSTED_AUTO_RUN", "可信模式：普通本机操作免确认（仅单机单用户 L2+）", "localcontrol", "boolean", { default: false, danger: true });
+field("LOCAL_CONTROL_TRUSTED_AUTO_RUN_ACK", "我理解可信模式可自动修改授权目录；高危操作仍逐次确认", "localcontrol", "boolean", { default: false });
 field("LOCAL_CONTROL_SESSION_GRANT_TTL_MIN", "本会话授权有效期（分钟）", "localcontrol", "number", { default: 30, min: 5, max: 480, integer: true });
 field("LOCAL_CONTROL_TIMEOUT_SEC", "单命令超时（秒）", "localcontrol", "number", { default: 60, min: 1, max: 1800, integer: true });
 field("LOCAL_CONTROL_MAX_OUTPUT_KB", "命令输出上限（KB）", "localcontrol", "number", { default: 64, min: 1, max: 4096, integer: true });

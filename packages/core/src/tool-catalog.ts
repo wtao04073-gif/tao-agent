@@ -29,6 +29,8 @@ export interface ToolDescriptor {
 }
 
 export const TOOL_CATALOG: readonly ToolDescriptor[] = [
+ {name:"stage_to_local",label:"复制任务附件到本机",status:ToolStatus.Available,access:"write"},
+ {name:"collect_from_local",label:"收集本机交付物",status:ToolStatus.Available,access:"write"},
  {name:"local_shell",label:"本机命令执行",status:ToolStatus.Available,access:"write"},
  ...['edit_spreadsheet','write_presentation','merge_pdf','fill_document_template','generate_image','transcribe_audio','run_skill_script','sandbox_browser_session'].map(name=>({name,label:name,status:ToolStatus.Available,access:'write' as const})),
  ...['read_file','sandbox_ocr','read_webpage'].map(name=>({name,label:name,status:ToolStatus.Available,access:'read' as const})),

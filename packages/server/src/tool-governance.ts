@@ -22,7 +22,7 @@ export type GovernanceRequest=Parameters<PermissionGate>[0];
 const toolName=/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/;
 const control=/[\x00-\x1f\x7f]/;
 const pathKey=/^(?:path|paths|cwd|file|files|fileName|outputName|inputFiles|outputFiles|[A-Za-z]+Paths?)$/;
-const writeTools=new Set(['write_document','write_docx','write_spreadsheet','write_table','write_presentation','edit_document','edit_spreadsheet','reconcile_tables','fill_document_template','merge_pdf','generate_image','export_artifact','sandbox_export','sandbox_execute','run_skill_script']);
+const writeTools=new Set(['stage_to_local','collect_from_local','write_document','write_docx','write_spreadsheet','write_table','write_presentation','edit_document','edit_spreadsheet','reconcile_tables','fill_document_template','merge_pdf','generate_image','export_artifact','sandbox_export','sandbox_execute','run_skill_script']);
 
 function relativePrefix(value:unknown):string {
  if(typeof value!=='string'||value.length>512||control.test(value)||value.includes('\\')||isAbsolute(value)||/^[A-Za-z]:/.test(value)||value.includes(':'))throw new AdminError(400,'工具规则 pathPrefix 必须是工作区内的相对路径');

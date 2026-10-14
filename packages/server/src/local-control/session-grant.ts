@@ -12,11 +12,11 @@ export class LocalSessionGrants {
   }
 
   grant(taskId: string, cfg: LocalControlConfig, risk: CommandRisk, ttlMinutes = cfg.sessionGrantTtlMin): number {
-    if (!taskId || cfg.confirmMode !== 'session' || risk.kind === 'block' || risk.highRisk || !sessionEligible(risk.capabilities))
+    if (!taskId || cfg.level === 'off' || cfg.level === 'readonly' || cfg.confirmMode === 'never' || risk.kind === 'block' || risk.highRisk || !sessionEligible(risk.capabilities))
       throw new Error('此命令不允许会话授权');
     const allowed = localCapabilities(cfg);
     if (risk.capabilities.some(c => !allowed[c])) throw new Error('会话授权不能越过管理员能力边界');
-    if (!Number.isFinite(ttlMinutes) || ttlMinutes <= 0) throw new Error('会话授权有效期无效');
+    if (!Number.isInteger(ttlMinutes) || ttlMinutes < 5) throw new Error('会话授权有效期无效');
     const expiresAt = this.now() + Math.min(ttlMinutes, cfg.sessionGrantTtlMin) * 60000;
     const key = this.key(taskId, cfg);
     const entries = this.grants.get(key) ?? new Map<LocalCapability, number>();
@@ -26,7 +26,7 @@ export class LocalSessionGrants {
   }
 
   allows(taskId: string, cfg: LocalControlConfig, risk: CommandRisk): boolean {
-    if (!taskId || cfg.confirmMode !== 'session' || risk.kind === 'block' || risk.highRisk || !sessionEligible(risk.capabilities)) return false;
+    if (!taskId || cfg.level === 'off' || cfg.level === 'readonly' || cfg.confirmMode === 'never' || risk.kind === 'block' || risk.highRisk || !sessionEligible(risk.capabilities)) return false;
     const allowed = localCapabilities(cfg);
     const entries = this.grants.get(this.key(taskId, cfg));
     const now = this.now();

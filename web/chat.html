@@ -539,6 +539,7 @@
 <script src="/assets/workspace.js?v=workspace-nav-2"></script>
 <script src="/assets/chat-interactions.js"></script>
 <script src="/assets/run-display.js"></script>
+<script src="/assets/steps-display.js"></script>
 <script src="/assets/extensions.js"></script>
 <script>
 (function () {
@@ -961,6 +962,7 @@
 	}
 	function renderStepEvent(ev) {
         if (!state.steps) return;
+        if(ev.toolName==='register_chat_task'||ev.visibility==='internal')return;
         // 旧宿主的工具内部进度可能没有步骤编号；作为进展说明展示，不伪造第 0 步。
         if (!Number.isInteger(ev.step) || ev.step < 1) {
             if (ev.detail) state.steps.unscopedDetail = ev.detail;
@@ -972,7 +974,8 @@
         var toolHeader=row.querySelector('.tool-details summary');if(toolHeader&&ev.toolName)toolHeader.textContent=ev.toolName+' · 参数与结果（已脱敏）';
         if (phase === 'started' || phase === 'finished' || phase === 'failed') state.steps.unscopedDetail = '';
         row.dataset.phase = phase;
-        row.querySelector('.t').textContent = ev.step + '. ' + (ev.action || '执行操作');
+        row.querySelector('.t').textContent = ev.action || '执行操作';
+        if(ev.toolName==='local_shell'&&ev.inputSummary){try{var args=JSON.parse(ev.inputSummary);if(args.command)row.querySelector('.t').textContent=args.command.split('\n')[0];}catch(e){}}
         if (ev.detail !== undefined) row.querySelector('.d').textContent = ev.detail;
         var active = phase === 'started' || phase === 'progress';
         row.className = 'step ' + (active ? 'run' : phase === 'failed' ? 'failed' : 'done');
@@ -1043,7 +1046,7 @@
         state.activityStatus = 'QUEUED'; state.activityKind = 'waiting'; state.activityAt = Date.now(); state.streamDelayed = false;
 		bot.appendChild(status); state.statusEl = status;
 		var steps = document.createElement("div");
-		steps.className = "steps";
+		steps.className = "steps collapsed";
 		steps.innerHTML =
 			'<div class="steps-head"><span class="chev">▾</span>' +
 			'<span class="summary">执行步骤</span><span class="state"></span></div>' +
@@ -1176,17 +1179,7 @@
 	/* ---------- 事件 → 步骤/交付物（seq 去重 + 幂等键） ---------- */
 	var activityTimer = null;
 	function ensureStep(ev) {
-		var key = ev.step;
-		var row = state.steps.rows[key];
-		if (!row) {
-			row = document.createElement("div");
-			row.className = "step wait";
-			row.innerHTML = '<div class="sic"><span class="k">◷</span></div>' +
-				'<div class="sact"><div class="t"></div><div class="d"></div></div><div class="sst"></div>';
-			state.steps.body.appendChild(row);
-			state.steps.rows[key] = row; state.steps.order.push(key);
-		}
-		return row;
+		return TaoStepsDisplay.ensure(state.steps,ev);
 	}
 	// 返回当前轮用于承载回答的 <p>（打字机增量与定稿都写这里）。
 	// 当前轮的机器人气泡由 enterSession/ensureRunView 建好，状态行/步骤也在其中；
@@ -1258,11 +1251,7 @@
 	}
     function updateStepSummary() {
         if (!state.steps) return;
-        var rows = Object.values(state.steps.rows), done = rows.filter(function (r) { return r.dataset.phase === 'finished'; }).length;
-        var running = rows.filter(function (r) { return ['started','progress'].includes(r.dataset.phase); }).length;
-        var failed = rows.filter(function (r) { return r.dataset.phase === 'failed'; }).length;
-        state.steps.head.querySelector('.summary').textContent = rows.length
-            ? '已完成 ' + done + ' / ' + rows.length + ' 步' + (running ? ' · ' + running + ' 步进行中' : '') + (failed ? ' · ' + failed + ' 步失败' : '') : '等待执行步骤';
+        TaoStepsDisplay.update(state.steps);
     }
     function updateActivity() {
         if (!state.running || !state.statusEl || !state.steps) return;
@@ -1295,7 +1284,8 @@
         updateStepSummary();
         state.steps.state.textContent = to === 'SUCCEEDED' ? '已完成' : to === 'FAILED' ? '失败' : '已停止';
         if (!state.steps.order.length) state.steps.root.hidden = true;
-        if (to === 'SUCCEEDED') state.steps.root.classList.add('collapsed');
+        if (to === 'SUCCEEDED'&&!Object.values(state.steps.rows).some(function(r){return r.dataset.phase==='failed';})) state.steps.root.classList.add('collapsed');
+        TaoStepsDisplay.update(state.steps,true);
     }
     function syncRegisteredJob(){
         var gen=generation,id=state.taskId;if(!id)return;
@@ -1404,7 +1394,7 @@
         var sessionAllowed=local&&(local.allowSessionGrant===undefined?local.sessionAllowed===true:local.allowSessionGrant===true);
         var grant=null,blocked=isLocal&&(!complete||local.confined===false||capabilities.localControl&&capabilities.localControl.enabled!==true);
         if(isLocal&&complete&&sessionAllowed&&!highRisk&&!blocked&&Number.isInteger(ttl)&&ttl>=5&&ttl<=480){
-            grant=document.createElement('button');grant.type='button';grant.className='btn-2';grant.textContent='本会话允许此类（'+ttl+' 分钟）';grant.title='仅本任务会话有效，到期自动收回；不能超过管理员配置的能力边界';row.append(grant);
+            grant=document.createElement('button');grant.type='button';grant.className='btn-2';grant.textContent='本会话允许此类普通操作（'+ttl+' 分钟）';grant.title='仅本任务会话中的已授权类别有效，到期自动收回；高危操作仍逐次确认';row.append(grant);
             grant.addEventListener('click',function(){decide('confirm','session');});
         }
         function disabled(busy){btn.disabled=busy||blocked;no.disabled=busy;if(grant)grant.disabled=busy||blocked;}
@@ -1415,7 +1405,7 @@
             disabled(true);var body=ev.actionId?{actionId:ev.actionId}:{};
             if(action==='confirm'&&isLocal){body.scope=scope||'once';if(scope==='session')body.ttlMinutes=ttl;}
             var label=action==='confirm'?'确认':'拒绝';
-            App.api('POST','/api/tasks/'+encodeURIComponent(targetTask)+'/'+action,body).then(function(r){if(r.ok)box.remove();else failure(label,(r.data&&r.data.error)||'请稍后重试');}).catch(function(){failure(label,'请稍后重试');});
+            App.api('POST','/api/tasks/'+encodeURIComponent(targetTask)+'/'+action,body).then(function(r){if(r.ok){if(scope==='session')toast('本会话已授权，到期时间：'+new Date(Date.now()+ttl*60000).toLocaleTimeString());box.remove();}else failure(label,(r.data&&r.data.error)||'请稍后重试');}).catch(function(){failure(label,'请稍后重试');});
         }
         btn.addEventListener('click',function(){decide('confirm','once');});no.addEventListener('click',function(){decide('reject');});disabled(false);
         $('#inner').appendChild(box);scrollDown();

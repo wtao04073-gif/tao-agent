@@ -77,7 +77,7 @@ export function localControlConfig(values: Record<string, string | number | bool
     enabled: flag('ENABLED'), singleUser: flag('SINGLE_USER_ACK'),
     level: choice('LEVEL', ['off', 'readonly', 'workspace', 'extended', 'full'] as const, 'off'),
     roots: str('ROOTS', join(home, 'tao-data/local')).split(',').map(x => x.trim()).filter(Boolean).map(x=>x==='~/tao-data/local'?join(home,'tao-data/local'):x),
-    mode, confined: false, os, network: flag('NETWORK'), allowInstall: flag('ALLOW_INSTALL'),
+    mode, confined: false, os, trustedAutoRun: flag('TRUSTED_AUTO_RUN'), network: flag('NETWORK'), allowInstall: flag('ALLOW_INSTALL'),
     allowDelete: flag('ALLOW_DELETE', true), allowWriteOutside: flag('ALLOW_WRITE_OUTSIDE'),
     confirmMode: choice('CONFIRM_MODE', ['always', 'risk', 'session', 'never'] as const, 'always'),
     sessionGrantTtlMin: integer('SESSION_GRANT_TTL_MIN', 30, 5, 480),
@@ -86,12 +86,14 @@ export function localControlConfig(values: Record<string, string | number | bool
     protectedPaths: [env.workspace, env.repository, ...['.ssh', '.aws', '.gnupg', '.config', '.kube'].map(p => join(home, p))].map(p => canonical(resolve(p))),
     policyHash: '',
   };
+  if (cfg.trustedAutoRun && (!cfg.enabled || !cfg.singleUser)) errors.push('可信模式必须启用本机控制并确认单机单用户');
   if (cfg.enabled) {
     if (!cfg.singleUser) errors.push('启用前必须确认仅单机单用户');
     if (env.accounts.length !== 1 || ![env.accounts[0]?.tenantId, env.accounts[0]?.workspaceId, env.accounts[0]?.userId].every(v => typeof v === 'string' && v.trim())) errors.push('实际有效身份必须且只能有一个');
     else cfg.owner = { ...env.accounts[0]! };
     if ((env.uid ?? process.getuid?.() ?? 0) === 0) errors.push('禁止以root身份执行本机命令');
     if (cfg.level === 'off') errors.push('启用时必须选择有效权限档位');
+    if (cfg.trustedAutoRun && (cfg.level === 'readonly' || !flag('TRUSTED_AUTO_RUN_ACK'))) errors.push('可信模式仅L2以上允许，且必须勾选可信执行风险确认');
     const extended = cfg.level === 'extended' || cfg.level === 'full';
     if (extended && !flag('DANGER_ACK')) errors.push('L3/L4需要高危能力风险确认');
     if (cfg.level === 'full' && str('FULL_DISCLAIMER') !== '我已知晓风险') errors.push('L4免责声明不匹配');

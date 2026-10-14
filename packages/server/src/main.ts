@@ -108,7 +108,7 @@ const identity=new AdminIdentity(adminRoot,pathExists(join(adminRoot,"accounts.j
 const fixedEnv={...initialEnv};for(const f of adminSettings.schema().fields)if(!f.readOnly)delete fixedEnv[f.key];
 const effectiveEnv=()=>({...fixedEnv,...adminSettings.effective('global')});
 const sandboxManager=new SandboxManager(effectiveEnv);
-const localControl=new LocalControlManager(effectiveEnv,()=>({workspace:adminRoot,repository:process.cwd(),accounts:identity.contexts().map(p=>p.tenant)}),entry=>{auditStore.append({tool:"local_shell",decision:entry.decision==="block"?"blocked":entry.decision==="confirm"?"await_confirm":"allowed",args:{...entry,command:entry.command?toolSummary({command:entry.command}):undefined},at:Date.now(),tenantId:entry.tenant.tenantId,workspaceId:entry.tenant.workspaceId,userId:entry.tenant.userId,taskId:entry.taskId});});
+const localControl=new LocalControlManager(effectiveEnv,()=>({workspace:adminRoot,repository:process.cwd(),accounts:identity.contexts().map(p=>p.tenant)}),entry=>{auditStore.append({tool:entry.tool??"local_shell",decision:entry.decision==="block"?"blocked":entry.decision==="confirm"?"await_confirm":"allowed",args:{...entry,command:entry.command?toolSummary({command:entry.command}):undefined},at:Date.now(),tenantId:entry.tenant.tenantId,workspaceId:entry.tenant.workspaceId,userId:entry.tenant.userId,taskId:entry.taskId});});
 const skillPackages=new SkillPackages(adminRoot);
 const customExtensions=new CustomExtensions({stateDirectory:join(adminRoot,".extension-state"),directory:resolve(initialEnv.TAO_EXTENSION_DIR||"extensions"),logger:({extensionId,code})=>process.stderr.write(`[扩展] ${extensionId}: ${code}\n`)});
 await customExtensions.load();
@@ -887,8 +887,8 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
         if(!modelProfiles(adminSettings.effective('global')).some(m=>m.id===selectedModelId&&m.available))throw new AdminError(400,'所选模型未配置');
         const selectedSkillPackage=input.skillPackageId?skillPackages.get(tenant,input.skillPackageId):undefined;
         if(input.skillPackageId&&!selectedSkillPackage?.enabled)throw new AdminError(400,'技能包不存在或已停用');
-		const activeToolNames=[...card.tools,...(input.scenarioId==="general.free-task"?customExtensions.tools(tenant,taskId,artifactDir).map(t=>t.name):[])];
-        const basePolicies = restrictPolicies([{tool:"local_shell"},...customExtensions.policies(tenant),...OFFICE_TOOL_POLICIES, ...DOC_TOOL_POLICIES, ...EXTENDED_OFFICE_TOOL_POLICIES, {tool:"generate_image",requiresConfirm:true,confirmReason:"调用图片模型将消耗额度，请确认"},{tool:"transcribe_audio",pathParams:["path"],requiresConfirm:true,confirmReason:"录音将发送至已配置的转录服务，请确认"},{tool:"run_skill_script",requiresConfirm:true,confirmReason:"技能脚本即将在独立沙箱执行，请确认脚本和输入"}, ...sandboxManager.policies(), {tool:"edit_document", pathParams:["path"]}, {tool:"delegate_tasks"}, {tool:"mcp_list_tools"}, {tool:"mcp_call", requiresConfirm:true, confirmReason:"外部工具可能读取或修改外部系统，请确认本次调用"}, {tool:"search_knowledge"},{tool:"web_search"},{tool:"read_webpage"}], activeToolNames);
+		const activeToolNames=[...card.tools,...(card.tools.includes("local_shell")?["stage_to_local","collect_from_local"]:[]),...(input.scenarioId==="general.free-task"?customExtensions.tools(tenant,taskId,artifactDir).map(t=>t.name):[])];
+        const basePolicies = restrictPolicies([{tool:"local_shell"},{tool:"stage_to_local"},{tool:"collect_from_local"},...customExtensions.policies(tenant),...OFFICE_TOOL_POLICIES, ...DOC_TOOL_POLICIES, ...EXTENDED_OFFICE_TOOL_POLICIES, {tool:"generate_image",requiresConfirm:true,confirmReason:"调用图片模型将消耗额度，请确认"},{tool:"transcribe_audio",pathParams:["path"],requiresConfirm:true,confirmReason:"录音将发送至已配置的转录服务，请确认"},{tool:"run_skill_script",requiresConfirm:true,confirmReason:"技能脚本即将在独立沙箱执行，请确认脚本和输入"}, ...sandboxManager.policies(), {tool:"edit_document", pathParams:["path"]}, {tool:"delegate_tasks"}, {tool:"mcp_list_tools"}, {tool:"mcp_call", requiresConfirm:true, confirmReason:"外部工具可能读取或修改外部系统，请确认本次调用"}, {tool:"search_knowledge"},{tool:"web_search"},{tool:"read_webpage"}], activeToolNames);
 		// 输入文件白名单：只有表单实际引用、且确为共享根现存上传文件的路径才放行，
 		// 精确到文件、不扩目录；不授权整个共享根，从执行侧隔离其他任务的产物。
 		const previous = input.retryOf ? executionRegistry.owned(tenant, input.retryOf) : undefined;
@@ -913,8 +913,8 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
 		const allowedFiles = [...copied.values()];
 		const sources = allowedFiles.map(path => ({ path, fileId: resourceCatalog.file(tenant,path)!.fileId, name: resourceCatalog.file(tenant,path)!.name, sha256: createHash("sha256").update(readFileSync(path)).digest("hex") }));
 		const mcpTools = createMcpToolset([...mcpServers.filter(s => s.tenantId === tenant.tenantId && s.workspaceId === tenant.workspaceId),...parseMcp(adminSettings.effective("global"),tenant.tenantId,tenant.workspaceId)]);
-		let tools = [...baseTools, ...mcpTools, createSubagentTool({
-			factory, allowedTools: card.tools.filter(name => !name.startsWith('sandbox_') && name!=="local_shell" && baseTools.some(t => t.name === name)), maxConcurrency: config.maxSubtaskConcurrency,
+		let tools = [...baseTools.filter(t=>!["local_shell","stage_to_local","collect_from_local"].includes(t.name)),...localControl.tools(tenant,taskId,artifactDir,sources), ...mcpTools, createSubagentTool({
+			factory, allowedTools: card.tools.filter(name => !name.startsWith('sandbox_') && !["local_shell","stage_to_local","collect_from_local"].includes(name) && baseTools.some(t => t.name === name)), maxConcurrency: config.maxSubtaskConcurrency,
 			createSpec: (childId, selected) => {
 				const childDir = join(artifactDir, childId); mkdirSync(childDir, { recursive: true });
 				const childTools = [...createOfficeToolset({ workspace: childDir }), ...createDocToolset({ workspace: childDir }), createDocumentEditTool(childDir), knowledgeToolFor(tenant,taskId)].filter(t => selected.includes(t.name));
@@ -962,7 +962,7 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
 
 		const baseGate: import("@tao/core").PermissionGate = async request => {
 			for (const file of sources) if (createHash("sha256").update(readFileSync(file.path)).digest("hex") !== file.sha256) return { kind: "block", reason: "输入文件版本已变化" };
-			const scopedGate:import("@tao/core").PermissionGate=req=>req.toolName==="local_shell"?localControl.decision(tenant,taskId,req.args):pathGate(req);
+			const scopedGate:import("@tao/core").PermissionGate=req=>["local_shell","stage_to_local","collect_from_local"].includes(req.toolName)?localControl.decision(tenant,taskId,req.args,req.toolName):pathGate(req);
             return withToolGovernance(scopedGate,()=>adminSettings.effective("global"),artifactDir)(request);
 		};
 		const gate =
@@ -993,6 +993,7 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
 			...(input.agentId === undefined ? {} : { agentId: input.agentId }),
 		});
 		let personaPrompt = addons.systemPromptOverride ?? card.systemPrompt;
+        if(tools.some(t=>t.name==='stage_to_local'))personaPrompt+='\n本机处理：任务附件位于受保护输入目录，不能用local_shell直接cp。用户要求复制上传附件到授权目录时，先用stage_to_local，按fileId选择本任务附件和授权根内相对目标文件名，复制成功后再用local_shell；产物写out，必要时用collect_from_local收集。';
         const ragHits=embeddings && card.tools.includes("search_knowledge") && rawQuery.trim() ? await workspaceServices.searchKnowledge(tenant,rawQuery.slice(0,1000),{limit:Number(adminSettings.effective("global").RAG_TOP_K||8)}) : [];
         const ragCitations=ragHits.map(h=>({chunkId:h.chunk.id,documentId:h.chunk.documentId,version:h.chunk.documentVersion}));
         if(previous && digest(previous.configuration?.ragCitations ?? [])!==digest(ragCitations))throw new WorkspaceError(409,"知识版本或召回结果已变化，请发起新任务");

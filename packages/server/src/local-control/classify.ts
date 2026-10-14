@@ -117,6 +117,6 @@ export function classifyCommand(command: string, cfg: LocalControlConfig): Comma
   // Patterns never remove categories, mandatory confirmations or hard floors.
   // They only document administrator intent; read-only risk mode is already automatic.
   const explicitlyAllowed=literalRead&&cfg.allowPatterns.some(pattern=>{try{return new RegExp(pattern).test(command);}catch{return false;}});
-  const automatic = !highRisk && (cfg.confirmMode === 'never' || cfg.confirmMode === 'risk' && literalRead || explicitlyAllowed);
+  const automatic = !highRisk && (cfg.trustedAutoRun === true || cfg.confirmMode === 'never' || cfg.confirmMode === 'risk' && literalRead || explicitlyAllowed);
   return { kind: automatic ? 'allow' : 'confirm', reason: highRisk ? '高危能力需要逐次确认' : literalRead ? '只读命令' : '命令可能修改授权目录，需要确认', capabilities: [...capabilities], highRisk };
 }

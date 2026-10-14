@@ -124,3 +124,9 @@ describe('task session grants', () => {
     expect(grants.allows('one', cfg, risk)).toBe(false);
   });
 });
+
+describe('本机默认确认与可信模式',()=>{
+ it('always模式允许临时会话授权，到期恢复且不会升级类别',()=>{let now=0;const cfg=localControlConfig(values,env),grants=new LocalSessionGrants(()=>now),read=classifyCommand('pwd',cfg),write=classifyCommand('touch file',cfg);grants.grant('task',cfg,read,5);expect(grants.allows('task',cfg,read)).toBe(true);expect(grants.allows('task',cfg,write)).toBe(false);now=300000;expect(grants.allows('task',cfg,read)).toBe(false);});
+ it('L2可信模式必须二次风险确认，关闭和多用户都收回自动执行',()=>{const extra={LOCAL_CONTROL_TRUSTED_AUTO_RUN:'true',LOCAL_CONTROL_TRUSTED_AUTO_RUN_ACK:'true'};expect(()=>localControlConfig({...values,LOCAL_CONTROL_TRUSTED_AUTO_RUN:'true'},env)).toThrow('风险确认');const cfg=localControlConfig({...values,...extra},env);expect(classifyCommand('touch file',cfg).kind).toBe('allow');expect(classifyCommand('sudo whoami',cfg).kind).toBe('block');expect(classifyCommand('touch file',{...cfg,trustedAutoRun:false}).kind).toBe('confirm');expect(()=>localControlConfig({...values,...extra},{...env,accounts:[...env.accounts,...env.accounts]})).toThrow();expect(()=>localControlConfig({...values,...extra,LOCAL_CONTROL_LEVEL:'readonly'},env)).toThrow();});
+ it('可信模式仍不能批量放行联网和脚本继承的高危能力',()=>{const cfg=localControlConfig({...values,LOCAL_CONTROL_LEVEL:'extended',LOCAL_CONTROL_DANGER_ACK:'true',LOCAL_CONTROL_NETWORK:'true',LOCAL_CONTROL_TRUSTED_AUTO_RUN:'true',LOCAL_CONTROL_TRUSTED_AUTO_RUN_ACK:'true'},env);expect(classifyCommand('curl https://example.com',cfg)).toMatchObject({kind:'confirm',highRisk:true});expect(classifyCommand('python3 task.py',cfg)).toMatchObject({kind:'confirm',highRisk:true});});
+});

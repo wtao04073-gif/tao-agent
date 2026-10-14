@@ -71,3 +71,5 @@ html[data-theme="dark"] .steps,html[data-theme="dark"] .ex,html[data-theme="dark
 :root[data-theme=dark] .code-block button,:root[data-theme=dark] .message-actions button{background:#303a33;color:#e8eee9;border-color:#546259}
 :root[data-theme=dark] .rendered-markdown blockquote{color:#bdcbbf;border-color:#6b8571}
 :root[data-theme=dark] .rendered-markdown a{color:#9dd9b1}
+
+.run-stage{border-top:1px solid var(--line);padding:10px 0}.run-stage-title,.run-group-title{cursor:pointer;font-size:13px;font-weight:600;list-style-position:inside}.run-stage-body{padding:8px 0 0 14px}.run-tool-group{padding:10px;margin:8px 0;border:1px solid var(--line);border-radius:8px}.run-tool-group.has-failure{border-color:#dc6666}.has-failure>.run-group-title{color:var(--err,#b91c1c)}.run-group-body .step{padding:10px 0;border-bottom:1px solid var(--line)}.run-group-body .step:last-child{border-bottom:0}.step-time{display:block;margin-top:5px;color:var(--muted,#64748b)}.run-group-body .t{overflow-wrap:anywhere;white-space:pre-wrap}.run-group-body .tool-details{grid-column:1/-1}.run-stage[open]>.run-stage-title{color:var(--ink)}

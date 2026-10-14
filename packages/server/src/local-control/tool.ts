@@ -15,6 +15,11 @@ const MAX_OUTPUT = 64 * 1024;
 const MAX_FILE = 10 * 1024 * 1024;
 const MAX_DELIVERY = 50 * 1024 * 1024;
 const activeRoots = new Set<string>();
+export function reserveLocalRoots(roots: readonly string[]): () => void {
+  if (roots.some(root => activeRoots.has(root))) throw Error('授权目录有操作正在运行，请稍后重试');
+  roots.forEach(root => activeRoots.add(root));
+  return () => roots.forEach(root => activeRoots.delete(root));
+}
 const within = (root: string, path: string) => path === root || path.startsWith(root + sep);
 const sameTenant = (a: TenantContext, b: TenantContext) => a.tenantId === b.tenantId && a.workspaceId === b.workspaceId && a.userId === b.userId;
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
@@ -27,7 +32,7 @@ export interface LocalShellContext {
 }
 
 function checkHardLinks(root:string):void {let count=0;const walk=(dir:string,depth:number)=>{if(depth>24)throw Error('授权目录层级过深');for(const name of readdirSync(dir)){if(++count>20000)throw Error('授权目录文件过多，请缩小授权范围');const path=join(dir,name),s=lstatSync(path);if(s.isSymbolicLink())continue;if(s.isFile()&&s.nlink>1)throw Error('授权目录含硬链接文件，请先移除以保护目录边界');if(s.isDirectory())walk(path,depth+1);}};walk(root,0);}
-function assertRuntime(cfg: LocalControlConfig): void {
+export function assertLocalRuntime(cfg: LocalControlConfig): void {
   if (!cfg.enabled || !cfg.singleUser || cfg.level === 'off' || !cfg.owner) throw new Error('本机执行未启用或身份不匹配');
   if (!process.getuid || process.getuid() === 0) throw new Error('禁止以root身份执行本机命令');
   if (!cfg.confined || cfg.mode === 'advisory') throw new Error('隔离执行不可用，已拒绝执行');
@@ -170,10 +175,10 @@ export function createLocalShellToolset(cfg: LocalControlConfig, context: LocalS
     parameters: { type: 'object', properties: { command: { type: 'string', minLength: 1, maxLength: 32768 }, cwd: { type: 'string', description: '相对所选授权根目录的路径' }, rootIndex: { type: 'integer', minimum: 0 }, timeoutSec: { type: 'number', minimum: 1, maximum: cfg.timeoutSec } }, required: ['command'], additionalProperties: false },
     async execute({ args, tenant, taskId, signal, report }): Promise<ToolOutcome> {
       const started = Date.now();
-      let locked = false;
+      let releaseRoots: (() => void) | undefined;
       let audit: LocalExecutionAudit = { tenant: context.tenant, taskId: context.taskId, decision: 'blocked' };
       try {
-        assertRuntime(cfg);
+        assertLocalRuntime(cfg);
         if (!sameTenant(tenant, context.tenant) || taskId !== context.taskId || !sameTenant(tenant, cfg.owner!)) throw new Error('本机执行身份不匹配');
         if (cfg.roots.some(root => within(root, resolve(context.artifactDir)))) throw new Error('任务产物目录不得位于本机授权目录内');
         const input = args as LocalShellArgs;
@@ -186,8 +191,7 @@ export function createLocalShellToolset(cfg: LocalControlConfig, context: LocalS
         const risk = classifyCommand(input.command, cfg);
         audit = { ...audit, risk: risk.reason, capabilities: risk.capabilities };
         if (risk.kind === 'block') throw new Error(`命令被安全策略拒绝：${risk.reason}`);
-        if (cfg.roots.some(root => activeRoots.has(root))) throw new Error('授权目录有命令正在运行，请稍后重试');
-        cfg.roots.forEach(root => activeRoots.add(root)); locked = true;
+        releaseRoots = reserveLocalRoots(cfg.roots);
         const paths = layout(cfg, index);
         const cwd = safeJoin(paths.root, input.cwd ?? '.');
         if (!statSync(cwd).isDirectory()) throw new Error('工作目录不存在');
@@ -204,7 +208,7 @@ export function createLocalShellToolset(cfg: LocalControlConfig, context: LocalS
       } catch (error) {
         return { isError: true, text: error instanceof Error && !('code' in error) ? error.message : '本机执行失败，请检查授权目录和隔离程序', details: { outputPaths: [] } };
       } finally {
-        if (locked) cfg.roots.forEach(root => activeRoots.delete(root));
+        releaseRoots?.();
         await context.audit?.({ ...audit, durationMs: Date.now() - started });
       }
     },
@@ -218,7 +222,7 @@ export async function preflightLocalControl(cfg: LocalControlConfig): Promise<{ 
   const checks: string[] = [];
   const server = createServer(socket => { socket.destroy(); });
   try {
-    assertRuntime(cfg);
+    assertLocalRuntime(cfg);
     temporary = await mkdtemp(join(tmpdir(), 'tao-local-probe-'));
     await writeFile(join(temporary, 'private'), 'probe', { mode: 0o600 });
     const protectedProbe = join(temporary, 'protected');
