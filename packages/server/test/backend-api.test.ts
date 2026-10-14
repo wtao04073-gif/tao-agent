@@ -14,17 +14,17 @@ async function setup(){
  const root=mkdtempSync(join(tmpdir(),"tao-backend-api-"));roots.push(root);
  const actions=new FileJsonStore<StoredAction>({dir:root,collection:"actions",idOf:a=>a.actionId}), jobs=new FileJobStore({dir:join(root,"jobs")}),registry=new ExecutionRegistry(join(root,"execution"));
  const task:BackendTask={taskId:"task",status:"FAILED",conversationId:"conv",title:"合同修订",createdAt:1,updatedAt:2};
- const create=vi.fn(async()=>({taskId:"retry-task",conversationId:"conv"}));
+ const submitted:any[]=[];const create=vi.fn(async()=>({taskId:"retry-task",conversationId:"conv"}));
  const handler=createBackendHandler({authenticate:async req=>req.headers.authorization?{tenant:req.headers.authorization==="Bearer other"?{...tenant,workspaceId:"other"}:tenant,role:Role.Member}:undefined,
   registry,actions,jobs,getTask:(t,id)=>t.workspaceId==="w"&&id==="task"?task:undefined,listTasks:t=>t.workspaceId==="w"?[task]:[],
   events:()=>[{type:"user_message",eventId:"m1",taskId:"task",text:"修订",at:1,references:[{fileId:"file",name:"合同.txt",sha256:"hash"}]} as TaskEvent],
-  submit:(t,i)=>registry.submit(t,i,create),capabilities:t=>({mcp:{configured:t.workspaceId==="w"}}),
+  submit:(t,i)=>{submitted.push(i);return registry.submit(t,i,create);},capabilities:t=>({mcp:{configured:t.workspaceId==="w"}}),
  });
- const catalog=new ResourceCatalog(root), resourceHandler=createResourceHandler({catalog,authenticate:async req=>req.headers.authorization?{tenant:req.headers.authorization==="Bearer other"?{...tenant,workspaceId:"other"}:tenant,role:Role.Member}:undefined,getTask:(t,id)=>t.workspaceId==="w"&&id==="task"?task:undefined,submit:(t,i)=>registry.submit(t,i,create)});
+ const catalog=new ResourceCatalog(root), resourceHandler=createResourceHandler({catalog,authenticate:async req=>req.headers.authorization?{tenant:req.headers.authorization==="Bearer other"?{...tenant,workspaceId:"other"}:tenant,role:Role.Member}:undefined,getTask:(t,id)=>t.workspaceId==="w"&&id==="task"?task:undefined,submit:(t,i)=>{submitted.push(i);return registry.submit(t,i,create);}});
  const server=createServer((req,res)=>{void(async()=>{if(await resourceHandler(req,res))return;if(!await handler(req,res))res.writeHead(404).end();})();});servers.push(server);await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
  const url=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
  const call=(path:string,method="GET",body?:unknown,token="test")=>fetch(url+path,{method,headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},...(body===undefined?{}:{body:JSON.stringify(body)})});
- return {root,catalog,actions,jobs,registry,task,create,call,url};
+ return {root,catalog,actions,jobs,registry,task,create,submitted,call,url};
 }
 it("重试返回关联的新任务且重复请求幂等，未授权与跨工作区拒绝",async()=>{
  const s=await setup();s.registry.snapshots.put({taskId:"task",tenant,input:{scenarioId:"general.free-task",fields:{query:"修订"},conversationId:"conv"},configurationHash:"config",sources:[],createdAt:1});
@@ -33,6 +33,14 @@ it("重试返回关联的新任务且重复请求幂等，未授权与跨工作�
  expect((await s.call("/api/tasks/task/retry","POST",{},"other")).status).toBe(404);
  expect((await fetch(s.url+"/api/capabilities")).status).toBe(401);
  s.task.status="RUNNING";expect((await s.call("/api/tasks/task/retry","POST",{})).status).toBe(409);
+});
+it('仅生成重试保留原输入且幂等，跨用户和运行中任务不能恢复',async()=>{
+ const s=await setup();const snapshot={taskId:'task',tenant,input:{scenarioId:'general.free-task',fields:{query:'修订'},conversationId:'conv'},configurationHash:'config',sources:[],createdAt:1};s.registry.snapshots.put(snapshot);
+ const response=await s.call('/api/tasks/task/retry-generation','POST',{});expect(response.status).toBe(202);expect(await response.json()).toMatchObject({taskId:'retry-task',mode:'generation_only'});
+ await s.call('/api/tasks/task/retry-generation','POST',{});expect(s.create).toHaveBeenCalledOnce();expect(s.submitted[0]).toMatchObject({generationOnlyOf:'task',retryOf:'task',fields:{query:'修订'}});
+ expect((await s.call('/api/tasks/task/retry-generation','POST',{},'other')).status).toBe(404);
+ s.registry.snapshots.put({...snapshot,tenant:{...tenant,userId:'someone-else'}});expect((await s.call('/api/tasks/task/retry-generation','POST',{})).status).toBe(409);
+ s.task.status='RUNNING';expect((await s.call('/api/tasks/task/retry-generation','POST',{})).status).toBe(409);
 });
 it("动作参数不出接口，消息保留结构化引用与分页校验",async()=>{
  const s=await setup();s.actions.put({actionId:"a",taskId:"task",tenant,toolCallId:"call",toolName:"mcp_call",argsHash:"hash",arguments:{privateValue:"不可返回"},reason:"确认",createdAt:1,expiresAt:Date.now()+60000,status:"pending"});

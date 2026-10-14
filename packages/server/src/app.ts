@@ -121,6 +121,7 @@ export interface AppDeps {
 		input: {
 			readonly idempotencyKey?: string;
 			readonly retryOf?: string;
+            readonly generationOnlyOf?: string;
 			readonly scenarioId: string;
 			readonly fields: Record<string, unknown>;
 			/**

@@ -2,10 +2,15 @@
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, openSync, fsyncSync, closeSync } from 'node:fs';
 import { dirname } from 'node:path';
-export interface RequestMetric {model:string;at:number;durationMs:number;firstTokenMs:number|null;status:string;tokens:number}
+export interface RequestMetric {model:string;at:number;durationMs:number;firstTokenMs:number|null;status:string;tokens:number;statusCode?:number|null;error?:string|null;errorCode?:string|null;retryCount?:number}
 export interface ModelControls {checkOutput?:(text:string,signal:AbortSignal)=>Promise<void>;retryCount?:number;retryBaseMs?:number;rpm?:number;tpm?:number;concurrency?:number;timeoutMs?:number;budgetFile?:string;fetch?:typeof fetch;isEnabled?:()=>boolean;requestBudget?:{reserve(tokens:number):(actual:number)=>void};onMetric?:(metric:RequestMetric)=>void}
 interface Reservation {at:number;tokens:number}
 interface Budget {active:number;requests:Reservation[]}
+async function responseErrorCode(response: Response): Promise<string|null> {
+ const copy=response.clone(),reader=copy.body?.getReader();if(!reader)return null;
+ try {let size=0;const chunks:Uint8Array[]=[];for(;;){const part=await reader.read();if(part.done)break;size+=part.value.byteLength;if(size>16384)return null;chunks.push(part.value);}const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));const code=body.error?.code??body.code;return typeof code==='string'||typeof code==='number'?String(code).replace(/[^A-Za-z0-9_.:-]/g,'').slice(0,80)||null:null;}
+ catch{return null;}finally{void reader.cancel().catch(()=>{});}
+}
 const budgets=new Map<string,Budget>();
 export function controlledProvider(provider:any,controls:ModelControls) {
  const key=controls.budgetFile||provider.id;
@@ -15,12 +20,11 @@ export function controlledProvider(provider:any,controls:ModelControls) {
  const persist=()=>{if(controls.budgetFile){mkdirSync(dirname(controls.budgetFile),{recursive:true,mode:0o700});const path=controls.budgetFile+'.tmp';const fd=openSync(path,'w',0o600);try{writeFileSync(fd,JSON.stringify(state.requests));fsyncSync(fd);}finally{closeSync(fd);}renameSync(path,controls.budgetFile);}};
  const wrap=(method:string)=>(model:any,context:any,options:any={})=>{
   const output=createAssistantMessageEventStream();
-  void(async()=>{let moderationFailed=false;let acquired=false;const start=Date.now();let first:number|null=null,tokens=0,status='error';let last:Reservation|undefined;let settle:((actual:number)=>void)|undefined;
+  void(async()=>{let moderationFailed=false;let acquired=false;const start=Date.now();let first:number|null=null,tokens=0,status='error';let upstreamStatus=0,retried=0,errorCode:string|null=null,errorSummary:string|null=null;let last:Reservation|undefined;let settle:((actual:number)=>void)|undefined;
    const signal=AbortSignal.any([...(options.signal?[options.signal]:[]),AbortSignal.timeout(controls.timeoutMs||120000)]);
    const wait=(delayMs=100)=>new Promise<void>((resolve,reject)=>{signal.throwIfAborted();const timer=setTimeout(done,delayMs);function done(){signal.removeEventListener('abort',abort);resolve();}function abort(){clearTimeout(timer);signal.removeEventListener('abort',abort);reject(new Error('请求等待已取消或超时'));}signal.addEventListener('abort',abort,{once:true});});
    try{
     while(state.active>=(controls.concurrency||3)){signal.throwIfAborted();await wait();}signal.throwIfAborted();state.active++;acquired=true;
-    let upstreamStatus=0,retried=0;
     const transport:typeof fetch=async(input,init)=>{
      const template=input instanceof Request?input.clone():input;
      for(let attempt=0;;attempt++){
@@ -36,26 +40,30 @@ export function controlledProvider(provider:any,controls:ModelControls) {
      }
      const response=await (controls.fetch||options.fetch||fetch)(template instanceof Request?template.clone():template,{...init,redirect:'error',signal:AbortSignal.any([signal,...(init?.signal?[init.signal]:[])])});
      upstreamStatus=response.status;
-     if(![429,502,503,504].includes(response.status)||attempt>=(controls.retryCount??3))return response;
+     if(!response.ok){
+      errorCode=await responseErrorCode(response);
+      errorSummary='上游HTTP '+response.status+(errorCode?' · '+errorCode:'');
+     } else {errorCode=null;errorSummary=null;}
+     if(!(response.status===429||response.status>=500&&response.status<=599)||attempt>=(controls.retryCount??3))return response;
      retried++;
      // 仅重试尚未消费响应的HTTP请求，不重放Agent回合或已执行的工具。
      const rawAfter=response.headers.get('retry-after');
      const requested=rawAfter?(Number.isFinite(Number(rawAfter))?Number(rawAfter)*1000:Date.parse(rawAfter)-Date.now()):0;
-     const delay=Math.max(Number.isFinite(requested)?requested:0,Math.min(30000,(controls.retryBaseMs??1000)*2**attempt));
+     const delay=Math.max(Number.isFinite(requested)?requested:0,Math.min(30000,(controls.retryBaseMs??1000)*2**attempt*(0.75+Math.random()*0.5)));
      await response.body?.cancel();status='retrying-'+upstreamStatus;
      await wait(delay);signal.throwIfAborted();
      }
     };
     const buffered:any[]=[];let bufferedBytes=0;
-    for await(const event of provider[method](model,context,{...options,signal,fetch:transport})){
+    for await(const event of provider[method](model,context,{...options,maxRetries:0,signal,fetch:transport})){
      if(first===null&&(event.type==='text_delta'||event.type==='thinking_delta'))first=Date.now()-start;
      if(event.type==='error')status='error';
      if(event.type==='done'){status='success';tokens=event.message.usage?.totalTokens||0;if(last&&tokens>0){last.tokens=tokens;settle?.(tokens);persist();}}
      if(controls.checkOutput&&event.type!=='error'){bufferedBytes+=Buffer.byteLength(JSON.stringify(event));if(bufferedBytes>8*1024*1024||buffered.length>=4096){moderationFailed=true;throw Error('moderation buffer limit');}buffered.push(structuredClone(event));if(event.type==='done'){try{await controls.checkOutput((event.message.content||[]).filter((c:any)=>c.type==='text').map((c:any)=>c.text).join('\n'),signal);}catch{moderationFailed=true;throw Error('moderation');}for(const saved of buffered)output.push(saved);}continue;}
-     output.push(event.type==='error'?{...event,error:{...event.error,errorMessage:upstreamStatus===429?'模型服务限流，已等待并重试'+retried+'次，请稍后重试或调整限流设置':'模型服务请求失败，请管理员检查连接、额度或取消状态'}}:event);
+     output.push(event.type==='error'?{...event,error:{...event.error,errorMessage:upstreamStatus===429?'模型服务限流（HTTP 429'+(errorCode?' / '+errorCode:'')+'），已等待并重试'+retried+'次，请稍后重试或调整限流设置':'模型服务请求失败'+(upstreamStatus?'（HTTP '+upstreamStatus+(errorCode?' / '+errorCode:'')+'）':'')+'，请管理员检查连接、额度或取消状态'}}:event);
     }
-   }catch{status=moderationFailed?'moderation_error':'error';output.push({type:'error',reason:'error',error:{role:'assistant',content:[],api:model.api,provider:model.provider,model:model.id,stopReason:'error',errorMessage:moderationFailed?'内容未通过已配置审核服务，或审核服务暂不可用':'模型请求受限、取消或超时，请检查模型限流与连接配置',timestamp:Date.now(),usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}}} as any);}
-   finally{if(acquired)state.active--;try{controls.onMetric?.({model:model.id,at:start,durationMs:Date.now()-start,firstTokenMs:first,status,tokens});}catch{}output.end();}
+   }catch(error){errorSummary=moderationFailed?'内容审核失败':signal.aborted?'模型请求取消或超时':errorSummary||'模型请求预算或连接受限';status=moderationFailed?'moderation_error':'error';output.push({type:'error',reason:'error',error:{role:'assistant',content:[],api:model.api,provider:model.provider,model:model.id,stopReason:'error',errorMessage:moderationFailed?'内容未通过已配置审核服务，或审核服务暂不可用':'模型请求受限、取消或超时，请检查模型限流与连接配置',timestamp:Date.now(),usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}}} as any);}
+   finally{if(acquired)state.active--;try{controls.onMetric?.({model:model.id,at:start,durationMs:Date.now()-start,firstTokenMs:first,status,tokens,statusCode:upstreamStatus||null,error:status==='success'?null:errorSummary||'模型返回错误',errorCode,retryCount:retried});}catch{}output.end();}
   })();return output;
  };
  return {...provider,stream:wrap('stream'),streamSimple:wrap('streamSimple')};

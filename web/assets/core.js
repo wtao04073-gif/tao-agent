@@ -547,7 +547,7 @@
 			head.append(heading, close);
 			var description = element('p', 'app-dialog-description', options.description || ''); description.id = id + '-description';
 			form.append(head, description);
-			var field = null;
+			var field = null, extraControls=[];
 			if (options.kind === 'prompt') {
 				var label = element('label', 'app-dialog-label', options.label || '请输入内容'); label.htmlFor = id + '-input';
 				field = element(options.multiline ? 'textarea' : 'input', 'app-dialog-input'); field.id = id + '-input';
@@ -556,6 +556,7 @@
 				field.setAttribute('aria-required', 'true'); field.setAttribute('aria-describedby', id + '-error');
 				form.append(label, field);
 			}
+			if(options.render){extraControls=options.render(form)||[];}
 			var error = element('p', 'app-dialog-error'); error.id = id + '-error'; error.setAttribute('role', 'alert');
 			var footer = element('div', 'app-dialog-footer');
 			var cancel = element('button', 'app-dialog-button', options.cancelText || '取消'); cancel.type = 'button';
@@ -573,7 +574,7 @@
 			function onRouteChange() { dismiss(); }
 			function setBusy(value) {
 				busy = value; form.setAttribute('aria-busy', String(value));
-				[submit, cancel, close, field].filter(Boolean).forEach(function (el) { el.disabled = value; });
+				[submit, cancel, close, field].concat(extraControls).filter(Boolean).forEach(function (el) { el.disabled = value; });
 				submit.textContent = value ? (options.busyText || '正在提交…') : (options.confirmText || '确定');
 			}
 			close.addEventListener('click', dismiss); cancel.addEventListener('click', dismiss);
@@ -595,6 +596,7 @@
 				}
 				setBusy(true); error.textContent = '';
 				try {
+					if(options.collect)value=options.collect();
 					result = options.onSubmit ? await options.onSubmit(value) : value;
 					dialog.close();
 				} catch (e) {
@@ -617,6 +619,9 @@
 		confirm: function (options) { return this.open(Object.assign({}, options, { kind: 'confirm' })).then(function (value) { return value !== null; }); },
 		alert: function (options) { return this.open(Object.assign({}, options, { kind: 'alert' })); }
 	};
+
+	var uiCss=document.createElement('link');uiCss.rel='stylesheet';uiCss.href='/assets/ui-controls.css';document.head.appendChild(uiCss);
+	var uiScript=document.createElement('script');uiScript.src='/assets/ui-controls.js';document.head.appendChild(uiScript);
 
 	/* --------------------------------------------------------------- 导出 */
 

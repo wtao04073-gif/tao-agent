@@ -16,8 +16,8 @@
 		var id = fieldElId(f.name);
 		var label =
 			'<label for="' + id + '">' + App.esc(f.label) +
-			(f.required ? ' <span style="color:var(--err-fg)">*</span>' : "") + "</label>";
-		var hint = f.hint ? '<p class="hint" style="margin:2px 0 0;font-size:var(--fs-12)">' + App.esc(f.hint) + "</p>" : "";
+			(f.required ? ' <span class="tao-field-required">*</span>' : "") + "</label>";
+		var hint = f.hint ? '<p class="hint tao-field-hint">' + App.esc(f.hint) + "</p>" : "";
 		var ctrl;
 		var attrs = 'id="' + id + '" data-name="' + App.esc(f.name) + '" data-type="' + f.type + '"' +
 			(f.required ? " required" : "") +
@@ -41,12 +41,12 @@
 			case "multiselect":
 				ctrl = '<div class="check" data-type="multiselect" data-name="' + App.esc(f.name) + '">' +
 					(f.options || []).map(function (o) {
-						return '<label style="display:flex;gap:6px;align-items:center;margin:2px 0">' +
+						return '<label class="tao-multi-card">' +
 							'<input type="checkbox" value="' + App.esc(o.value) + '"> ' + App.esc(o.label) + "</label>";
 					}).join("") + "</div>";
 				break;
 			case "boolean":
-				ctrl = '<label style="display:flex;gap:8px;align-items:center">' +
+				ctrl = '<label class="tao-switch-label">' +
 					'<input type="checkbox" id="' + id + '" data-name="' + App.esc(f.name) + '" data-type="boolean"> ' +
 					"是</label>";
 				return '<div class="field">' + ctrl + hint + "</div>";
@@ -56,7 +56,7 @@
 				ctrl =
 					'<div class="file-field" data-name="' + App.esc(f.name) + '" data-multi="' + multi + '">' +
 					'<input type="file" ' + attrs + (multi ? " multiple" : "") + ">" +
-					'<div class="file-field__list" style="margin-top:6px;display:grid;gap:4px"></div></div>';
+					'<div class="file-field__list tao-file-list"></div></div>';
 				break;
 			}
 			case "date":
@@ -105,10 +105,10 @@
 					if (r.ok) {
 						paths.push(r.data.path);
 						status.textContent = App.fmtBytes(r.data.sizeBytes) + " ✓";
-						status.style.color = "var(--ok-fg)";
+						status.classList.add('tao-upload-success');
 					} else {
 						status.textContent = "上传失败";
-						status.style.color = "var(--err-fg)";
+						status.classList.add('tao-upload-error');
 						App.Toast.show("上传失败", r.data.error || file.name, "err");
 						row.remove();
 					}

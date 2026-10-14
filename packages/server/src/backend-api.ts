@@ -32,7 +32,7 @@ export function createBackendHandler(deps: BackendDeps) {
     return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
         const url = new URL(req.url ?? "/", "http://localhost"), parts = url.pathname.split("/").filter(Boolean);
         const match = parts[0] === "api" && (parts[1] === "capabilities" || parts[1] === "conversations" ||
-            (parts[1] === "tasks" && parts.length === 4 && ["actions", "retry"].includes(parts[3]!)) || (parts[1] === "jobs" && (req.method === "PATCH" || (parts.length===4&&parts[3]==="events"))));
+            (parts[1] === "tasks" && parts.length === 4 && ["actions", "retry", "retry-generation"].includes(parts[3]!)) || (parts[1] === "jobs" && (req.method === "PATCH" || (parts.length===4&&parts[3]==="events"))));
         if (!match)
             return false;
         res.setHeader("Cache-Control", "no-store");
@@ -57,6 +57,14 @@ export function createBackendHandler(deps: BackendDeps) {
                         .map(({ arguments: args, ...a }) => ({...a,inputSummary:toolSummary(args)}));
                     sendJson(res, 200, { actions });
                 }
+                else if(req.method==='POST'&&parts[3]==='retry-generation') {
+                    if(task.status!=='FAILED')throw new WorkspaceError(409,'仅失败任务可以重试模型生成');
+                    const snapshot=deps.registry.owned(tenant,id);
+                    if(!snapshot||snapshot.tenant.userId!==tenant.userId)throw new WorkspaceError(409,'没有当前用户的可恢复生成规格');
+                    const body=await readJsonBody(req);if(!body.ok)throw new WorkspaceError(400,body.reason);
+                    const result=await deps.submit(tenant,{...snapshot.input,retryOf:id,generationOnlyOf:id,idempotencyKey:'generation:'+id});
+                    sendJson(res,202,{...result,retryOf:id,mode:'generation_only'});
+                }
                 else if (req.method === "POST" && parts[3] === "retry") {
                     if (!["FAILED", "CANCELLED", "INTERRUPTED", "EXCEEDED"].includes(task.status))
                         throw new WorkspaceError(409, "只有失败、取消或中断任务可以重试");
@@ -67,7 +75,8 @@ export function createBackendHandler(deps: BackendDeps) {
                     if (!snapshot)
                         throw new WorkspaceError(409, "旧任务没有可恢复执行规格，请重新发起任务");
                     const key = req.headers["idempotency-key"];
-                    const result = await deps.submit(tenant, { ...snapshot.input, retryOf: id, idempotencyKey: typeof key === "string" ? key : "retry:" + id });
+                    const {generationOnlyOf:_generationOnly,...originalInput}=snapshot.input;
+                    const result = await deps.submit(tenant, { ...originalInput, retryOf: id, idempotencyKey: typeof key === "string" ? key : "retry:" + id });
                     sendJson(res, 202, { ...result, retryOf: id, mode: "new_task" });
                 }
                 else

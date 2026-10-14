@@ -682,7 +682,7 @@
       ta.addEventListener('paste',function(event){var files=Array.from(event.clipboardData&&event.clipboardData.files||[]).filter(function(f){return /^image\/(png|jpeg|webp)$/.test(f.type);});if(!files.length)return;event.preventDefault();if(state.running||state.booting){toast('请等待任务结束后粘贴图片');return;}trackUploads({files:files,value:''},document.getElementById(id==='lInput'?'lAttachRow':'attachRow'));});
       ta.addEventListener('input',function(){updateSendEnabled();});
     });
-    App.api('GET','/api/model-profiles').then(function(r){if(!r.ok)return;document.querySelectorAll('.bar-right').forEach(function(bar){var select=document.createElement('select');select.className='model-pick';select.setAttribute('aria-label','选择模型配置');var automatic=document.createElement('option');automatic.value='';automatic.textContent='自动模型';select.append(automatic);(r.data.models||[]).forEach(function(m){var o=document.createElement('option');o.value=m.id;o.textContent=m.name+(m.vision?' · 识图':'');o.disabled=!m.available;select.append(o);});select.onchange=function(){state.modelId=select.value;document.querySelectorAll('select[aria-label="选择模型配置"]').forEach(function(s){s.value=select.value;});};bar.prepend(select);});}).catch(function(){});
+    App.api('GET','/api/model-profiles').then(function(r){if(!r.ok)return;document.querySelectorAll('.bar-right').forEach(function(bar){var select=document.createElement('select');select.className='model-pick';document.querySelectorAll('.tier-select').forEach(function(s){s.closest('label').hidden=true;});select.setAttribute('aria-label','选择模型配置');var automatic=document.createElement('option');automatic.value='';automatic.textContent='自动模型';select.append(automatic);(r.data.models||[]).forEach(function(m){var o=document.createElement('option');o.value=m.id;o.textContent=m.name+(m.vision?' · 识图':'');o.disabled=!m.available;o.dataset.subtitle=m.vision?'支持图片理解':'文本任务';o.dataset.reason=m.available?'':'管理员尚未完整配置该模型';o.title=o.dataset.reason;select.append(o);});select.onchange=function(){state.modelId=select.value;state.tier=select.value==='lite'?'lite':'flagship';document.querySelectorAll('.tier-select').forEach(function(s){s.value=state.tier;});document.querySelectorAll('select[aria-label="选择模型配置"]').forEach(function(s){s.value=select.value;});};bar.prepend(select);});}).catch(function(){});
     if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(function(){});
     $('#resultWebOpen').addEventListener('click',function(){try{var url=new URL($('#resultWebUrl').value);if(!['https:','http:'].includes(url.protocol)||url.username||url.password)throw new Error();var link=document.createElement('a');link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';link.referrerPolicy='no-referrer';link.click();}catch(e){toast('请输入不含账号密码的 HTTP 或 HTTPS 网页地址');}});
 
@@ -1363,6 +1363,7 @@
         try{var r=await App.api('POST','/api/tasks/'+encodeURIComponent(task.taskId)+'/retry',{});if(!r.ok)throw new Error(r.data.error||'重新执行失败');openExisting(r.data.taskId);loadRecent();}
         catch(e){toast(e.message);button.disabled=false;}
       });host.append(button);
+      if(task.status==='FAILED'){var generate=document.createElement('button');generate.type='button';generate.className='retry-btn';generate.textContent='仅重试模型生成';generate.title='保留已完成工具结果，不重新执行文件写入或本机命令';generate.onclick=async function(){generate.disabled=true;try{var r=await App.api('POST','/api/tasks/'+encodeURIComponent(task.taskId)+'/retry-generation',{});if(!r.ok)throw Error(r.data.error||'生成恢复失败');openExisting(r.data.taskId);loadRecent();}catch(e){toast(e.message);generate.disabled=false;}};host.append(generate);}
     }
 	function refreshComposerContext(){
         var local=capabilities.localControl||{};
@@ -1513,11 +1514,14 @@
 
 	/* ---------- 绑定 ---------- */
 	function autosize(ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 160) + "px"; }
+    function sendByShortcut(event){return !event.isComposing&&event.key==='Enter'&&!event.shiftKey&&((localStorage.getItem('tao.send-shortcut')||'enter')==='mod-enter'?(event.metaKey||event.ctrlKey):!event.metaKey&&!event.ctrlKey);}
+    function shortcutHints(){var mod=localStorage.getItem('tao.send-shortcut')==='mod-enter';document.querySelectorAll('.composer-hint,.disclaimer').forEach(function(node){node.textContent='@ 引用资料 · / 扩展命令 · '+(mod?'⌘ / Ctrl + Enter 发送 · Enter 换行':'Enter 发送 · Shift + Enter 换行')+' · 内容由 AI 生成，请核实重要信息';});}
+    shortcutHints();window.addEventListener('storage',shortcutHints);window.addEventListener('pageshow',shortcutHints);
 	$("#lInput").addEventListener("keydown", function (e) {
-		if (!e.isComposing && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doLanding(); }
+		if (sendByShortcut(e)) { e.preventDefault(); doLanding(); }
 	});
 	$("#sInput").addEventListener("keydown", function (e) {
-		if (!e.isComposing && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); steer(); }
+		if (sendByShortcut(e)) { e.preventDefault(); steer(); }
 	});
 	["#lInput", "#sInput"].forEach(function (sel) {
 		$(sel).addEventListener("input", function () { autosize(this); updateSendEnabled(); });

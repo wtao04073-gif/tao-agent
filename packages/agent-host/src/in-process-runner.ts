@@ -617,6 +617,8 @@ export class InProcessRunnerFactory implements RunnerFactory {
 				session,
 				models: this.runtime.models,
 				model: selectedModel,
+				// HTTP出口负责有限重试，禁止内核再叠加整轮生成重试。
+				retry: {enabled:false,maxRetries:0,baseDelayMs:1000,maxAgentDelayMs:30000},
 				systemPrompt: spec.systemPrompt,
 				tools,
 				// 用户选择的技能 → 内核原生 resources.skills：模型可见技能说明，
@@ -692,6 +694,7 @@ export class InProcessRunnerFactory implements RunnerFactory {
 		 * （缺失时按文本）在本 run 内去重；仅工具调用、无文字的回合不推。
 		 */
 		const emittedAssistant = new Set<string>();
+        let modelFailure:string|undefined;
 
         const stream=new ResponseStream({
             delta:(channel,messageId,delta,offset)=>{void runner.emitTransient({type:channel==="answer"?"assistant_delta":"thinking_delta",messageId,delta,offset} as never);},
@@ -708,8 +711,9 @@ export class InProcessRunnerFactory implements RunnerFactory {
             if(frame.type==="text_delta")stream.append(event.runId,"answer",frame.delta);
             if(frame.type==="thinking_delta")stream.append(event.runId,"thinking",frame.delta);
         }) as never);
-        harness.events.on("message_end",((event:{runId?:string;entryId?:string;message?:{role?:string;content?:unknown;entryId?:string}})=>{
+        harness.events.on("message_end",((event:{runId?:string;entryId?:string;message?:{role?:string;content?:unknown;entryId?:string;stopReason?:string;errorMessage?:string}})=>{
             const msg=event.message;if(msg?.role!=="assistant")return;
+            if(msg.stopReason==='error'){const http=msg.errorMessage?.match(/HTTP\s+(\d{3})(?:\s*\/\s*([A-Za-z0-9_.:-]{1,80}))?/);modelFailure=http?'模型请求失败（HTTP '+http[1]+(http[2]?' / '+http[2]:'')+'），请检查配额或连接配置':undefined;}else modelFailure=undefined;
             const messageId=stream.end(event.runId),text=assistantText(msg.content);
             const key=event.entryId??msg.entryId??messageId;
             if(emittedAssistant.has(key))return;emittedAssistant.add(key);
@@ -734,6 +738,7 @@ export class InProcessRunnerFactory implements RunnerFactory {
 			error?: { code?: string; message?: string; data?: unknown };
 		}) => {
 			if (event.status !== "failed") return;
+			if(modelFailure){runner.noteRunFailure(modelFailure);modelFailure=undefined;return;}
 			const code = event.error?.code ?? "unknown";
 			const detail = event.error?.message ?? JSON.stringify(event.error?.data ?? {});
 			runner.noteRunFailure(/rate.?limit|tpm|tokens?.*per.?min|too many|429|限流/i.test(detail+" "+code) ? "模型服务当前限流，本次未完成。请稍后重试；若持续出现，请检查模型服务配额。" : `内核运行失败（${code}）：${detail}`);

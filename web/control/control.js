@@ -116,7 +116,7 @@
 		var host = $("auditRows");
 		host.replaceChildren();
 		$("auditCount").textContent = "已加载 " + number(entries.length) + " / " + number(data.total??data.count??entries.length) + " 条记录";
-		if (!entries.length) emptyRow(host, 5, "所选时段暂无审计记录");
+		if (!entries.length) emptyRow(host, 5, "所选时段暂无审计记录。执行一次工具操作后可查看决策；也可扩大时间范围。");
 		var labels = { allowed: "允许", blocked: "已拦截", await_confirm: "待确认" };
 		entries.forEach(function (entry) {
 			var row = document.createElement("tr");
@@ -127,7 +127,7 @@
 			badge.className = "decision" + (Object.prototype.hasOwnProperty.call(labels, entry.decision) ? " " + entry.decision : "");
 			badge.textContent = labels[entry.decision] || entry.decision || "未知";
 			cell(row, "").appendChild(badge);
-			cell(row, entry.reason || "—");
+			var reason=cell(row, '');if(entry.decision==='blocked'||entry.decision==='failed'){var detail=document.createElement('details'),summary=document.createElement('summary'),text=document.createElement('p');summary.textContent='查看错误详情';text.textContent=entry.reason||'暂无错误摘要';detail.append(summary,text);reason.append(detail);}else reason.textContent=entry.reason||'—';
 			host.appendChild(row);
 		});
 		var previous=document.getElementById('auditMore');if(previous)previous.remove();
@@ -176,9 +176,13 @@
 
 	$("signOut").addEventListener("click", async function () { sessionStorage.removeItem('tao.control.token');await App.Auth.signOut(); });
 	$("filters").addEventListener("submit", refresh);
-	$("range").addEventListener("change", preset);
-	["from", "to"].forEach(function (id) { $(id).addEventListener("change", function () { $("range").value = "custom"; }); });
-	preset();
+	var tabs=document.createElement('div');tabs.className='tao-range-tabs';tabs.setAttribute('role','group');tabs.setAttribute('aria-label','时间范围');var tabButtons=[];
+    [['month','本月'],['week','近7天'],['custom','自定义']].forEach(function(pair){var b=document.createElement('button');b.type='button';b.textContent=pair[1];b.dataset.value=pair[0];b.onclick=function(){ $('range').value=pair[0];preset();syncRange();};tabs.append(b);tabButtons.push(b);});
+    $('range').parentNode.append(tabs);$('range').hidden=true;
+    function syncRange(){tabButtons.forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.value===$('range').value));});}
+    $("range").addEventListener("change", function(){preset();syncRange();});
+	["from", "to"].forEach(function (id) { $(id).addEventListener("change", function () { $("range").value = "custom";syncRange(); }); });
+	preset();syncRange();
 	App.api("GET", "/api/me").then(function (response) {
 		if (!response.ok) { deny(response.status === 401 ? "请先登录管理员账号。" : "无法获取登录身份，请重新加载页面。"); return; }
 		var me = response.data;

@@ -1,6 +1,8 @@
 import {toolSummary} from "@tao/core";
 import {LocalControlManager} from "./local-control/manager.ts";
 import {CustomExtensions,createCustomExtensionHandler} from "./custom-extensions.ts";
+import { generationRetryContext } from './generation-retry.ts';
+import { installClientErrorHandler } from './http-errors.ts';
 import {chatJobTool,chatJobId} from "./chat-job.ts";
 import {webReaderTool} from "./web-reader.ts";
 import {modelProfiles,extraModelEndpoints,EXTRA_MODELS} from './model-profiles.ts';
@@ -863,6 +865,12 @@ function ownedArtifact(tenant:TenantContext,taskId:string,name:string) {
 }
 const workspaceHandler=createWorkspaceHandler({authenticate,workspaceRoot:config.workspaceDir,getTask:ownedTask,artifactPath:ownedArtifact,services: new Proxy({} as typeof workspaceServices,{get:(_,key)=>Reflect.get(workspaceServices,key)})});
 const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, input) => {
+		let generationContext='';
+        if(input.generationOnlyOf){
+          const original=ownedTask(tenant,input.generationOnlyOf);
+          if(input.retryOf!==input.generationOnlyOf||!original||original.status!=='FAILED'||original.tenant.userId!==tenant.userId)throw new WorkspaceError(409,'原任务不可恢复生成');
+          generationContext=generationRetryContext(orchestrator.events(input.generationOnlyOf));
+        }
 		const card = resolveCard(PRESET_CARDS, input.scenarioId, tenant.tenantId) as
 			| ScenarioCard
 			| undefined;
@@ -1036,12 +1044,13 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
 
 		const existingJob=jobStore.listByTenant(tenant.tenantId,tenant.workspaceId).find(j=>j.tenant.userId===tenant.userId&&j.conversationIds.includes(conversationId));
         if(!job&&existingJob){if(existingJob.status!=='active')throw new WorkspaceError(409,'该任务已归档，请新建对话');job=existingJob;}
-        const registration=chatMode&&!input.jobId&&(!existingJob||existingJob.title==='新任务')?chatJobTool({tenant,conversationId,taskId,store:jobStore,presentation,tasks:()=>visibleTasks(tenant),onRegistered:registered=>{job=registered;}}):undefined;
+        const registration=chatMode&&!input.generationOnlyOf&&!input.jobId&&(!existingJob||existingJob.title==='新任务')?chatJobTool({tenant,conversationId,taskId,store:jobStore,presentation,tasks:()=>visibleTasks(tenant),onRegistered:registered=>{job=registered;}}):undefined;
         if(registration) {
             tools=filterTools([...tools,registration],adminSettings.effective('global'));
             personaPrompt+='\n任务整理：'+(input.taskMode==='task'?'用户主动选择任务模式，必须先调用 register_chat_task，用用户语言概括一个简短任务名称及目标，再开始执行。':'判断用户是否要求完成具体工作；如果是，先调用 register_chat_task 概括任务名称与目标；普通问答、寒暄和仅咨询能力不要建档。')+' 不要在正文输出协议或JSON；已登记且名称明确的任务不重复登记；名称仍为新任务时调用工具补全名称。';
         }
-        const activeTools=activateableTools([...activeToolNames,...(registration?['register_chat_task']:[])],tools.map(t=>t.name));
+        if(input.generationOnlyOf){tools=[];personaPrompt+='\n仅重试模型生成：基于原任务已完成结果生成回答，不执行、重放或新建任何工具操作。';}
+        const activeTools=input.generationOnlyOf?[]:activateableTools([...activeToolNames,...(registration?['register_chat_task']:[])],tools.map(t=>t.name));
         executionRegistry.snapshots.put({ taskId, tenant, input: { ...input, fields, ...(job ? {jobId:job.jobId} : { conversationId }) }, configurationHash, sources, configuration: { card, addons, ragCitations, embeddingSpace:embeddings?.space, activeTools, tier: input.tier ?? "flagship", modelName: runtimeModels.modelForId(selectedModelId).id, modelId:selectedModelId },
 			...(input.retryOf ? { retryOf: input.retryOf } : {}), createdAt: Date.now() });
 		await orchestrator.submit({
@@ -1055,7 +1064,7 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
 			// 显式档位选路：HTTP 层已白名单校验，缺省旗舰
 			tier: input.tier,
             modelId:selectedModelId,
-            extensions:{lifecycle:(event,context)=>customExtensions.lifecycle(event,context)},
+            ...(input.generationOnlyOf?{}:{extensions:{lifecycle:(event,context)=>customExtensions.lifecycle(event,context)}}),
             onConfirmationGrant:(action,options)=>localControl.grant(tenant,taskId,action,options),
             images:imageAttachments(allowedFiles).length && runtimeModels.modelForId(selectedModelId).input.includes("image") ? imageAttachments(allowedFiles) : [],
 			prompt,
@@ -1084,7 +1093,8 @@ const nativeSubmit: import("./app.ts").AppDeps["submitTask"] = async (tenant, in
 		runningTasks.add(taskId);
 		void taskQueue.run(async () => {
 			if (isTerminal(orchestrator.get(taskId)!.status)) return;
-			return orchestrator.run(taskId, prompt, rawQuery + (sourceFiles.length ? "\n\n引用资料：" + sourceFiles.map(file => basename(file)).join("、") : ""));
+			const executionPrompt=prompt+generationContext;
+            return orchestrator.run(taskId, executionPrompt, rawQuery + (sourceFiles.length ? "\n\n引用资料：" + sourceFiles.map(file => basename(file)).join("、") : ""));
 		})
 			.then(() => {
 				// 长程任务：本轮（一次会话）跑完后，登记会话并把结论沉淀为长期记忆，
@@ -1463,6 +1473,8 @@ const server = createServer((req, res) => {
 		}
 	});
 });
+installClientErrorHandler(server);
+
 
 automation.start();
 server.listen(config.port, "0.0.0.0", () => {
