@@ -354,6 +354,7 @@
 <link rel="stylesheet" href="/assets/workspace.css?v=workspace-nav-2">
 <link rel="stylesheet" href="/assets/chat-theme.css?v=step-layout-3">
 <link rel="stylesheet" href="/assets/extensions.css">
+<link rel="stylesheet" href="/assets/composer.css?v=composer-1">
 </head>
 <body>
 <button class="rail-scrim" id="railScrim" aria-label="收起导航"></button>
@@ -401,7 +402,7 @@
 		<p class="lead">从一个问题、一份资料或一个目标开始。</p>
 		<div class="lcard">
             <div id="taskModeHint" class="task-mode-hint" hidden><span>任务模式 · 发送需求后自动创建并命名</span><button id="exitTaskMode" type="button">返回普通对话</button></div>
-			<div class="inputcard">
+			<div class="inputcard composer-card">
 				<div class="ta">
 					<textarea id="lInput" aria-label="输入任务" rows="2" placeholder="请输入问题或任务，例如：核对这两份对账单并标出差异"></textarea>
 				</div>
@@ -411,8 +412,10 @@
 					<div class="bar-left">
 						<span class="plus-wrap">
 							<button class="icon-btn" id="lPlus" type="button" title="添加">＋</button>
-							<div class="plus-menu" id="lPlusMenu"></div>
+						<div class="plus-menu" id="lPlusMenu"></div>
 						</span>
+						<button class="composer-context" type="button" data-composer-context="workspace" title="查看当前工作目录">工作目录</button>
+						<button class="composer-context" type="button" data-composer-context="approval" title="查看当前审批方式">审批方式</button>
 					</div>
 					<div class="bar-right">
 						<label class="model-pick" title="选择本次任务使用的模型档位">⚡
@@ -420,11 +423,12 @@
 								<option value="flagship">旗舰模型</option>
 							</select>
 						</label>
-						<button class="send" id="lSend" type="button" title="发送">➤</button>
+						<button class="send" id="lSend" type="button" title="发送" aria-label="发送消息">↑</button>
 					</div>
 				</div>
 				<input type="file" id="lFile" class="hidden" multiple>
 			</div>
+			<div class="composer-hint">Enter 发送 · Shift + Enter 换行 · 输入 / 使用扩展命令 · 输入 @ 引用资料</div>
 			<div class="ex-grid">
 				<button class="ex">核对这两份对账单并标出差异</button>
 				<button class="ex">把检查记录整理成整改台账</button>
@@ -449,7 +453,7 @@
 			<div class="stream" id="stream"><div class="inner" id="inner"></div></div>
 			<div class="composer">
 				<div class="cbox">
-					<div class="inputcard">
+					<div class="inputcard composer-card">
 					<div class="queue-note" id="queueNote">⏳ 任务执行中，消息将在当前步骤完成后送达</div>
 					<div class="attach-row" id="attachRow"></div>
 					<div class="attach-row" id="sAddonRow"></div>
@@ -463,6 +467,8 @@
 									<button class="icon-btn" id="sAttach" type="button" title="添加">＋</button>
 									<div class="plus-menu" id="sPlusMenu"></div>
 								</span>
+								<button class="composer-context" type="button" data-composer-context="workspace" title="查看当前工作目录">工作目录</button>
+								<button class="composer-context" type="button" data-composer-context="approval" title="查看当前审批方式">审批方式</button>
 							</div>
 							<div class="bar-right">
 								<label class="model-pick" title="选择本次任务使用的模型档位">⚡
@@ -470,11 +476,11 @@
 										<option value="flagship">旗舰模型</option>
 									</select>
 								</label>
-								<button class="send" id="sSend" type="button" title="发送">➤</button>
+								<button class="send" id="sSend" type="button" title="发送" aria-label="发送消息">↑</button>
 							</div>
 						</div>
 					</div>
-					<div class="disclaimer">内容由 AI 生成，可能会犯错，请核实重要信息</div>
+					<div class="disclaimer">Enter 发送 · Shift + Enter 换行 · / 扩展命令 · @ 引用资料 · 内容由 AI 生成，请核实重要信息</div>
 				</div>
 			</div>
 		</div>
@@ -531,6 +537,13 @@
 		</div>
 	</div>
 
+	<div class="modal-mask" id="referenceModal" role="dialog" aria-modal="true" aria-labelledby="referenceTitle">
+		<div class="modal">
+			<div class="modal-head"><h3 id="referenceTitle">引用已上传资料</h3><button class="modal-close" id="referenceClose" type="button" aria-label="关闭">✕</button></div>
+			<div class="modal-body"><input id="referenceSearch" class="reference-search" type="search" placeholder="搜索文件名" aria-label="搜索文件名"><div id="referenceList" class="reference-list"></div></div>
+		</div>
+	</div>
+
 	<div class="toast" id="toast"></div>
 <script src="/assets/core.js?v=app-dialog-1"></script>
 <script src="/assets/forms.js"></script>
@@ -554,10 +567,10 @@
 	// generation：页面/任务代次，每次重置 +1；旧代次发起的上传即使晚完成也作废，
 	// 不得再写入新代次的 pending，杜绝跨任务污染。
 	var generation = 0,toolInputs=Object.create(null),capabilities={};
-    App.api("GET","/api/capabilities").then(function(r){if(r.ok){capabilities=r.data;mountLocalControlEntry();}}).catch(function(){});
+    App.api("GET","/api/capabilities").then(function(r){if(r.ok){capabilities=r.data;refreshComposerContext();buildPlusMenu($('#lPlusMenu'),function(){$('#lFile').click();});buildPlusMenu($('#sPlusMenu'),function(){if(state.running){toast('任务执行中暂不能追加附件');return;}$('#sFile').click();});}}).catch(function(){});
     var drafts=Object.create(null),currentDraft="new";
     function saveDraft(){drafts[currentDraft]=$($("#landing").classList.contains("hidden")?"#sInput":"#lInput").value;}
-    function selectDraft(key){currentDraft=key;$('#sInput').value=$('#lInput').value=drafts[key]||'';}
+    function selectDraft(key){currentDraft=key;$('#sInput').value=$('#lInput').value=drafts[key]||'';updateSendEnabled();}
 
 	var state = { taskId: null, conversationId: null, jobId: null, mode: "chat", sub: null,
 		running: false, booting: false, previewOnly: false, steps: null,
@@ -570,7 +583,6 @@
     var runDisplay=ChatRunDisplay.create({document:document,storage:{getItem:function(k){return localStorage.getItem(k);},setItem:function(k,v){localStorage.setItem(k,v);}},
         answerNode:answerParagraph,currentBubble:function(){return state.statusEl?state.statusEl.closest(".bubble"):addMsg("bot","智能体","");},
         renderAnswer:function(node,text){ChatUI.renderAnswer(node,text);},answerFinished:function(){if(state.answerP)state.answerP.dataset.final='true';state.answerP=null;},changed:scrollDown});
-    document.querySelectorAll(".composer-bar .bar-left").forEach(function(parent){runDisplay.mount(parent);});
     var extensionUI = TaoExtensions.create({
       context:function(){return {generation:generation,draft:currentDraft};},
       isCurrent:function(snapshot){return snapshot.generation===generation&&snapshot.draft===currentDraft;},
@@ -578,10 +590,10 @@
       fillPrompt:function(text){
         var input=$($('#landing').classList.contains('hidden')?'#sInput':'#lInput');
         var value=input.value.trim()?input.value+'\n\n'+text:text;
-        $('#lInput').value=$('#sInput').value=value;drafts[currentDraft]=value;autosize(input);input.focus();
+        $('#lInput').value=$('#sInput').value=value;drafts[currentDraft]=value;autosize(input);updateSendEnabled();input.focus();
       }
     });
-    ['lInput','sInput'].forEach(function(id){var input=document.getElementById(id);extensionUI.mount(input,input.closest('.inputcard').querySelector('.bar-left'));});
+    ['lInput','sInput'].forEach(function(id){var input=document.getElementById(id);extensionUI.mount(input,null);});
 
 	// 当前选中的模型档位；两个输入卡的选择器始终保持同步。
 	function currentTier() {
@@ -658,16 +670,17 @@
 	function updateSendEnabled() {
 		["#lSend", "#sSend"].forEach(function (sel) {
 			var b = $(sel); if (!b) return;
-			b.disabled = uploading() || state.booting;
+			var input=$(sel==='#lSend'?'#lInput':'#sInput');
+			b.disabled = uploading() || state.booting || !input.value.trim();
 			b.title = uploading() ? "附件仍在上传，请稍候"
-				: (state.booting ? "任务正在启动，请稍候" : "");
+				: (state.booting ? "任务正在启动，请稍候" : input.value.trim() ? "发送（Enter）" : "输入消息后发送");
 		});
 	}
 
     ['lInput','sInput'].forEach(function(id){
       var ta=document.getElementById(id);
       ta.addEventListener('paste',function(event){var files=Array.from(event.clipboardData&&event.clipboardData.files||[]).filter(function(f){return /^image\/(png|jpeg|webp)$/.test(f.type);});if(!files.length)return;event.preventDefault();if(state.running||state.booting){toast('请等待任务结束后粘贴图片');return;}trackUploads({files:files,value:''},document.getElementById(id==='lInput'?'lAttachRow':'attachRow'));});
-      ta.addEventListener('input',function(){if(/\s\/$/.test(ta.value)){ta.value=ta.value.slice(0,-1);openAddonPicker('skill');}if(/(?:^|\s)@$/.test(ta.value)){ta.value=ta.value.slice(0,-1);TaoWorkspace.navigate('files');}});
+      ta.addEventListener('input',function(){updateSendEnabled();});
     });
     App.api('GET','/api/model-profiles').then(function(r){if(!r.ok)return;document.querySelectorAll('.bar-right').forEach(function(bar){var select=document.createElement('select');select.className='model-pick';select.setAttribute('aria-label','选择模型配置');var automatic=document.createElement('option');automatic.value='';automatic.textContent='自动模型';select.append(automatic);(r.data.models||[]).forEach(function(m){var o=document.createElement('option');o.value=m.id;o.textContent=m.name+(m.vision?' · 识图':'');o.disabled=!m.available;select.append(o);});select.onchange=function(){state.modelId=select.value;document.querySelectorAll('select[aria-label="选择模型配置"]').forEach(function(s){s.value=select.value;});};bar.prepend(select);});}).catch(function(){});
     if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(function(){});
@@ -785,7 +798,7 @@
     var pendingTaskMode=false;
     function setTaskMode(value){pendingTaskMode=value;$('#taskModeHint').hidden=!value;$('#lInput').placeholder=value?'描述你的任务目标，发送后自动整理并创建任务':'请输入问题或任务';}
     function newJob(){
-        var draft=$('#sInput').value||$('#lInput').value;resetAll();setTaskMode(true);if(draft)$('#lInput').value=draft;$('#lInput').focus();
+        var draft=$('#sInput').value||$('#lInput').value;resetAll();setTaskMode(true);if(draft){$('#lInput').value=draft;$('#lInput').dispatchEvent(new Event('input',{bubbles:true}));}$('#lInput').focus();
     }
     $('#exitTaskMode').addEventListener('click',function(){setTaskMode(false);$('#lInput').focus();});
 
@@ -1076,7 +1089,7 @@
 		if(role === "bot" && text) ChatUI.renderAnswer(m.querySelector("p"), text); else m.querySelector("p").textContent = text || "";
 		if(role==='user'){
           var edit=document.createElement('button');edit.type='button';edit.className='retry-btn';edit.textContent='编辑后重发';
-          edit.onclick=async function(){if(state.running||state.booting){toast('请先等待任务结束');return;}var value=await App.Dialog.prompt({title:'编辑后重发',label:'新的请求内容',value:text||'',multiline:true,description:'编辑内容将用于一个新对话，原会话完整保留。引用文件请重新选择。'});if(value!==null&&value.trim()){resetAll();$('#lInput').value=value;drafts[currentDraft]=value;$('#lInput').focus();}};
+          edit.onclick=async function(){if(state.running||state.booting){toast('请先等待任务结束');return;}var value=await App.Dialog.prompt({title:'编辑后重发',label:'新的请求内容',value:text||'',multiline:true,description:'编辑内容将用于一个新对话，原会话完整保留。引用文件请重新选择。'});if(value!==null&&value.trim()){resetAll();$('#lInput').value=value;$('#lInput').dispatchEvent(new Event('input',{bubbles:true}));$('#lInput').focus();}};
           m.querySelector('.bubble').append(edit);
         }
         $("#inner").appendChild(m);
@@ -1133,7 +1146,7 @@
 				if (!r.ok) { fail((r.data && r.data.error) || "任务提交失败");submissionRetry(); return; }
 				if(Array.isArray(r.data.warnings)&&r.data.warnings.length)toast(r.data.warnings.join('；'));
             state.taskId = r.data.taskId;if(r.data.jobId){state.jobId=r.data.jobId;state.mode='job';}setTaskMode(false);rememberView(state.taskId,state.mode==="job"?state.jobId:null);
-				if (r.data.conversationId) {state.conversationId = r.data.conversationId;currentDraft=state.mode==="job"?"job:"+state.jobId:state.conversationId;drafts[currentDraft]="";$("#sInput").value=$("#lInput").value="";}
+				if (r.data.conversationId) {state.conversationId = r.data.conversationId;currentDraft=state.mode==="job"?"job:"+state.jobId:state.conversationId;drafts[currentDraft]="";$("#sInput").value=$("#lInput").value="";updateSendEnabled();}
 				state.booting = false; updateSendEnabled();
 				subscribe(gen, r.data.taskId); loadRecent(); loadJobs();
 			})
@@ -1351,23 +1364,23 @@
         catch(e){toast(e.message);button.disabled=false;}
       });host.append(button);
     }
-	function mountLocalControlEntry(){
-        var local=capabilities.localControl;
-        document.querySelectorAll('[data-local-control-entry]').forEach(function(n){n.remove();});
-        if(!local||local.enabled!==true)return;
-        document.querySelectorAll('.composer-bar .bar-left').forEach(function(parent){
-            var entry=document.createElement('button');entry.type='button';entry.className='btn-2';entry.dataset.localControlEntry='true';entry.textContent='本机处理';
-            entry.title='在服务所在电脑的授权目录内处理文件或运行脚本';
-            entry.addEventListener('click',async function(){
+	function refreshComposerContext(){
+        var local=capabilities.localControl||{};
+        var workspace=local.enabled&&Array.isArray(local.roots)&&local.roots.length?local.roots.join('、'):'当前任务工作区';
+        var approval=local.enabled ? (local.confirmMode==='always'?'每次确认':local.confirmMode==='session'?'会话授权':local.confirmMode==='never'?'无需逐次确认':'风险确认') : '按需确认';
+        document.querySelectorAll('[data-composer-context="workspace"]').forEach(function(b){b.title='工作目录：'+workspace;b.setAttribute('aria-label',b.title);});
+        document.querySelectorAll('[data-composer-context="approval"]').forEach(function(b){b.textContent=approval;b.title='当前审批方式：'+approval+'；具体操作仍由服务端策略决定。切换策略请在管控端配置';b.setAttribute('aria-label',b.title);});
+    }
+    document.querySelectorAll('[data-composer-context]').forEach(function(b){b.addEventListener('click',function(){toast(b.title);});});
+    async function requestLocalControl(){
+                var local=capabilities.localControl;
+                if(!local||!local.enabled){toast('本机处理未启用');return;}
                 if(state.running||state.booting){toast('请等待当前任务结束');return;}
                 if(local.confined===false){toast('当前为弱隔离环境，本机处理暂不可用');return;}
                 var yes=await App.Dialog.confirm({title:'本机文件与脚本处理',description:'命令会在运行 Tao Agent 的电脑上真实执行。请核对每条命令，操作范围由管理员配置和你的确认共同决定。授权目录：'+(local.roots||[]).join('、'),confirmText:'填写处理任务'});
                 if(!yes)return;
                 var input=$($('#landing').classList.contains('hidden')?'#sInput':'#lInput');
-                input.value=(input.value.trim()?input.value+'\n':'')+'请在本机授权目录内处理文件：';drafts[currentDraft]=input.value;autosize(input);input.focus();
-            });parent.append(entry);
-            if(local.confined===false){var warning=document.createElement('span');warning.dataset.localControlEntry='true';warning.textContent='弱隔离：本机执行暂不可用';warning.style.color='#c2410c';parent.append(warning);}
-        });
+                input.value=(input.value.trim()?input.value+'\n':'')+'请在本机授权目录内处理文件：';input.dispatchEvent(new Event('input',{bubbles:true}));autosize(input);input.focus();
     }
 	function showConfirm(ev) {
         var local=ev.localControl,isLocal=ev.toolName==='local_shell'||Boolean(local),targetTask=ev.taskId||state.taskId;
@@ -1423,7 +1436,7 @@
         buttons[2].addEventListener('click',async function(){
             if(state.running||state.booting){toast('请等待当前任务完成，再修改产物');return;}
             try {var result=await App.api('POST','/api/workspace/artifacts/reference',{taskId:owner,name:ev.name});if(!result.ok)throw new Error(result.data.error);
-             attachReference(result.data);$('#sInput').value='请修改「'+ev.name+'」：';$('#sInput').focus();
+             attachReference(result.data);$('#sInput').value='请修改「'+ev.name+'」：';$('#sInput').dispatchEvent(new Event('input',{bubbles:true}));$('#sInput').focus();
             }catch(error){toast(error.message||'无法引用产物');}
         });
         $('#deliverBody').appendChild(el);if(!isMobile())showDeliver();
@@ -1465,7 +1478,7 @@
 		if (state.booting) { toast("任务正在启动，请稍候再发送"); return; }
 		var ta = $("#sInput"); var text = ta.value.trim(); if (!text) return;
 		if(extensionUI.dispatchSlash(text,ta))return;
-		ta.value = ""; autosize(ta);
+      ta.value = "";$('#lInput').value='';autosize(ta);updateSendEnabled();
 		// 长程任务视图：每次发送都是该任务下的一次新会话（submit 内按 jobId 处理）。
 		if (!state.running && state.mode === "job" && state.jobId) { submit(text, false); return; }
 		// 临时对话已结束但仍在同一会话：带 conversationId 续聊一轮（模型记得上文）。
@@ -1507,35 +1520,72 @@
 		if (!e.isComposing && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); steer(); }
 	});
 	["#lInput", "#sInput"].forEach(function (sel) {
-		$(sel).addEventListener("input", function () { autosize(this); });
+		$(sel).addEventListener("input", function () { autosize(this); updateSendEnabled(); });
 	});
 	$("#lSend").addEventListener("click", doLanding);
 	$("#sSend").addEventListener("click", steer);
-	function doLanding() { var t = $("#lInput").value.trim(); if (t && !uploading() && !state.booting) { if(extensionUI.dispatchSlash(t,$('#lInput')))return; $("#lInput").value = ""; submit(t); } }
+	function doLanding() { var t = $("#lInput").value.trim(); if (t && !uploading() && !state.booting) { if(extensionUI.dispatchSlash(t,$('#lInput')))return; $("#lInput").value = $("#sInput").value = ""; updateSendEnabled(); submit(t); } }
 
 	// ＋ 添加菜单：文件 / 技能 / 智能体。技能与智能体均接真实后端（列表 + 上传）。
+	function activeComposerInput(){return $($('#landing').classList.contains('hidden')?'#sInput':'#lInput');}
+	var referenceFiles=[];
+	function closeReferencePicker(){if(!$('#referenceModal').classList.contains('open'))return;$('#referenceModal').classList.remove('open');activeComposerInput().focus();}
+	function renderReferenceFiles(){
+		var list=$('#referenceList'),query=$('#referenceSearch').value.trim().toLowerCase();list.replaceChildren();
+		var matching=referenceFiles.filter(function(file){return file.name.toLowerCase().includes(query);});
+		if(!matching.length){var empty=document.createElement('p');empty.className='picker-empty';empty.textContent='没有匹配的资料';list.append(empty);return;}
+		matching.forEach(function(file){var button=document.createElement('button');button.type='button';button.className='reference-item';button.textContent=file.name;button.addEventListener('click',async function(){
+			button.disabled=true;try{var result=await App.api('POST','/api/workspace/files/reference',{name:file.name});if(!result.ok)throw new Error(result.data&&result.data.error||'引用失败');if(attachReference(result.data)){closeReferencePicker();updateSendEnabled();}}
+			catch(error){toast(error.message||'引用失败');button.disabled=false;}
+		});list.append(button);});
+	}
+	async function openReferencePicker(){
+		if(state.running||state.booting){toast('请等待当前任务完成后引用资料');return;}
+		$('#referenceModal').classList.add('open');$('#referenceSearch').value='';$('#referenceList').textContent='正在加载资料…';$('#referenceSearch').focus();
+		try{var response=await App.api('GET','/api/files?limit=100');if(!response.ok)throw new Error(response.data&&response.data.error||'加载失败');
+			referenceFiles=(response.data.files||[]).filter(function(file){return file&&typeof file.name==='string';});renderReferenceFiles();}
+		catch(error){$('#referenceList').textContent=error.message||'加载失败';}
+	}
+	$('#referenceSearch').addEventListener('input',renderReferenceFiles);
+	$('#referenceClose').addEventListener('click',closeReferencePicker);
+	$('#referenceModal').addEventListener('click',function(e){if(e.target===this)closeReferencePicker();});
 	var PLUS_ITEMS = [
 		{ key: "file", icon: "📄", label: "选择文件", sub: "上传 Excel / Word / PDF / TXT" },
 		{ key: "agent", icon: "🤖", label: "智能体", sub: "选择角色，或上传自定义智能体" },
-		{ key: "skill", icon: "🧩", label: "技能", sub: "选择专项技能，或上传新技能" },
+		{ key: "skill", icon: "◇", label: "技能", sub: "选择专项技能，或上传新技能" },
+		{ key: "reference", icon: "@", label: "引用资料", sub: "从已上传文件中选择" },
+		{ key: "extensions", icon: "/", label: "扩展命令", sub: "查看可用命令" },
+		{ key: "local", icon: "⌘", label: "本机处理", sub: "仅在管理员启用后可用" },
 	];
 	function buildPlusMenu(menuEl, onPickFile) {
 		menuEl.innerHTML = "";
+		var local=capabilities.localControl||{};
 		PLUS_ITEMS.forEach(function (it) {
+			if(it.key==='local'&&local.enabled!==true)return;
 			var b = document.createElement("button"); b.type = "button";
 			b.innerHTML = '<span class="pm-ic">' + it.icon + "</span><span>" + it.label +
 				'<span class="pm-sub">' + it.sub + "</span></span>";
 			b.addEventListener("click", function () {
-				closePlusMenus();
-				if (it.key === "file") { onPickFile(); return; }
-				openAddonPicker(it.key);
+			closePlusMenus();
+			if (it.key === "file") { onPickFile(); return; }
+			if (it.key === "reference") { openReferencePicker(); return; }
+			if (it.key === "extensions") { extensionUI.open(activeComposerInput()); return; }
+			if (it.key === "local") { requestLocalControl(); return; }
+			openAddonPicker(it.key);
 			});
 			menuEl.appendChild(b);
 		});
+		var display=document.createElement('div');display.className='composer-menu-display';
+		runDisplay.mount(display);display.addEventListener('click',function(e){e.stopPropagation();});menuEl.appendChild(display);
 	}
 	function closePlusMenus() {
 		document.querySelectorAll(".plus-menu.open").forEach(function (m) { m.classList.remove("open"); });
 	}
+	['#lInput','#sInput'].forEach(function(selector){var input=$(selector);input.addEventListener('keydown',function(e){
+		if(e.isComposing)return;
+		if(e.key==='Escape'){closePlusMenus();return;}
+		if(e.key==='@'&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&(!input.selectionStart||/\s/.test(input.value.charAt(input.selectionStart-1)))){e.preventDefault();openReferencePicker();}
+	});});
 	buildPlusMenu($("#lPlusMenu"), function () { $("#lFile").click(); });
 	buildPlusMenu($("#sPlusMenu"), function () {
 		if (state.running) { toast("任务执行中暂不能追加附件"); return; }
@@ -1761,7 +1811,7 @@
 	});
 
 	document.querySelectorAll(".ex-grid .ex").forEach(function (c) {
-		c.addEventListener("click", function () { $("#lInput").value = c.textContent; $("#lInput").focus(); });
+		c.addEventListener("click", function () { $("#lInput").value = c.textContent;$("#lInput").dispatchEvent(new Event('input',{bubbles:true})); $("#lInput").focus(); });
 	});
 	$("#toggleDeliver").addEventListener("click", function () {
 		var d = $("#deliver");
@@ -1853,11 +1903,11 @@
 
     $('#frontNewChat').addEventListener('click',resetAll);
     $('#railScrim').addEventListener('click',function(){setRail(true);});
-    ['#lInput','#sInput'].forEach(function(sel){$(sel).addEventListener('input',function(){var value=this.value;$('#lInput').value=$('#sInput').value=value;drafts[currentDraft]=value;});});
+    ['#lInput','#sInput'].forEach(function(sel){$(sel).addEventListener('input',function(){var value=this.value;$('#lInput').value=$('#sInput').value=value;drafts[currentDraft]=value;updateSendEnabled();});});
     ['#lFile','#sFile'].forEach(function(sel){$(sel).accept='.txt,.md,.csv,.tsv,.docx,.xls,.xlsx,.pdf,.pptx,.rtf,.zip,.html,.xml,.json,.jsonl,.yaml,.yml,.js,.ts,.py,.go,.java,.rs,.css,.sql,.png,.jpg,.jpeg,.webp';});
     var searchTimer;$('#historySearch').addEventListener('input',function(){clearTimeout(searchTimer);searchTimer=setTimeout(function(){loadRecent();loadJobs();},200);});
     document.addEventListener('keydown',function(e){
-      if(e.key==='Escape'&&!e.defaultPrevented&&!e.target.closest('dialog')){closePlusMenus();closeAddonPicker();hideDeliver();if(isMobile())setRail(true);}
+      if(e.key==='Escape'&&!e.defaultPrevented&&!e.target.closest('dialog')){closePlusMenus();closeReferencePicker();closeAddonPicker();hideDeliver();if(isMobile())setRail(true);}
       if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();setRail(false);$('#historySearch').focus();}
     });
     window.addEventListener('hashchange',function(){if(isMobile())setRail(true);});

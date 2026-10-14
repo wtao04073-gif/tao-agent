@@ -24,7 +24,7 @@
     input.addEventListener("change",function(){set(pair[0],input.checked);});
     text.textContent=pair[1];label.appendChild(input);label.appendChild(text);wrap.appendChild(label);row[pair[0]]=input;
    });
-   wrap.title="仅展示模型接口返回的思考内容；开关不改变模型推理模式";parent.appendChild(wrap);controls.push(row);
+   wrap.title="仅展示模型接口返回的思考内容；开关不改变模型推理模式";if(parent)parent.appendChild(wrap);controls.push(row);return wrap;
   }
   function begin(bot) {
    var hint=doc.createElement("div");hint.className="thinking-placeholder";hint.textContent="等待模型返回可展示的思考内容…";hint.hidden=!preferences.thinking;bot.appendChild(hint);hints.push({node:hint,bot:bot,hasThinking:false});

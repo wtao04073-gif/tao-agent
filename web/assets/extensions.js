@@ -231,7 +231,7 @@
       item.search.addEventListener('input', function () { renderCatalog(item); });
       panel.append(heading, el('p', '选择命令填写参数，或输入 /命令 {"参数":"值"}。执行前会显示确认。', 'extension-help'),
         button('选择技能', function () { clearSlash(input); hide(item); options.openSkills(); }), item.search, item.status, item.list, item.editor, item.output);
-      input.closest('.inputcard').prepend(panel); toolbar.append(item.toggle); mounts.push(item);
+      input.closest('.inputcard').prepend(panel); if (toolbar) toolbar.append(item.toggle); mounts.push(item);
       input.addEventListener('input', function () {
         var value = input.value.trim();
         if (/^\/\S*$/.test(value)) show(item, value.slice(1));
@@ -257,6 +257,7 @@
       return true;
     }
     return { mount: mount, dispatchSlash: dispatchSlash, execute: execute, renderUI: renderUI, consume: consume,
+      open: function (input) { var item = mounts.find(function (m) { return m.input === input; }); if (item) show(item); },
       reset: function () { instances.clear(); mounts.forEach(function (item) { hide(item); item.editor.replaceChildren(); item.output.replaceChildren(); }); }, load: load };
   }
   global.TaoExtensions = { create: create };

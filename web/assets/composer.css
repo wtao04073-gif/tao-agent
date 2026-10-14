@@ -1,0 +1,26 @@
+/* 空态与会话态共用输入卡和工具轨。 */
+.composer-card{width:100%;min-width:0}
+.composer-card .composer-bar{display:flex;align-items:center;justify-content:space-between;flex-wrap:nowrap;gap:8px}
+.composer-card .bar-left,.composer-card .bar-right{display:flex;align-items:center;min-width:0;gap:6px;flex-wrap:nowrap}
+.composer-card .bar-right{margin-left:auto;flex-shrink:0}
+.composer-card .bar-left .plus-wrap{flex-shrink:0}
+.composer-card .icon-btn{width:34px;height:34px;padding:0;border:1px solid var(--line);border-radius:50%;font-size:21px;line-height:1}
+.composer-card .composer-context{max-width:130px;min-height:30px;padding:4px 8px;border:0;border-radius:8px;background:transparent;color:var(--text-3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.composer-card .composer-context:hover{background:var(--bg-soft);color:var(--text-2)}
+.composer-card .send{width:34px!important;height:34px!important;border-radius:50%!important;font-size:22px!important;font-weight:600;line-height:1}
+.composer-card .send:disabled{background:var(--bg-soft-2)!important;color:var(--text-3)!important;box-shadow:none;cursor:not-allowed}
+.composer-card .plus-menu{width:min(320px,calc(100vw - 40px));max-height:min(70vh,480px);overflow:auto}
+.composer-card .plus-menu .composer-menu-display{margin:6px 4px 2px;padding:10px 6px 4px;border-top:1px solid var(--line)}
+.composer-card .run-display-options{display:grid;gap:8px;color:var(--text-2)}
+.composer-card .run-display-options label{padding:4px 6px;font-size:12px}
+.composer-card .run-display-options input{accent-color:var(--primary)}
+.composer-hint{text-align:center;margin-top:9px;color:var(--text-3);font-size:11px}
+.reference-search{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--bg-white);color:var(--text);font:inherit}
+.reference-list{display:grid;gap:5px;margin-top:12px;max-height:46vh;overflow:auto}
+.reference-item{width:100%;padding:10px 12px;text-align:left;border:1px solid var(--line);border-radius:8px;background:var(--bg-white);color:var(--text);font:inherit;overflow-wrap:anywhere}
+.reference-item:hover,.reference-item:focus-visible{background:var(--bg-soft)}
+.reference-item:disabled{opacity:.55;cursor:wait}
+html[data-theme="dark"] .composer-card .icon-btn,html[data-theme="dark"] .reference-item,html[data-theme="dark"] .reference-search{border-color:var(--line);background:var(--bg-white);color:var(--text)}
+html[data-theme="dark"] .composer-card .send:not(:disabled){color:#17251b}
+@media(max-width:600px){.composer-card .composer-bar{gap:4px}.composer-card .composer-context{max-width:92px;padding:4px;font-size:11px}.composer-card .bar-right{gap:2px}.composer-card .tier-select{max-width:82px!important;font-size:11px!important}.composer-card .bar-right select.model-pick{max-width:80px;font-size:11px}.composer-hint{font-size:10px;line-height:1.5}}
+@media(max-width:390px){.composer-card .composer-context[data-composer-context="approval"]{max-width:55px}.composer-card .bar-right select.model-pick{max-width:62px}.composer-card .tier-select{max-width:67px!important}}
